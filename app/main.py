@@ -117,7 +117,7 @@ def run_health(settings: Settings) -> int:
 def run_openai_check(settings: Settings) -> int:
     try:
         client = create_openai_client(settings)
-        check_openai_connection(client)
+        check_openai_connection(client, settings.openai_image_model)
     except (OpenAIConfigurationError, OpenAICheckError) as exc:
         LOGGER.error("%s", exc)
         return 1
