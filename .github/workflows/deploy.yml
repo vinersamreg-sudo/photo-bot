@@ -146,12 +146,12 @@ jobs:
               echo "photo-bot files detected inside TripDay" >&2
               exit 1
             fi
+            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
+            mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
             if grep -Eq '^OPENAI_API_KEY=.+$' "$ROOT/.env"; then
               echo "OPENAI_API_KEY is configured; running authorization check"
               "$ROOT"/venv/bin/python -m app.main openai-check
             else
               echo "OPENAI_API_KEY is not configured; OpenAI check skipped"
             fi
-            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
-            mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
           REMOTE

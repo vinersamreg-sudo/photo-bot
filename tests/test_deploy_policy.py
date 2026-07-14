@@ -35,7 +35,9 @@ class DeployPolicyTests(TestCase):
     def test_records_deployed_commit_after_healthcheck(self) -> None:
         health_position = self.workflow.index('"$ROOT"/scripts/healthcheck.sh')
         marker_position = self.workflow.index("data/deployed_commit.txt")
+        openai_position = self.workflow.rindex("python -m app.main openai-check")
         self.assertGreater(marker_position, health_position)
+        self.assertLess(marker_position, openai_position)
 
     def test_creates_but_does_not_overwrite_production_env(self) -> None:
         self.assertIn('if [ ! -f "$ROOT/.env" ]', self.workflow)
