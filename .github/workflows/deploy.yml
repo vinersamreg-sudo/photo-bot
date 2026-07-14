@@ -3,6 +3,7 @@ name: Test and deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -71,8 +72,29 @@ jobs:
           SSH_USER: ${{ secrets.REG_RU_USER }}
           SSH_PORT: ${{ secrets.REG_RU_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_SHA" <<'REMOTE'
+            set -euo pipefail
             ROOT=/var/www/u3546857/data/apps/photo-bot
+            DEPLOY_SHA="$1"
+            mkdir -p "$ROOT/data" "$ROOT/logs" "$ROOT/temp"
+            if [ ! -f "$ROOT/.env" ]; then
+              install -m 600 /dev/null "$ROOT/.env"
+            else
+              chmod 600 "$ROOT/.env"
+            fi
+            if ! grep -q '^OPENAI_IMAGE_MODEL=' "$ROOT/.env"; then
+              printf '%s\n' 'OPENAI_IMAGE_MODEL=gpt-image-2' >> "$ROOT/.env"
+            fi
+            if ! grep -q '^APP_ENV=' "$ROOT/.env"; then
+              printf '%s\n' 'APP_ENV=production' >> "$ROOT/.env"
+            fi
+            if ! grep -q '^BASE_DIR=' "$ROOT/.env"; then
+              printf '%s\n' 'BASE_DIR=/var/www/u3546857/data/apps/photo-bot' >> "$ROOT/.env"
+            fi
             chmod +x "$ROOT"/scripts/*.sh
+            cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
-            "$ROOT"/scripts/healthcheck.sh'
+            "$ROOT"/scripts/healthcheck.sh
+            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
+            mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
+          REMOTE

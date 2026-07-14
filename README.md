@@ -101,3 +101,12 @@ Push в `main` запускает unit-тесты. Только после их 
 `logs/`, `temp/`; публичная часть SSH-ключа должна быть добавлена в
 `~/.ssh/authorized_keys`. Рекомендуется защитить GitHub environment
 `production` правилами репозитория.
+
+Если production `.env` ещё не существует, workflow создаёт его с правами `600`
+и добавляет только `OPENAI_IMAGE_MODEL`, `APP_ENV` и `BASE_DIR`. Значение
+`OPENAI_API_KEY` workflow не создаёт и не заменяет; его нужно сохранить на
+сервере отдельно.
+
+Workflow также поддерживает ручной запуск через **Actions → Test and deploy →
+Run workflow**. После успешной установки зависимостей и healthcheck текущий SHA
+записывается в `data/deployed_commit.txt`; файл сохраняется между deploy.
