@@ -45,6 +45,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("APP_ENV=production", self.workflow)
 
     def test_transfers_openai_key_via_stdin_and_checks_authorization(self) -> None:
+        self.assertIn("Validate OpenAI credential from GitHub runner", self.workflow)
         self.assertIn("Configure OpenAI credential", self.workflow)
         self.assertIn("secrets.OPENAI_API_KEY", self.workflow)
         self.assertIn('printf \'%s\' "$OPENAI_API_KEY" |', self.workflow)
