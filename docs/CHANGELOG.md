@@ -10,6 +10,8 @@
 - добавлены secret scan, server-side unit tests и deployed SHA;
 - документация актуализирована, неподтверждённый публичный бренд удалён;
 - скомпрометированный OpenAI repository secret удалён и не переносился.
+- первый Hetzner deploy коммита `d80f7e0` успешно проверен в GitHub Actions;
+- после успешного deploy удалены четыре устаревших REG.RU repository secrets.
 
 ## До миграции
 

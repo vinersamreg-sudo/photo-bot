@@ -2,7 +2,7 @@
 
 ## ADR-001 — Hetzner VPS вместо REG.RU
 
-Принято 14.07.2026. Production перенесён на Ubuntu VPS в Nuremberg, потому что исходящий адрес REG.RU получал от OpenAI региональный отказ. Proxy/VPN не используются. Старые REG.RU secrets сохраняются только до подтверждения миграции, затем удаляются.
+Принято 14.07.2026. Production перенесён на Ubuntu VPS в Nuremberg, потому что исходящий адрес REG.RU получал от OpenAI региональный отказ. Proxy/VPN не используются. После успешного первого deploy старые REG.RU secrets удалены из GitHub.
 
 ## ADR-002 — Один простой Python-сервис
 

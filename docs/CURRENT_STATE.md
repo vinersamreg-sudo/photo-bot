@@ -14,7 +14,9 @@
 - Hetzner VPS, пользователи `vineradmin`/`photoapp`, venv Python 3.12;
 - SSH hardening, UFW и fail2ban;
 - GitHub Environment `production` с Hetzner deploy secrets;
-- автоматический rsync deploy в `/opt/photo-bot`.
+- автоматический rsync deploy в `/opt/photo-bot`;
+- первый deploy коммита `d80f7e0` успешно прошёл через GitHub Actions;
+- устаревшие REG.RU repository secrets удалены после подтверждения миграции.
 
 ## Не реализовано
 
