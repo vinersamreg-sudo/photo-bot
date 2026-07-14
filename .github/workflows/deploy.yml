@@ -31,6 +31,7 @@ jobs:
     environment: production
     env:
       DEPLOY_CONFIGURED: ${{ secrets.REG_RU_HOST != '' && secrets.REG_RU_USER != '' && secrets.REG_RU_SSH_PRIVATE_KEY != '' && secrets.REG_RU_SSH_PORT != '' }}
+      OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
       - name: Report unconfigured deployment
         if: env.DEPLOY_CONFIGURED != 'true'
@@ -65,6 +66,29 @@ jobs:
             -czf - . | \
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
             "mkdir -p /var/www/u3546857/data/apps/photo-bot && tar -xzf - -C /var/www/u3546857/data/apps/photo-bot"
+      - name: Configure OpenAI credential
+        if: env.DEPLOY_CONFIGURED == 'true' && env.OPENAI_KEY_CONFIGURED == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SSH_HOST: ${{ secrets.REG_RU_HOST }}
+          SSH_USER: ${{ secrets.REG_RU_USER }}
+          SSH_PORT: ${{ secrets.REG_RU_SSH_PORT }}
+        run: |
+          printf '%s' "$OPENAI_API_KEY" | \
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
+            ROOT=/var/www/u3546857/data/apps/photo-bot
+            KEY=$(cat)
+            test -n "$KEY"
+            TMP="$ROOT/.env.tmp"
+            if [ -f "$ROOT/.env" ]; then
+              grep -v "^OPENAI_API_KEY=" "$ROOT/.env" > "$TMP" || true
+            else
+              : > "$TMP"
+            fi
+            printf "%s\n" "OPENAI_API_KEY=$KEY" >> "$TMP"
+            chmod 600 "$TMP"
+            mv "$TMP" "$ROOT/.env"
+            unset KEY'
       - name: Install and verify
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -114,7 +138,8 @@ jobs:
               exit 1
             fi
             if grep -Eq '^OPENAI_API_KEY=.+$' "$ROOT/.env"; then
-              echo "OPENAI_API_KEY is configured"
+              echo "OPENAI_API_KEY is configured; running authorization check"
+              "$ROOT"/venv/bin/python -m app.main openai-check
             else
               echo "OPENAI_API_KEY is not configured; OpenAI check skipped"
             fi

@@ -95,7 +95,8 @@ Push в `main` запускает unit-тесты. Только после их 
 - `REG_RU_HOST` — SSH-хост REG.RU;
 - `REG_RU_USER` — `u3546857`;
 - `REG_RU_SSH_PRIVATE_KEY` — приватный SSH-ключ для deploy;
-- `REG_RU_SSH_PORT` — SSH-порт хостинга.
+- `REG_RU_SSH_PORT` — SSH-порт хостинга;
+- `OPENAI_API_KEY` — production API-ключ OpenAI.
 
 Перед первым deploy на сервере должны существовать `.env`, `venv/`, `data/`,
 `logs/`, `temp/`; публичная часть SSH-ключа должна быть добавлена в
@@ -103,9 +104,10 @@ Push в `main` запускает unit-тесты. Только после их 
 `production` правилами репозитория.
 
 Если production `.env` ещё не существует, workflow создаёт его с правами `600`
-и добавляет только `OPENAI_IMAGE_MODEL`, `APP_ENV` и `BASE_DIR`. Значение
-`OPENAI_API_KEY` workflow не создаёт и не заменяет; его нужно сохранить на
-сервере отдельно.
+и добавляет `OPENAI_IMAGE_MODEL`, `APP_ENV` и `BASE_DIR`. При наличии GitHub
+Secret `OPENAI_API_KEY` ключ передаётся на сервер через stdin, атомарно заменяет
+только одноимённую строку в `.env`, после чего workflow выполняет бесплатную
+проверку авторизации и доступности модели без генерации изображения.
 
 Workflow также поддерживает ручной запуск через **Actions → Test and deploy →
 Run workflow**. После успешной установки зависимостей и healthcheck текущий SHA

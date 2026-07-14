@@ -43,3 +43,9 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("'OPENAI_API_KEY=", self.workflow)
         self.assertIn("OPENAI_IMAGE_MODEL=gpt-image-2", self.workflow)
         self.assertIn("APP_ENV=production", self.workflow)
+
+    def test_transfers_openai_key_via_stdin_and_checks_authorization(self) -> None:
+        self.assertIn("Configure OpenAI credential", self.workflow)
+        self.assertIn("secrets.OPENAI_API_KEY", self.workflow)
+        self.assertIn('printf \'%s\' "$OPENAI_API_KEY" |', self.workflow)
+        self.assertIn("python -m app.main openai-check", self.workflow)
