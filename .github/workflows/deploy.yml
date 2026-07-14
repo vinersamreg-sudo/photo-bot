@@ -94,7 +94,30 @@ jobs:
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
+            "$ROOT"/venv/bin/python --version
+            "$ROOT"/venv/bin/pip check
             "$ROOT"/scripts/healthcheck.sh
+            test "$(stat -c '%a' "$ROOT/.env")" = "600"
+            for dir in "$ROOT/data" "$ROOT/logs" "$ROOT/temp"; do
+              test -d "$dir"
+              test -w "$dir"
+            done
+            for path in app tests scripts requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
+              test -e "$ROOT/$path"
+            done
+            if [ -f "$ROOT/logs/app.log" ] && grep -Eq '(OPENAI_API_KEY|sk-[A-Za-z0-9_-]{16,})' "$ROOT/logs/app.log"; then
+              echo "Potential secret material detected in app.log" >&2
+              exit 1
+            fi
+            if find /var/www/u3546857/data/www/trip-day.ru -maxdepth 5 -iname '*photo-bot*' -print -quit 2>/dev/null | grep -q .; then
+              echo "photo-bot files detected inside TripDay" >&2
+              exit 1
+            fi
+            if grep -Eq '^OPENAI_API_KEY=.+$' "$ROOT/.env"; then
+              echo "OPENAI_API_KEY is configured"
+            else
+              echo "OPENAI_API_KEY is not configured; OpenAI check skipped"
+            fi
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
           REMOTE

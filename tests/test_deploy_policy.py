@@ -25,7 +25,12 @@ class DeployPolicyTests(TestCase):
         self.assertIn('chmod +x "$ROOT"/scripts/*.sh', self.workflow)
         self.assertIn('cd "$ROOT"', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip install', self.workflow)
+        self.assertIn('"$ROOT"/venv/bin/pip check', self.workflow)
         self.assertIn('"$ROOT"/scripts/healthcheck.sh', self.workflow)
+
+    def test_verifies_log_safety_and_tripday_isolation(self) -> None:
+        self.assertIn("Potential secret material detected in app.log", self.workflow)
+        self.assertIn("photo-bot files detected inside TripDay", self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
         health_position = self.workflow.index('"$ROOT"/scripts/healthcheck.sh')
