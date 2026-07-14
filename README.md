@@ -1,114 +1,44 @@
-# Лайви — коммерческий ИИ-фотобот
+# photo-bot
 
-На текущем этапе репозиторий содержит только production-каркас: конфигурацию,
-проверку файловой системы, проверку авторизации OpenAI API, безопасный процессный
-каркас и автоматический deploy. MAX, обработка фото, оплата, баланс, очередь и
-пользовательский интерфейс пока намеренно не реализованы.
+Отдельный коммерческий ИИ-фотобот. `photo-bot` — техническое имя; публичный бренд пока не утверждён. Сейчас репозиторий содержит production-каркас: конфигурацию, healthcheck, безопасную проверку OpenAI API, процессные скрипты, тесты и автоматический деплой. Пользовательский бот, обработка фотографий, платежи и очередь ещё не реализованы.
 
-## Требования
+## Быстрый старт
 
-- Python 3.10.1 или новее из ветки 3.10+;
-- Linux с `venv`, `pip`, `nohup`, `cron` и SSH для production;
-- без Docker, Redis, Celery и Kubernetes.
-
-## Локальная установка
-
-Основная рабочая копия:
-
-```text
-C:\Users\viner\Documents\Codex\photo-bot
-```
-
-В PowerShell:
+Требуется Python 3.12.
 
 ```powershell
 cd C:\Users\viner\Documents\Codex\photo-bot
-py -3.10 -m venv venv
+py -3.12 -m venv venv
 .\venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
-```
-
-Для локального `.env` замените `BASE_DIR` на абсолютный путь репозитория или
-удалите значение: тогда корень определится автоматически. Реальный API-ключ
-хранится только в `.env` и никогда не коммитится.
-
-```dotenv
-OPENAI_API_KEY=ваш_реальный_ключ
-OPENAI_IMAGE_MODEL=gpt-image-2
-APP_ENV=development
-BASE_DIR=C:\Users\viner\Documents\Codex\photo-bot
-```
-
-## Проверки
-
-```powershell
 python -m unittest discover -v
 python -m app.main health
-python -m app.main openai-check
 ```
 
-`health` проверяет версию Python, загрузку конфигурации, наличие и доступность
-для записи каталогов `data`, `logs`, `temp`. `openai-check` требует ключ,
-создаёт официальный Python-клиент и вызывает список моделей. Это подтверждает
-авторизацию без генерации изображения. Любая ошибка возвращает ненулевой exit
-code; секреты фильтруются из логов.
+Для локального запуска укажите в `.env` локальный `BASE_DIR`. Реальный ключ хранится только в локальном `.env`, GitHub Environment `production` и production `.env`; он никогда не коммитится.
 
 ## Production
 
-Корень приложения:
+- VPS: Hetzner `ai-prod-01`, Ubuntu 24.04 LTS, Python 3.12;
+- приложение: `/opt/photo-bot`;
+- пользователь приложения и деплоя: `photoapp` без `sudo`;
+- Python: `/opt/photo-bot/venv/bin/python`;
+- состояние: `data/`, логи: `logs/`, временные файлы: `temp/`;
+- конфигурация: `/opt/photo-bot/.env`, права `600`.
 
-```text
-/var/www/u3546857/data/apps/photo-bot
-```
+Push в `main` запускает тесты и деплой через GitHub Actions. Деплой синхронизирует только этот проект и сохраняет `.env`, `venv/`, `data/`, `logs/`, `temp/`. TripDay не является частью этой системы и не используется.
 
-Python окружения:
-
-```text
-/var/www/u3546857/data/apps/photo-bot/venv/bin/python
-```
-
-Подготовьте `/var/www/u3546857/data/apps/photo-bot/.env` из `.env.example` и
-укажите реальный ключ. Лог приложения: `logs/app.log`.
-
-Запуск, проверка и остановка выполняются из любой текущей директории:
+Ручной запуск доступен через **Actions → Test and deploy → Run workflow**. Операционные команды:
 
 ```bash
-/var/www/u3546857/data/apps/photo-bot/scripts/start_bot.sh
-/var/www/u3546857/data/apps/photo-bot/scripts/healthcheck.sh
-/var/www/u3546857/data/apps/photo-bot/scripts/stop_bot.sh
+/opt/photo-bot/scripts/healthcheck.sh
+/opt/photo-bot/scripts/start_bot.sh
+/opt/photo-bot/scripts/stop_bot.sh
 ```
 
-Процесс хранит PID в `data/photo-bot.pid`. Скрипт остановки дополнительно
-проверяет командную строку процесса и не посылает сигнал чужим Python-процессам.
+Процесс `run` пока является пустым signal-aware каркасом, поэтому постоянно запускать его в production до появления реального обработчика не требуется.
 
-## GitHub Actions deploy
+## Документация
 
-Push в `main` запускает unit-тесты. Только после их успеха workflow копирует код
-по SSH, не затрагивая `.env`, `venv/`, `data/`, `logs/`, `temp/`, устанавливает
-зависимости через production `venv/bin/pip` и выполняет healthcheck. Workflow не
-использует `sudo`, не перезапускает и не изменяет TripDay.
-
-В GitHub repository settings добавьте secrets:
-
-- `REG_RU_HOST` — SSH-хост REG.RU;
-- `REG_RU_USER` — `u3546857`;
-- `REG_RU_SSH_PRIVATE_KEY` — приватный SSH-ключ для deploy;
-- `REG_RU_SSH_PORT` — SSH-порт хостинга;
-- `OPENAI_API_KEY` — production API-ключ OpenAI.
-
-Перед первым deploy на сервере должны существовать `.env`, `venv/`, `data/`,
-`logs/`, `temp/`; публичная часть SSH-ключа должна быть добавлена в
-`~/.ssh/authorized_keys`. Рекомендуется защитить GitHub environment
-`production` правилами репозитория.
-
-Если production `.env` ещё не существует, workflow создаёт его с правами `600`
-и добавляет `OPENAI_IMAGE_MODEL`, `APP_ENV` и `BASE_DIR`. При наличии GitHub
-Secret `OPENAI_API_KEY` ключ передаётся на сервер через stdin, атомарно заменяет
-только одноимённую строку в `.env`, после чего workflow выполняет бесплатную
-проверку авторизации и доступности модели без генерации изображения.
-
-Workflow также поддерживает ручной запуск через **Actions → Test and deploy →
-Run workflow**. После успешной установки зависимостей и healthcheck текущий SHA
-записывается в `data/deployed_commit.txt`; файл сохраняется между deploy.
+Главный источник истины — [docs/PROJECT_BIBLE.md](docs/PROJECT_BIBLE.md). Текущее состояние, архитектура, процесс поставки и решения описаны в остальных файлах каталога `docs/`.

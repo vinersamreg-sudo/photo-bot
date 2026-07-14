@@ -1,4 +1,5 @@
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 from unittest import TestCase
 
@@ -23,3 +24,13 @@ class HealthcheckTests(TestCase):
             settings = Settings("", "", "test", base_dir)
             errors = health_errors(settings)
             self.assertTrue(any("temp" in error for error in errors))
+
+    def test_python_older_than_312_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base_dir = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base_dir / name).mkdir()
+            settings = Settings("", "", "test", base_dir)
+            with patch("app.main.sys.version_info", (3, 11, 9)):
+                errors = health_errors(settings)
+            self.assertTrue(any("Python 3.12" in error for error in errors))

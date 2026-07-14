@@ -15,13 +15,16 @@ class DeployPolicyTests(TestCase):
         self.assertIn("workflow_dispatch:", self.workflow)
 
     def test_preserves_runtime_state(self) -> None:
-        for protected_path in (".env", "venv", "data", "logs", "temp"):
-            self.assertIn(f"--exclude={protected_path}", self.workflow)
+        for protected_path in (".env", "venv/", "data/", "logs/", "temp/"):
+            self.assertIn(f"--exclude='{protected_path}'", self.workflow)
 
     def test_uses_scoped_safe_operations(self) -> None:
         self.assertNotIn("sudo", self.workflow)
         self.assertNotIn("pkill", self.workflow)
-        self.assertIn("/var/www/u3546857/data/apps/photo-bot", self.workflow)
+        self.assertIn("/opt/photo-bot", self.workflow)
+        self.assertNotIn("REG_RU_", self.workflow)
+        self.assertNotIn("trip-day", self.workflow.lower())
+        self.assertIn("secrets.HETZNER_HOST", self.workflow)
         self.assertIn('chmod +x "$ROOT"/scripts/*.sh', self.workflow)
         self.assertIn('cd "$ROOT"', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip install', self.workflow)
@@ -30,7 +33,11 @@ class DeployPolicyTests(TestCase):
 
     def test_verifies_log_safety_and_tripday_isolation(self) -> None:
         self.assertIn("Potential secret material detected in app.log", self.workflow)
-        self.assertIn("photo-bot files detected inside TripDay", self.workflow)
+        self.assertNotIn("TripDay", self.workflow)
+
+    def test_uses_python_312_and_scans_for_secrets(self) -> None:
+        self.assertIn('python-version: "3.12"', self.workflow)
+        self.assertIn("python scripts/scan_secrets.py", self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
         health_position = self.workflow.index('"$ROOT"/scripts/healthcheck.sh')

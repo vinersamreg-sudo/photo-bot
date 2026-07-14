@@ -22,7 +22,7 @@ from app.openai_client import (
 
 
 LOGGER = logging.getLogger(__name__)
-MINIMUM_PYTHON = (3, 10, 1)
+MINIMUM_PYTHON = (3, 12, 0)
 
 
 class SecretRedactionFilter(logging.Filter):
@@ -82,7 +82,7 @@ def health_errors(settings: Settings) -> List[str]:
     errors: List[str] = []
     if sys.version_info[:3] < MINIMUM_PYTHON:
         errors.append(
-            "Python 3.10.1 or newer is required; found "
+            "Python 3.12 or newer is required; found "
             + ".".join(str(part) for part in sys.version_info[:3])
         )
 

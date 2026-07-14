@@ -15,17 +15,29 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    environment: production
     env:
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
-      - run: python -m unittest discover -v
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+      - name: Scan tracked files for secrets
+        run: python scripts/scan_secrets.py
+      - name: Run unit tests and healthcheck
+        env:
+          APP_ENV: ci
+          BASE_DIR: ${{ github.workspace }}
+        run: |
+          python -m unittest discover -v
+          python -m app.main health
       - name: Validate OpenAI credential from GitHub runner
         if: env.OPENAI_KEY_CONFIGURED == 'true'
         env:
@@ -39,119 +51,108 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      DEPLOY_CONFIGURED: ${{ secrets.REG_RU_HOST != '' && secrets.REG_RU_USER != '' && secrets.REG_RU_SSH_PRIVATE_KEY != '' && secrets.REG_RU_SSH_PORT != '' }}
+      DEPLOY_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' }}
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
-      - name: Report unconfigured deployment
+      - name: Require Hetzner deployment configuration
         if: env.DEPLOY_CONFIGURED != 'true'
-        run: echo "Deploy skipped until REG.RU repository secrets are configured."
+        run: |
+          echo "Hetzner production secrets are incomplete." >&2
+          exit 1
       - uses: actions/checkout@v7
         if: env.DEPLOY_CONFIGURED == 'true'
       - name: Configure SSH
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.REG_RU_SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.REG_RU_HOST }}
-          SSH_PORT: ${{ secrets.REG_RU_SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
-      - name: Copy application files
+      - name: Synchronize application files
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          SSH_HOST: ${{ secrets.REG_RU_HOST }}
-          SSH_USER: ${{ secrets.REG_RU_USER }}
-          SSH_PORT: ${{ secrets.REG_RU_SSH_PORT }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          tar \
-            --exclude=.git \
-            --exclude=.env \
-            --exclude=venv \
-            --exclude=data \
-            --exclude=logs \
-            --exclude=temp \
-            -czf - . | \
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "mkdir -p /var/www/u3546857/data/apps/photo-bot && tar -xzf - -C /var/www/u3546857/data/apps/photo-bot"
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='.env' \
+            --exclude='venv/' \
+            --exclude='data/' \
+            --exclude='logs/' \
+            --exclude='temp/' \
+            -e "ssh -p $SSH_PORT" \
+            ./ "$SSH_USER@$SSH_HOST:/opt/photo-bot/"
       - name: Configure OpenAI credential
         if: env.DEPLOY_CONFIGURED == 'true' && env.OPENAI_KEY_CONFIGURED == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SSH_HOST: ${{ secrets.REG_RU_HOST }}
-          SSH_USER: ${{ secrets.REG_RU_USER }}
-          SSH_PORT: ${{ secrets.REG_RU_SSH_PORT }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
           printf '%s' "$OPENAI_API_KEY" | \
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
-            ROOT=/var/www/u3546857/data/apps/photo-bot
+            ROOT=/opt/photo-bot
             KEY=$(cat)
             test -n "$KEY"
             TMP="$ROOT/.env.tmp"
-            if [ -f "$ROOT/.env" ]; then
-              grep -v "^OPENAI_API_KEY=" "$ROOT/.env" > "$TMP" || true
-            else
-              : > "$TMP"
-            fi
+            grep -v "^OPENAI_API_KEY=" "$ROOT/.env" > "$TMP" || true
             printf "%s\n" "OPENAI_API_KEY=$KEY" >> "$TMP"
             chmod 600 "$TMP"
             mv "$TMP" "$ROOT/.env"
             unset KEY'
-      - name: Install and verify
+      - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          SSH_HOST: ${{ secrets.REG_RU_HOST }}
-          SSH_USER: ${{ secrets.REG_RU_USER }}
-          SSH_PORT: ${{ secrets.REG_RU_SSH_PORT }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_SHA" <<'REMOTE'
             set -euo pipefail
-            ROOT=/var/www/u3546857/data/apps/photo-bot
+            ROOT=/opt/photo-bot
             DEPLOY_SHA="$1"
+            test "$(id -un)" = "photoapp"
+            test "$(stat -c '%U:%G' "$ROOT")" = "photoapp:photoapp"
             mkdir -p "$ROOT/data" "$ROOT/logs" "$ROOT/temp"
             if [ ! -f "$ROOT/.env" ]; then
               install -m 600 /dev/null "$ROOT/.env"
             else
               chmod 600 "$ROOT/.env"
             fi
-            if ! grep -q '^OPENAI_IMAGE_MODEL=' "$ROOT/.env"; then
-              printf '%s\n' 'OPENAI_IMAGE_MODEL=gpt-image-2' >> "$ROOT/.env"
-            fi
-            if ! grep -q '^APP_ENV=' "$ROOT/.env"; then
-              printf '%s\n' 'APP_ENV=production' >> "$ROOT/.env"
-            fi
-            if ! grep -q '^BASE_DIR=' "$ROOT/.env"; then
-              printf '%s\n' 'BASE_DIR=/var/www/u3546857/data/apps/photo-bot' >> "$ROOT/.env"
-            fi
+            grep -q '^OPENAI_IMAGE_MODEL=' "$ROOT/.env" || printf '%s\n' 'OPENAI_IMAGE_MODEL=gpt-image-2' >> "$ROOT/.env"
+            grep -q '^APP_ENV=' "$ROOT/.env" || printf '%s\n' 'APP_ENV=production' >> "$ROOT/.env"
+            grep -q '^BASE_DIR=' "$ROOT/.env" || printf '%s\n' 'BASE_DIR=/opt/photo-bot' >> "$ROOT/.env"
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
             "$ROOT"/venv/bin/python --version
             "$ROOT"/venv/bin/pip check
+            "$ROOT"/venv/bin/python -m unittest discover -v
             "$ROOT"/scripts/healthcheck.sh
             test "$(stat -c '%a' "$ROOT/.env")" = "600"
             for dir in "$ROOT/data" "$ROOT/logs" "$ROOT/temp"; do
               test -d "$dir"
               test -w "$dir"
             done
-            for path in app tests scripts requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
+            for path in app tests scripts docs requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
               test -e "$ROOT/$path"
             done
-            if [ -f "$ROOT/logs/app.log" ] && grep -Eq '(OPENAI_API_KEY|sk-[A-Za-z0-9_-]{16,})' "$ROOT/logs/app.log"; then
+            if [ -f "$ROOT/logs/app.log" ] && grep -Eq '(OPENAI_API_KEY|sk-[A-Za-z0-9_-]{20,})' "$ROOT/logs/app.log"; then
               echo "Potential secret material detected in app.log" >&2
-              exit 1
-            fi
-            if find /var/www/u3546857/data/www/trip-day.ru -maxdepth 5 -iname '*photo-bot*' -print -quit 2>/dev/null | grep -q .; then
-              echo "photo-bot files detected inside TripDay" >&2
               exit 1
             fi
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
             if grep -Eq '^OPENAI_API_KEY=.+$' "$ROOT/.env"; then
-              echo "OPENAI_API_KEY is configured; running authorization check"
               "$ROOT"/venv/bin/python -m app.main openai-check
             else
-              echo "OPENAI_API_KEY is not configured; OpenAI check skipped"
+              echo "OPENAI_API_KEY is not configured; external API check skipped"
             fi
           REMOTE

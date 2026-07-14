@@ -1,62 +1,29 @@
 # AI repository context
 
-## Назначение и текущая стадия
+Перед любыми изменениями прочитать `docs/PROJECT_BIBLE.md`, `docs/CURRENT_STATE.md`, `docs/DECISIONS.md` и релевантный профильный документ.
 
-Это отдельный коммерческий проект ИИ-фотобота «Лайви». Сейчас реализован только
-минимальный production-каркас: конфигурация, healthcheck, проверка авторизации
-OpenAI, процессные скрипты, тесты и GitHub Actions deploy. Бизнес-логики обработки
-фотографий ещё нет.
+## Неподвижные границы
 
-## Архитектура
+- Это отдельный коммерческий ИИ-фотобот с техническим именем `photo-bot`; публичный бренд не утверждён.
+- Единственный источник изменений — Git-репозиторий `C:\Users\viner\Documents\Codex\photo-bot`, ветка `main`.
+- Production: Hetzner VPS `ai-prod-01`, `/opt/photo-bot`, пользователь `photoapp`, Python 3.12.
+- TripDay не связан с проектом: не читать, не копировать, не изменять, не останавливать и не включать в deploy.
+- Не добавлять Docker, Redis, Celery, Kubernetes, proxy/VPN или сложную инфраструктуру без отдельного решения.
+- Секреты не печатать, не логировать и не коммитить. Раскрытый ключ считается скомпрометированным и не используется.
+- Production не редактируется как второй источник истины; изменения приходят через GitHub Actions.
 
-- `app/config.py` — `.env`, настройки и production/local пути.
-- `app/openai_client.py` — создание клиента и минимальная проверка API.
-- `app/image_service.py` — пустая граница будущего сервиса изображений.
-- `app/main.py` — CLI, healthcheck, логирование и long-running каркас.
-- `scripts/` — PID-ориентированное управление только процессом photo-bot.
-- `tests/` — unit-тесты без реальных OpenAI-запросов.
+## Текущая стадия
 
-Архитектуру следует сохранять простой и совместимой с Python 3.10.1.
+Реализованы конфигурация, файловый healthcheck, безопасная проверка авторизации и доступности модели OpenAI, idle-процесс, PID-скрипты, unit-тесты и CI/CD. Нет пользовательского интерфейса, интеграции с мессенджером, генерации/редактирования изображений, платежей, баланса и очереди.
 
-## Инфраструктурные ограничения
+## Код
 
-Production — обычный виртуальный хостинг REG.RU, не VPS. Доступны SSH, pip,
-venv, nohup, cron, HTTPS к OpenAI и GitHub Actions deploy. Недоступны и запрещены
-Docker, Redis, Celery и Kubernetes. `sudo` не используется.
+- `app/config.py` — настройки и пути;
+- `app/openai_client.py` — клиент и бесплатная API-проверка через список моделей;
+- `app/image_service.py` — граница будущего image-сервиса;
+- `app/main.py` — CLI `health`, `openai-check`, `run`;
+- `scripts/` — health/process/deploy safety utilities;
+- `tests/` — unit-тесты без реальных API-запросов;
+- `.github/workflows/deploy.yml` — Python 3.12 CI и scoped deploy на Hetzner.
 
-## Пути
-
-- Единственный источник изменений: `C:\Users\viner\Documents\Codex\photo-bot`.
-- Production root: `/var/www/u3546857/data/apps/photo-bot`.
-- Production Python: `/opt/python/python-3.10.1/bin/python`.
-- Venv Python: `/var/www/u3546857/data/apps/photo-bot/venv/bin/python`.
-- Log: `/var/www/u3546857/data/apps/photo-bot/logs/app.log`.
-- PID: `/var/www/u3546857/data/apps/photo-bot/data/photo-bot.pid`.
-
-Нельзя вручную править production как второй источник истины: изменения идут
-из локального Git-репозитория через deploy.
-
-## Изоляция от TripDay
-
-Проект не связан с TripDay. Запрещено использовать или изменять его код,
-процессы, директории, конфигурацию и deploy. Остановка процесса разрешена только
-по проверенному PID `photo-bot`.
-
-## Что пока запрещено добавлять
-
-MAX-интеграцию, Telegram, оплату, SQLite-баланс, очередь, Redis, Celery, Docker,
-Kubernetes, веб-панель и сложную архитектуру.
-
-## Дальнейший целевой поток
-
-`MAX → фотография → инструкция → OpenAI → результат`.
-
-Каждый этап добавляется отдельно после стабилизации инфраструктурного каркаса.
-
-## Текущий production-блокер OpenAI
-
-14 июля 2026 года запрос `GET /v1/models` с production-хостинга REG.RU вернул
-HTTP 403 с кодом `unsupported_country_region_territory`. Это ограничение региона
-исходящего серверного IP, а не ошибка healthcheck или зависимостей. Не отключать
-production `openai-check` ради зелёного deploy и не добавлять обходные proxy без
-отдельного архитектурного решения.
+Целевой продуктовый поток: `пользователь → фото + инструкция → проверка → OpenAI image API → результат → учёт операции`. Развивать по этапам из `docs/ROADMAP.md`, сохраняя простую архитектуру до появления измеримой нагрузки.
