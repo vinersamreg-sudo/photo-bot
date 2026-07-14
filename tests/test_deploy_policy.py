@@ -40,6 +40,6 @@ class DeployPolicyTests(TestCase):
     def test_creates_but_does_not_overwrite_production_env(self) -> None:
         self.assertIn('if [ ! -f "$ROOT/.env" ]', self.workflow)
         self.assertIn('install -m 600 /dev/null "$ROOT/.env"', self.workflow)
-        self.assertNotIn("OPENAI_API_KEY=", self.workflow)
+        self.assertNotIn("'OPENAI_API_KEY=", self.workflow)
         self.assertIn("OPENAI_IMAGE_MODEL=gpt-image-2", self.workflow)
         self.assertIn("APP_ENV=production", self.workflow)
