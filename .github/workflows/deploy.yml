@@ -28,9 +28,16 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     environment: production
+    env:
+      DEPLOY_CONFIGURED: ${{ secrets.REG_RU_HOST != '' && secrets.REG_RU_USER != '' && secrets.REG_RU_SSH_PRIVATE_KEY != '' && secrets.REG_RU_SSH_PORT != '' }}
     steps:
+      - name: Report unconfigured deployment
+        if: env.DEPLOY_CONFIGURED != 'true'
+        run: echo "Deploy skipped until REG.RU repository secrets are configured."
       - uses: actions/checkout@v4
+        if: env.DEPLOY_CONFIGURED == 'true'
       - name: Configure SSH
+        if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.REG_RU_SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.REG_RU_HOST }}
@@ -41,6 +48,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
       - name: Copy application files
+        if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_HOST: ${{ secrets.REG_RU_HOST }}
           SSH_USER: ${{ secrets.REG_RU_USER }}
@@ -57,6 +65,7 @@ jobs:
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
             "mkdir -p /var/www/u3546857/data/apps/photo-bot && tar -xzf - -C /var/www/u3546857/data/apps/photo-bot"
       - name: Install and verify
+        if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_HOST: ${{ secrets.REG_RU_HOST }}
           SSH_USER: ${{ secrets.REG_RU_USER }}
