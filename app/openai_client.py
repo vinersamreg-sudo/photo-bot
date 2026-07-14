@@ -35,6 +35,16 @@ class OpenAIQuotaError(OpenAICheckError):
     """Raised when OpenAI reports insufficient account quota."""
 
 
+def safe_api_error_details(exc: Any) -> tuple[str, str, str]:
+    """Return non-secret provider diagnostics suitable for logs."""
+
+    return (
+        str(getattr(exc, "code", None) or "unknown"),
+        str(getattr(exc, "type", None) or "unknown"),
+        str(getattr(exc, "request_id", None) or "unknown"),
+    )
+
+
 def create_openai_client(settings: Settings) -> OpenAI:
     """Create an OpenAI client, rejecting an absent API key explicitly."""
 
@@ -68,9 +78,17 @@ def check_openai_connection(client: Any, image_model: str) -> None:
         LOGGER.error("OpenAI API rate limit was reached")
         raise OpenAICheckError("OpenAI API rate limit was reached") from exc
     except APIStatusError as exc:
-        LOGGER.error("OpenAI API check failed with HTTP status %s", exc.status_code)
+        code, error_type, request_id = safe_api_error_details(exc)
+        LOGGER.error(
+            "OpenAI API check failed (status=%s, code=%s, type=%s, request_id=%s)",
+            exc.status_code,
+            code,
+            error_type,
+            request_id,
+        )
         raise OpenAICheckError(
-            f"OpenAI API check failed with HTTP status {exc.status_code}"
+            "OpenAI API check failed: "
+            f"HTTP {exc.status_code}, code={code}, type={error_type}"
         ) from exc
 
     available_models = {model.id for model in models.data}

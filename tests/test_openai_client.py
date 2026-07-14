@@ -11,6 +11,7 @@ from app.openai_client import (
     OpenAIModelError,
     check_openai_connection,
     create_openai_client,
+    safe_api_error_details,
 )
 
 
@@ -61,3 +62,15 @@ class OpenAIClientTests(TestCase):
         client = SimpleNamespace(models=SimpleNamespace(list=lambda: None))
         with self.assertRaisesRegex(OpenAIConfigurationError, "OPENAI_IMAGE_MODEL"):
             check_openai_connection(client, "")
+
+    def test_safe_api_error_details_excludes_body_and_message(self) -> None:
+        error = SimpleNamespace(
+            code="safe_code",
+            type="safe_type",
+            request_id="req_safe",
+            body={"message": "must not be logged"},
+        )
+        self.assertEqual(
+            safe_api_error_details(error),
+            ("safe_code", "safe_type", "req_safe"),
+        )
