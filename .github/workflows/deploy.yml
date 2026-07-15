@@ -338,3 +338,45 @@ jobs:
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
           REMOTE
+      - name: Audit owner E2E runtime without sensitive identifiers
+        if: github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            cd /opt/photo-bot
+            venv/bin/python - <<'PY'
+          from app.config import load_settings
+          from app.database import Database
+
+          settings = load_settings()
+          print(f"observe_only={str(settings.max_poll_observe_only).lower()}")
+          print(f"owner_allowlist_configured={str(bool(settings.max_owner_user_ids)).lower()}")
+          with Database(settings.database_path).read() as connection:
+              checks = {
+                  "processed_events": "SELECT COUNT(*) FROM max_processed_events",
+                  "dialogs": "SELECT COUNT(*) FROM max_dialogs",
+                  "transitions": "SELECT COUNT(*) FROM max_dialog_transitions",
+              }
+              for label, query in checks.items():
+                  print(f"{label}={connection.execute(query).fetchone()[0]}")
+              for row in connection.execute(
+                  "SELECT event_type,status,updated_at FROM max_processed_events ORDER BY updated_at DESC LIMIT 10"
+              ):
+                  print(f"event={row['event_type']} status={row['status']} at={row['updated_at']}")
+              for row in connection.execute(
+                  "SELECT state,COUNT(*) AS total FROM max_dialogs GROUP BY state ORDER BY state"
+              ):
+                  print(f"dialog_state={row['state']} count={row['total']}")
+              state = connection.execute(
+                  "SELECT updated_at FROM max_transport_state WHERE name='poll_last_success'"
+              ).fetchone()
+              print(f"poll_last_success={state['updated_at'] if state else 'missing'}")
+          PY
+            tail -n 120 logs/app.log | sed -E \
+              -e 's/sk-[A-Za-z0-9_-]+/[REDACTED]/g' \
+              -e 's/(user_id|platform_user_id|chat_id)=[^, )]+/\1=[REDACTED]/g'
+          REMOTE
