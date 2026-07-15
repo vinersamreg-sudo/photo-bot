@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 
 from app.config import Settings
-from app.main import SecretRedactionFilter
+from app.main import SecretRedactionFilter, configure_logging
 from app.openai_client import (
     OpenAIConfigurationError,
     OpenAIModelError,
@@ -36,6 +36,10 @@ class OpenAIClientTests(TestCase):
         output = stream.getvalue()
         self.assertNotIn(secret, output)
         self.assertIn("[REDACTED]", output)
+
+    def test_httpx_request_urls_are_not_logged_at_info(self) -> None:
+        configure_logging(Settings("", "", "test", Path.cwd()))
+        self.assertGreater(logging.getLogger("httpx").getEffectiveLevel(), logging.INFO)
 
     def test_connection_check_confirms_configured_model(self) -> None:
         client = SimpleNamespace(

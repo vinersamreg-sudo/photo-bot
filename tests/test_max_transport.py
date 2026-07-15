@@ -112,6 +112,34 @@ class MaxTransportTests(TestCase):
         self.assertTrue(api_requests)
         self.assertTrue(media_requests)
 
+    def test_image_upload_accepts_the_documented_photo_token_map(self) -> None:
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/uploads":
+                return httpx.Response(200, json={"url": "https://iu.oneme.ru/upload"})
+            return httpx.Response(200, json={"success": True})
+
+        media = httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200,
+                    json={"photos": {"photo-id": {"token": "photo-token"}}},
+                )
+            )
+        )
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=media,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "preview.jpg"
+            source.write_bytes(b"image-bytes")
+            self.assertEqual(client.upload_image(source), "photo-token")
+
     def test_rejects_unknown_media_host_and_redacts_api_error(self) -> None:
         api = httpx.Client(
             base_url="https://platform-api2.max.ru",
