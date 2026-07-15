@@ -43,6 +43,7 @@ class Settings:
     trash_retention_days: int = 30
     max_bot_token: str = ""
     max_api_base_url: str = "https://platform-api2.max.ru"
+    max_ca_bundle: str = "ops/certs/russian_trusted_root_ca_pem.crt"
     max_transport_mode: str = "disabled"
     max_poll_timeout_seconds: int = 20
     max_poll_retry_seconds: int = 5
@@ -78,6 +79,11 @@ class Settings:
     @property
     def max_poll_lock_path(self) -> Path:
         return self.data_dir / "max-polling.lock"
+
+    @property
+    def max_ca_bundle_path(self) -> Path:
+        path = Path(self.max_ca_bundle).expanduser()
+        return path if path.is_absolute() else self.base_dir / path
 
 
 def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
@@ -168,6 +174,9 @@ def load_settings(
         max_api_base_url=values.get(
             "MAX_API_BASE_URL", "https://platform-api2.max.ru"
         ).strip().rstrip("/"),
+        max_ca_bundle=values.get(
+            "MAX_CA_BUNDLE", "ops/certs/russian_trusted_root_ca_pem.crt"
+        ).strip(),
         max_transport_mode=max_transport_mode,
         max_poll_timeout_seconds=_positive_int(values, "MAX_POLL_TIMEOUT_SECONDS", 20),
         max_poll_retry_seconds=_positive_int(values, "MAX_POLL_RETRY_SECONDS", 5),

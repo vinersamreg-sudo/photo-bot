@@ -27,6 +27,7 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.trash_retention_days, 30)
         self.assertEqual(settings.max_bot_token, "")
         self.assertEqual(settings.max_api_base_url, "https://platform-api2.max.ru")
+        self.assertTrue(settings.max_ca_bundle_path.is_file())
         self.assertEqual(settings.max_transport_mode, "disabled")
         self.assertEqual(settings.max_poll_timeout_seconds, 20)
         self.assertEqual(settings.max_poll_retry_seconds, 5)

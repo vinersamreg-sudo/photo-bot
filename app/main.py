@@ -263,6 +263,7 @@ def run_max_check(settings: Settings) -> int:
             settings.max_bot_token,
             settings.max_api_base_url,
             timeout_seconds=30,
+            ca_bundle=settings.max_ca_bundle_path,
             media_host_suffixes=settings.max_media_host_suffixes,
         )
         try:

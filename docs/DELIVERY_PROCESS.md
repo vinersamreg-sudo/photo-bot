@@ -4,6 +4,8 @@
 
 Если Environment secret `MAX_BOT_TOKEN` существует, workflow передаёт его по stdin в `/opt/photo-bot/.env`, выставляет `MAX_TRANSPORT_MODE=polling` и обязательный `MAX_POLL_OBSERVE_ONLY=true`, выполняет `max-check`, устанавливает `/etc/systemd/system/photo-bot.service`, включает autostart и ожидает полноценный readiness. Readiness означает active unit, один `photoapp` MainPID с `python -m app.main run`, удерживаемый polling lock и свежий `poll_last_success` в SQLite. Workflow затем доказывает отказ второго runtime и graceful systemd restart. Значения secrets не попадают в shell arguments или отчёт.
 
+MAX требует доверия цепочке Минцифры для `platform-api2.max.ru`. Репозиторий хранит публичный root из официального `https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt`; приложение указывает его только MAX API client через `MAX_CA_BUNDLE`. Системный trust store не расширяется, TLS verification не отключается, сертификат защищён тестом DER SHA-256.
+
 Если MAX secret отсутствует, deploy кода разрешён, но mode принудительно остаётся `disabled`, unit останавливается и readiness MAX не заявляется. Прямой background-start и cron watchdog не используются. Изменение systemd ограничено отдельными разрешёнными deployment-командами; само приложение не имеет root/sudo.
 
 ## Обычный выпуск

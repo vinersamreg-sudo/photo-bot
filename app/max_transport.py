@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
@@ -117,6 +118,7 @@ class MaxApiClient:
         base_url: str = "https://platform-api2.max.ru",
         *,
         timeout_seconds: float = 30,
+        ca_bundle: Path | None = None,
         media_host_suffixes: Sequence[str] = (".max.ru", ".oneme.ru", ".okcdn.ru"),
         client: Optional[httpx.Client] = None,
         media_client: Optional[httpx.Client] = None,
@@ -129,10 +131,23 @@ class MaxApiClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.media_host_suffixes = tuple(suffix.lower() for suffix in media_host_suffixes)
+        verify: ssl.SSLContext | bool = True
+        if ca_bundle is not None:
+            if not ca_bundle.is_file():
+                raise MaxTransportError(
+                    "MAX CA bundle is not available", kind="configuration_missing"
+                )
+            try:
+                verify = ssl.create_default_context(cafile=str(ca_bundle))
+            except (OSError, ssl.SSLError) as exc:
+                raise MaxTransportError(
+                    "MAX CA bundle is invalid", kind="configuration_missing"
+                ) from exc
         self.client = client or httpx.Client(
             base_url=self.base_url,
             headers={"Authorization": token, "User-Agent": "photo-bot/1"},
             timeout=timeout_seconds,
+            verify=verify,
         )
         self.media_client = media_client or httpx.Client(timeout=timeout_seconds)
         self._owns_media_client = media_client is None

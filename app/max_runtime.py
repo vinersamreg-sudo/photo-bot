@@ -29,6 +29,7 @@ def build_max_application(
         settings.max_bot_token,
         settings.max_api_base_url,
         timeout_seconds=max(30, settings.max_poll_timeout_seconds + 5),
+        ca_bundle=settings.max_ca_bundle_path,
         media_host_suffixes=settings.max_media_host_suffixes,
     )
     demo = build_demo_service(settings, provider_name="openai")
@@ -45,6 +46,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
         settings.max_bot_token,
         settings.max_api_base_url,
         timeout_seconds=max(30, settings.max_poll_timeout_seconds + 5),
+        ca_bundle=settings.max_ca_bundle_path,
         media_host_suffixes=settings.max_media_host_suffixes,
     )
     application = None

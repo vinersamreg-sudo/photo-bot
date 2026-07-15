@@ -180,6 +180,7 @@ jobs:
             ensure_env TRASH_RETENTION_DAYS 30
             ensure_env MAX_BOT_TOKEN ''
             ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
+            ensure_env MAX_CA_BUNDLE ops/certs/russian_trusted_root_ca_pem.crt
             set_env() {
               NAME="$1"
               VALUE="$2"

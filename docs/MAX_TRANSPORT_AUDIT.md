@@ -6,6 +6,8 @@
 
 Production polling запускается исключительно через hardened `photo-bot.service` и single-instance advisory lock. На текущем этапе включён transport-only observe mode: входящие batch фиксируются только агрегированным count/event type без user id, текста и media; marker и время последней успешной связи сохраняются, application handler не вызывается. Это гарантирует отсутствие ответов и image requests до отдельного этапа реального `/start`.
 
+При первом production `max-check` TCP:443 был доступен, но стандартный Python trust store отклонил цепочку `Russian Trusted Sub CA`. Это соответствует предупреждению официальной документации MAX о необходимости сертификата Минцифры для `platform-api2.max.ru`. Исправление ограничено MAX-клиентом: официальный root с `gu-st.ru`, без `verify=false` и без глобальной установки CA.
+
 Актуально на 15.07.2026. Документ фиксирует только проверенные факты до реализации live transport.
 
 ## Где искался прежний бот

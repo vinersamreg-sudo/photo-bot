@@ -156,6 +156,26 @@ class MaxTransportTests(TestCase):
             with self.assertRaises(MaxTransportError) as caught:
                 client.get_me()
             self.assertEqual(caught.exception.kind, kind)
+
+    def test_missing_ca_bundle_and_inactive_bot_are_classified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(MaxTransportError) as caught:
+                MaxApiClient("test", ca_bundle=Path(directory) / "missing.crt")
+            self.assertEqual(caught.exception.kind, "configuration_missing")
+        client = MaxApiClient(
+            "test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(
+                        403, json={"code": "bot_not_active"}
+                    )
+                ),
+            ),
+        )
+        with self.assertRaises(MaxTransportError) as caught:
+            client.get_me()
+        self.assertEqual(caught.exception.kind, "bot_not_active")
         for status, kind in ((403, "forbidden"), (429, "rate_limit")):
             client = MaxApiClient(
                 "test",

@@ -5,6 +5,7 @@
 - подтверждены прошедший модерацию бот `Pixora обработка фото ИИ` и наличие `MAX_BOT_TOKEN` в GitHub Environment `production`;
 - добавлен transport-only `MAX_POLL_OBSERVE_ONLY=true`: runtime получает обновления и marker, но не вызывает пользовательские handlers, не отправляет сообщения и не запускает OpenAI image generation;
 - MAX transport errors классифицируются как configuration/auth/forbidden/inactive/network/timeout/rate-limit/duplicate-instance без раскрытия ответа или токена;
+- для `platform-api2.max.ru` добавлен официальный `Russian Trusted Root CA` из `gu-st.ru`; он применяется только к MAX API client с полной TLS-проверкой, DER SHA-256 закреплён тестом;
 - production healthcheck проверяет SQLite, свежесть связи с MAX, active systemd MainPID, команду процесса и удерживаемый single-instance lock;
 - deploy передаёт MAX token через stdin, устанавливает hardened systemd unit, проверяет один PID, duplicate start, graceful restart и отсутствие значений секретов в runtime log;
 - прямой background-start выведен из эксплуатации; публичный webhook, пользовательский `/start`, изображения, callbacks, оплата и сайт остаются вне этапа.

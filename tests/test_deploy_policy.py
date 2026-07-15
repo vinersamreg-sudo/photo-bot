@@ -77,6 +77,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env MAX_TRANSPORT_MODE polling", self.workflow)
         self.assertIn("set_env MAX_POLL_OBSERVE_ONLY true", self.workflow)
         self.assertIn("ensure_env MAX_API_BASE_URL https://platform-api2.max.ru", self.workflow)
+        self.assertIn("ensure_env MAX_CA_BUNDLE ops/certs/russian_trusted_root_ca_pem.crt", self.workflow)
         self.assertIn("/opt/photo-bot/scripts/stop_bot.sh", self.workflow)
         self.assertIn('if [ "$MODE" = polling ]', self.workflow)
         self.assertIn("python -m app.main max-check", self.workflow)
