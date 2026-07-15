@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      enable_owner_handlers:
+        description: Temporarily enable owner-only MAX application handlers
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,6 +26,7 @@ jobs:
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
       MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
       MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
+      MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -173,14 +180,16 @@ jobs:
       - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
+          MAX_OWNER_HANDLERS_ENABLED: ${{ env.MAX_OWNER_HANDLERS_ENABLED }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_SHA" <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" <<'REMOTE'
             set -euo pipefail
             ROOT=/opt/photo-bot
             DEPLOY_SHA="$1"
+            MAX_OWNER_HANDLERS_ENABLED="$2"
             test "$(id -un)" = "photoapp"
             test "$(stat -c '%U:%G' "$ROOT")" = "photoapp:photoapp"
             mkdir -p "$ROOT/data" "$ROOT/logs" "$ROOT/temp"
@@ -231,7 +240,7 @@ jobs:
             else
               set_env MAX_TRANSPORT_MODE disabled
             fi
-            if grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env" && grep -Eq '^MAX_OWNER_USER_IDS=.+$' "$ROOT/.env"; then
+            if [ "$MAX_OWNER_HANDLERS_ENABLED" = true ] && grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env" && grep -Eq '^MAX_OWNER_USER_IDS=.+$' "$ROOT/.env"; then
               set_env MAX_POLL_OBSERVE_ONLY false
             else
               set_env MAX_POLL_OBSERVE_ONLY true

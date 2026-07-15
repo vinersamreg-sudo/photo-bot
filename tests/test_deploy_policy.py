@@ -90,6 +90,10 @@ class DeployPolicyTests(TestCase):
         self.assertIn('printf \'%s\' "$MAX_OWNER_USER_ID" |', self.workflow)
         self.assertIn("MAX_OWNER_USER_IDS=$OWNER_ID", self.workflow)
         self.assertIn("Disable MAX handlers without owner secret", self.workflow)
+        self.assertIn("enable_owner_handlers:", self.workflow)
+        self.assertIn('MAX_OWNER_HANDLERS_ENABLED', self.workflow)
+        self.assertIn('[ "$MAX_OWNER_HANDLERS_ENABLED" = true ]', self.workflow)
+        self.assertIn('"$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED"', self.workflow)
 
     def test_deploy_uses_one_systemd_service_without_background_watchdogs(self) -> None:
         self.assertIn("install -o root -g root -m 644", self.workflow)

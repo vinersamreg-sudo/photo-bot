@@ -2,7 +2,7 @@
 
 ## Текущий owner-only MAX deploy
 
-Если Environment secret `MAX_BOT_TOKEN` существует, workflow передаёт его по stdin в `/opt/photo-bot/.env` и выставляет `MAX_TRANSPORT_MODE=polling`. Handlers включаются (`MAX_POLL_OBSERVE_ONLY=false`) только при наличии отдельного `MAX_OWNER_USER_ID`; он также передаётся по stdin и записывается как `MAX_OWNER_USER_IDS`. Без owner secret deploy очищает allowlist и принудительно включает observe-only. Затем workflow выполняет `max-check`, устанавливает `/etc/systemd/system/photo-bot.service`, включает autostart и ожидает полноценный readiness. Значения secrets не попадают в shell arguments или отчёт.
+Если Environment secret `MAX_BOT_TOKEN` существует, workflow передаёт его по stdin в `/opt/photo-bot/.env` и выставляет `MAX_TRANSPORT_MODE=polling`. Handlers включаются (`MAX_POLL_OBSERVE_ONLY=false`) только для ручного запуска с `enable_owner_handlers=true` и при наличии отдельного `MAX_OWNER_USER_ID`; обычный push и ручной deploy без флага всегда возвращают observe-only. Owner ID передаётся по stdin и записывается как `MAX_OWNER_USER_IDS`. Без owner secret deploy очищает allowlist. Затем workflow выполняет `max-check`, устанавливает `/etc/systemd/system/photo-bot.service`, включает autostart и ожидает полноценный readiness. Значения secrets не попадают в shell arguments или отчёт.
 
 MAX требует доверия цепочке Минцифры для `platform-api2.max.ru`. Репозиторий хранит публичный root из официального `https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt`; приложение указывает его только MAX API client через `MAX_CA_BUNDLE`. Системный trust store не расширяется, TLS verification не отключается, сертификат защищён тестом DER SHA-256.
 
