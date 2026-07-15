@@ -139,6 +139,8 @@ def _polling_health_errors(settings: Settings) -> List[str]:
     errors: List[str] = []
     if not settings.max_bot_token:
         errors.append("MAX configuration missing: MAX_BOT_TOKEN")
+    if not settings.max_poll_observe_only and not settings.max_owner_user_ids:
+        errors.append("MAX configuration missing: MAX_OWNER_USER_IDS")
     try:
         connection = sqlite3.connect(
             f"file:{settings.database_path}?mode=rw", uri=True, timeout=1

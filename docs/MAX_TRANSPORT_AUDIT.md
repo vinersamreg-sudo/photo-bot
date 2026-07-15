@@ -4,7 +4,7 @@
 
 Предыдущая неопределённость снята: реальный бот называется `Pixora обработка фото ИИ`, прошёл модерацию, а его token присутствует в GitHub Environment `production`. Token не читается и не фиксируется в документации. Безопасная команда `python -m app.main max-check` вызывает только `GET /me`, сообщает HTTP status и публичные bot id/username, не начинает polling и ничего не отправляет.
 
-Production polling запускается исключительно через hardened `photo-bot.service` и single-instance advisory lock. На текущем этапе включён transport-only observe mode: входящие batch фиксируются только агрегированным count/event type без user id, текста и media; marker и время последней успешной связи сохраняются, application handler не вызывается. Это гарантирует отсутствие ответов и image requests до отдельного этапа реального `/start`.
+Production polling запускается исключительно через hardened `photo-bot.service` и single-instance advisory lock. Deploy включает application handlers только при наличии отдельного owner secret. Allowlist проверяется до создания диалога: owner получает полный flow, остальные — сообщение о закрытом тестировании без файлов и image requests. Если owner secret отсутствует, deploy принудительно включает transport-only observe mode.
 
 При первом production `max-check` TCP:443 был доступен, но стандартный Python trust store отклонил цепочку `Russian Trusted Sub CA`. Это соответствует предупреждению официальной документации MAX о необходимости сертификата Минцифры для `platform-api2.max.ru`. Исправление ограничено MAX-клиентом: официальный root с `gu-st.ru`, без `verify=false` и без глобальной установки CA.
 
@@ -79,8 +79,8 @@ Python SDK не принимается как обязательная runtime-�
 
 ## Блокеры следующего пользовательского smoke
 
-- требуется owner allowlist и подтверждённый тестовый пользователь;
-- требуется отдельное разрешение на реальный `/start`; текущий observe-only runtime намеренно не отвечает;
+- owner allowlist реализован и передаётся только через GitHub Environment secret;
+- требуется подтвердить реальный MAX user ID владельца и пройти live `/start`/upload/generation/history/repeat/correction E2E;
 - для production Webhook нет выделенного домена, TLS endpoint, `MAX_WEBHOOK_SECRET` и открытого 443;
 - текущий UFW разрешает только SSH;
 - юридические тексты остаются техническим draft.

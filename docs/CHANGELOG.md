@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-15 — owner-only application gate
+
+- добавлен обязательный `MAX_OWNER_USER_IDS` allowlist перед включением handlers;
+- посторонние пользователи получают вежливый ответ о закрытом тестировании без создания диалога и OpenAI-вызова;
+- GitHub deploy получает owner ID только из Environment secret и fail-closed возвращается в observe-only при его отсутствии;
+- добавлены тесты owner/non-owner, callback, missing allowlist и deploy policy.
+
 ## 2026-07-15 — owner-only MAX production polling
 
 - подтверждены прошедший модерацию бот `Pixora обработка фото ИИ` и наличие `MAX_BOT_TOKEN` в GitHub Environment `production`;

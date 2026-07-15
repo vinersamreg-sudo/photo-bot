@@ -19,6 +19,7 @@ jobs:
     env:
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
       MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
+      MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -54,6 +55,7 @@ jobs:
       DEPLOY_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' }}
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
       MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
+      MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
     steps:
       - name: Require Hetzner deployment configuration
         if: env.DEPLOY_CONFIGURED != 'true'
@@ -135,6 +137,39 @@ jobs:
             chmod 600 "$TMP"
             mv "$TMP" "$ROOT/.env"
             unset KEY'
+      - name: Configure MAX owner allowlist
+        if: env.DEPLOY_CONFIGURED == 'true' && env.MAX_OWNER_CONFIGURED == 'true'
+        env:
+          MAX_OWNER_USER_ID: ${{ secrets.MAX_OWNER_USER_ID }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          printf '%s' "$MAX_OWNER_USER_ID" | \
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
+            ROOT=/opt/photo-bot
+            OWNER_ID=$(cat)
+            test -n "$OWNER_ID"
+            TMP="$ROOT/.env.tmp"
+            grep -v "^MAX_OWNER_USER_IDS=" "$ROOT/.env" > "$TMP" || true
+            printf "%s\n" "MAX_OWNER_USER_IDS=$OWNER_ID" >> "$TMP"
+            chmod 600 "$TMP"
+            mv "$TMP" "$ROOT/.env"
+            unset OWNER_ID'
+      - name: Disable MAX handlers without owner secret
+        if: env.DEPLOY_CONFIGURED == 'true' && env.MAX_OWNER_CONFIGURED != 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
+            ROOT=/opt/photo-bot
+            TMP="$ROOT/.env.tmp"
+            grep -v "^MAX_OWNER_USER_IDS=" "$ROOT/.env" > "$TMP" || true
+            printf "%s\n" "MAX_OWNER_USER_IDS=" >> "$TMP"
+            chmod 600 "$TMP"
+            mv "$TMP" "$ROOT/.env"'
       - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -179,6 +214,7 @@ jobs:
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
             ensure_env MAX_BOT_TOKEN ''
+            ensure_env MAX_OWNER_USER_IDS ''
             ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
             ensure_env MAX_CA_BUNDLE ops/certs/russian_trusted_root_ca_pem.crt
             set_env() {
@@ -195,7 +231,11 @@ jobs:
             else
               set_env MAX_TRANSPORT_MODE disabled
             fi
-            set_env MAX_POLL_OBSERVE_ONLY true
+            if grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env" && grep -Eq '^MAX_OWNER_USER_IDS=.+$' "$ROOT/.env"; then
+              set_env MAX_POLL_OBSERVE_ONLY false
+            else
+              set_env MAX_POLL_OBSERVE_ONLY true
+            fi
             set_env MAX_POLL_TIMEOUT_SECONDS 20
             set_env MAX_POLL_RETRY_SECONDS 5
             set_env MAX_POLL_IDLE_SECONDS 1

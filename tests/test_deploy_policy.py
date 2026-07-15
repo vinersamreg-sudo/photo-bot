@@ -77,11 +77,19 @@ class DeployPolicyTests(TestCase):
         self.assertIn('printf \'%s\' "$MAX_BOT_TOKEN" |', self.workflow)
         self.assertIn("set_env MAX_TRANSPORT_MODE polling", self.workflow)
         self.assertIn("set_env MAX_POLL_OBSERVE_ONLY true", self.workflow)
+        self.assertIn("set_env MAX_POLL_OBSERVE_ONLY false", self.workflow)
         self.assertIn("ensure_env MAX_API_BASE_URL https://platform-api2.max.ru", self.workflow)
         self.assertIn("ensure_env MAX_CA_BUNDLE ops/certs/russian_trusted_root_ca_pem.crt", self.workflow)
         self.assertIn("/opt/photo-bot/scripts/stop_bot.sh", self.workflow)
         self.assertIn('if [ "$MODE" = polling ]', self.workflow)
         self.assertIn("python -m app.main max-check", self.workflow)
+
+    def test_owner_allowlist_is_secret_and_fail_closed(self) -> None:
+        self.assertGreaterEqual(self.workflow.count("MAX_OWNER_CONFIGURED:"), 2)
+        self.assertIn("secrets.MAX_OWNER_USER_ID", self.workflow)
+        self.assertIn('printf \'%s\' "$MAX_OWNER_USER_ID" |', self.workflow)
+        self.assertIn("MAX_OWNER_USER_IDS=$OWNER_ID", self.workflow)
+        self.assertIn("Disable MAX handlers without owner secret", self.workflow)
 
     def test_deploy_uses_one_systemd_service_without_background_watchdogs(self) -> None:
         self.assertIn("install -o root -g root -m 644", self.workflow)

@@ -2,7 +2,7 @@
 
 ## Текущий owner-only MAX deploy
 
-Если Environment secret `MAX_BOT_TOKEN` существует, workflow передаёт его по stdin в `/opt/photo-bot/.env`, выставляет `MAX_TRANSPORT_MODE=polling` и обязательный `MAX_POLL_OBSERVE_ONLY=true`, выполняет `max-check`, устанавливает `/etc/systemd/system/photo-bot.service`, включает autostart и ожидает полноценный readiness. Readiness означает active unit, один `photoapp` MainPID с `python -m app.main run`, удерживаемый polling lock и свежий `poll_last_success` в SQLite. Workflow затем доказывает отказ второго runtime и graceful systemd restart. Значения secrets не попадают в shell arguments или отчёт.
+Если Environment secret `MAX_BOT_TOKEN` существует, workflow передаёт его по stdin в `/opt/photo-bot/.env` и выставляет `MAX_TRANSPORT_MODE=polling`. Handlers включаются (`MAX_POLL_OBSERVE_ONLY=false`) только при наличии отдельного `MAX_OWNER_USER_ID`; он также передаётся по stdin и записывается как `MAX_OWNER_USER_IDS`. Без owner secret deploy очищает allowlist и принудительно включает observe-only. Затем workflow выполняет `max-check`, устанавливает `/etc/systemd/system/photo-bot.service`, включает autostart и ожидает полноценный readiness. Значения secrets не попадают в shell arguments или отчёт.
 
 MAX требует доверия цепочке Минцифры для `platform-api2.max.ru`. Репозиторий хранит публичный root из официального `https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt`; приложение указывает его только MAX API client через `MAX_CA_BUNDLE`. Системный trust store не расширяется, TLS verification не отключается, сертификат защищён тестом DER SHA-256.
 
@@ -22,7 +22,7 @@ MAX требует доверия цепочке Минцифры для `platfo
 
 ## Секреты
 
-Инфраструктурные секреты: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`. API secrets: `OPENAI_API_KEY` и подтверждённый `MAX_BOT_TOKEN`; для будущего Webhook потребуется `MAX_WEBHOOK_SECRET`. API secrets передаются deploy через stdin, никогда не являются shell argument и не выводятся.
+Инфраструктурные секреты: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`. Application/API secrets: `OPENAI_API_KEY`, подтверждённый `MAX_BOT_TOKEN` и закрытый `MAX_OWNER_USER_ID`; для будущего Webhook потребуется `MAX_WEBHOOK_SECRET`. Значения передаются deploy через stdin, никогда не являются shell argument и не выводятся.
 
 ## Откат
 

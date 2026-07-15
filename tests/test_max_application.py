@@ -10,7 +10,7 @@ from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
 from app.image_provider import FakeImageProvider
-from app.max_application import MaxApplication, UNLOCK_PLACEHOLDER
+from app.max_application import MaxApplication, OWNER_ONLY_TEXT, UNLOCK_PLACEHOLDER
 from app.max_conversation import MaxConversationStore
 from app.max_transport import MaxIncomingEvent, MaxTransportError
 from app.storage import PrivateStorage
@@ -74,6 +74,7 @@ class MaxApplicationTests(TestCase):
         self.settings = Settings(
             "", "fake-image-edit-v1", "test", self.base,
             demo_min_request_interval_seconds=1,
+            max_owner_user_ids=("u1",),
         )
         self.clock = Clock()
         self.database = Database(self.settings.database_path)
@@ -119,6 +120,27 @@ class MaxApplicationTests(TestCase):
         event = self.event("message_callback", action=action)
         self.app.handle(event)
         return event
+
+    def test_non_owner_gets_closed_testing_message_without_dialog_or_generation(self) -> None:
+        event = MaxIncomingEvent(
+            "message_created", "message:outsider", "outsider", "c2", 1,
+            message_id="outsider-message", text="/start",
+        )
+        self.assertTrue(self.app.handle(event))
+        self.assertEqual(self.transport.messages[-1][0:2], ("outsider", OWNER_ONLY_TEXT))
+        self.assertIsNone(self.store.get("outsider"))
+        self.assertEqual(self.provider.calls, 0)
+        self.assertFalse(self.app.handle(event))
+
+    def test_non_owner_callback_is_acknowledged_and_closed(self) -> None:
+        event = MaxIncomingEvent(
+            "message_callback", "callback:outsider", "outsider", "c2", 1,
+            callback_id="callback-id", callback_payload="custom",
+        )
+        self.assertTrue(self.app.handle(event))
+        self.assertEqual(self.transport.callbacks[-1][0], "callback-id")
+        self.assertEqual(self.transport.messages[-1][0:2], ("outsider", OWNER_ONLY_TEXT))
+        self.assertIsNone(self.store.get("outsider"))
 
     def onboard_to_prompt(self) -> None:
         self.app.handle(self.event("bot_started"))

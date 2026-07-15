@@ -12,6 +12,7 @@ class SettingsTests(TestCase):
                 "OPENAI_IMAGE_MODEL": "test-image-model",
                 "APP_ENV": "test",
                 "BASE_DIR": str(PROJECT_ROOT),
+                "MAX_OWNER_USER_IDS": " owner-1,owner-2,owner-1 ",
             }
         )
 
@@ -33,6 +34,7 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.max_poll_retry_seconds, 5)
         self.assertEqual(settings.max_poll_max_stale_seconds, 90)
         self.assertTrue(settings.max_poll_observe_only)
+        self.assertEqual(settings.max_owner_user_ids, ("owner-1", "owner-2"))
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]

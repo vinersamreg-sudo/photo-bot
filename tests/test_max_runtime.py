@@ -8,6 +8,7 @@ from app.config import Settings
 from app.database import Database
 from app.max_conversation import MaxConversationStore
 from app.max_runtime import run_polling
+from app.max_transport import MaxTransportError
 
 
 class FakePollingClient:
@@ -62,3 +63,20 @@ class MaxRuntimeTests(TestCase):
             with patch("app.max_runtime.MaxApiClient", return_value=fake):
                 self.assertEqual(run_polling(settings, stop_event), 0)
             self.assertEqual(fake.calls, 0)
+
+    def test_handlers_require_owner_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base / name).mkdir()
+            settings = Settings(
+                "", "", "test", base,
+                max_bot_token="test-token", max_transport_mode="polling",
+                max_poll_observe_only=False,
+            )
+            fake = FakePollingClient(threading.Event())
+            with patch("app.max_runtime.MaxApiClient", return_value=fake):
+                with self.assertRaises(MaxTransportError) as raised:
+                    run_polling(settings, threading.Event())
+            self.assertEqual(raised.exception.kind, "configuration_missing")
+            self.assertTrue(fake.closed)

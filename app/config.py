@@ -50,6 +50,7 @@ class Settings:
     max_poll_idle_seconds: int = 1
     max_poll_max_stale_seconds: int = 90
     max_poll_observe_only: bool = True
+    max_owner_user_ids: tuple[str, ...] = ()
     max_media_host_suffixes: tuple[str, ...] = (".max.ru", ".oneme.ru", ".okcdn.ru")
 
     @property
@@ -144,6 +145,13 @@ def load_settings(
     )
     if not media_suffixes:
         raise ValueError("MAX_MEDIA_HOST_SUFFIXES must not be empty")
+    owner_user_ids = tuple(
+        dict.fromkeys(
+            part.strip()
+            for part in values.get("MAX_OWNER_USER_IDS", "").split(",")
+            if part.strip()
+        )
+    )
 
     return Settings(
         openai_api_key=values.get("OPENAI_API_KEY", "").strip(),
@@ -183,5 +191,6 @@ def load_settings(
         max_poll_idle_seconds=_positive_int(values, "MAX_POLL_IDLE_SECONDS", 1),
         max_poll_max_stale_seconds=_positive_int(values, "MAX_POLL_MAX_STALE_SECONDS", 90),
         max_poll_observe_only=_boolean(values, "MAX_POLL_OBSERVE_ONLY", True),
+        max_owner_user_ids=owner_user_ids,
         max_media_host_suffixes=media_suffixes,
     )

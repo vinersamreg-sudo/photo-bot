@@ -2,7 +2,7 @@
 
 Официальный бренд продукта — **Pixora**. Отдельный статический лендинг находится в [`site/`](site/README.md); он не импортирует backend и имеет собственный CI/deploy boundary.
 
-Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. Реальный модерированный MAX-бот подключён к production только для owner-only transport smoke: `MAX_POLL_OBSERVE_ONLY=true` получает marker/health, но не отправляет сообщения и не запускает генерацию. Пользовательский `/start`, webhook и эквайринг ещё не подключены.
+Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. Реальный модерированный MAX-бот поддерживает закрытый owner-only режим: handlers включаются только при непустом `MAX_OWNER_USER_IDS`; остальные получают сообщение о закрытом тестировании без создания сессии и OpenAI-вызова. Без owner secret deploy принудительно сохраняет `MAX_POLL_OBSERVE_ONLY=true`.
 
 ## MAX production smoke
 
@@ -59,7 +59,7 @@ Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `T
 
 ## MAX closed-test transport
 
-Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы `/start`, versioned legal gate, меню, upload, prompt confirmation, processing, watermarked preview, correction/repeat, «Мои работы», favorite и физическое удаление.
+Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы owner allowlist, закрытый ответ для остальных, `/start`, versioned legal gate, меню, upload, prompt confirmation, processing, watermarked preview, correction/repeat, «Мои работы», favorite и физическое удаление.
 
 ```powershell
 python -m app.main max-check

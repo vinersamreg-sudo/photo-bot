@@ -42,6 +42,10 @@ UNLOCK_PLACEHOLDER = (
     "Оплата оригинала пока недоступна. Сейчас идёт закрытое тестирование.\n\n"
     "Ваш результат сохранён в «Моих работах»."
 )
+OWNER_ONLY_TEXT = (
+    "Спасибо за интерес к Pixora! Сейчас сервис находится в закрытом тестировании. "
+    "Мы откроем доступ для новых пользователей после завершения проверки."
+)
 
 
 class LiveMaxTransport(Protocol):
@@ -84,6 +88,14 @@ class MaxApplication:
         if not self.store.begin_event(event.event_key, event.event_type):
             return False
         try:
+            if event.user_id not in self.settings.max_owner_user_ids:
+                if event.callback_id:
+                    self.transport.answer_callback(
+                        event.callback_id, "Сервис находится в закрытом тестировании"
+                    )
+                self.transport.send_message(event.user_id, OWNER_ONLY_TEXT)
+                self.store.finish_event(event.event_key, True)
+                return True
             self._dispatch(event)
         except MaxTransportError:
             self.store.finish_event(event.event_key, False)

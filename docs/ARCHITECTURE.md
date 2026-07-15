@@ -2,9 +2,9 @@
 
 ## Owner-only transport topology
 
-`MAX Long Polling → MaxApiClient → transport-only observer → SQLite poll_marker/poll_last_success`.
+`MAX Long Polling → MaxApiClient → owner gate → MaxApplication → Demo/Gallery`.
 
-В `MAX_POLL_OBSERVE_ONLY=true` runtime намеренно не строит `MaxApplication` и OpenAI image service. Systemd supervises единственный процесс под `photoapp`; advisory lock является второй независимой защитой от двух consumers. Operational health не доверяет одному PID: он проверяет unit state/MainPID/command, SQLite quick-check, свежесть `poll_last_success` и факт занятого lock. Это временная инфраструктурная топология; публичная целевая схема остаётся `MAX Webhook HTTPS:443 → быстрый durable accept → queue/worker`.
+В `MAX_POLL_OBSERVE_ONLY=true` runtime намеренно не строит `MaxApplication` и OpenAI image service. При включённых handlers обязательный `MAX_OWNER_USER_IDS` проверяется до создания диалога: owner проходит приложение, остальные получают только закрытый ответ. Systemd supervises единственный процесс под `photoapp`; advisory lock является второй независимой защитой от двух consumers. Operational health проверяет unit state/MainPID/command, SQLite quick-check, свежесть `poll_last_success` и занятый lock. Это временная инфраструктурная топология; публичная целевая схема остаётся `MAX Webhook HTTPS:443 → быстрый durable accept → queue/worker`.
 
 ## Pixora website boundary
 

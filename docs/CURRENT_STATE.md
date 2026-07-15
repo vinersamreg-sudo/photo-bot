@@ -4,7 +4,7 @@
 
 Бот `Pixora обработка фото ИИ` создан владельцем и прошёл модерацию. `MAX_BOT_TOKEN` хранится в GitHub Environment `production` и доставляется в production `.env` только через stdin. Для текущего инфраструктурного этапа используется Long Polling в режиме `MAX_POLL_OBSERVE_ONLY=true`: соединение и marker живые, но пользовательские handlers, ответы, callback-обработка и OpenAI image generation отключены. Runtime управляется только `photo-bot.service` под `photoapp`; health требует свежую успешную связь с MAX, SQLite, MainPID и single-instance lock.
 
-Реальный пользовательский `/start` не проверялся, сообщения и фотографии не отправлялись. Long Polling остаётся только закрытым smoke-механизмом; до публичного запуска обязателен Webhook HTTPS:443 с быстрой фиксацией события и отдельной фоновой обработкой.
+Owner-only application gate реализован fail-closed: handlers требуют `MAX_OWNER_USER_IDS`, посторонние получают вежливый закрытый ответ без диалога, файлов и генерации. Реальный пользовательский E2E остаётся отдельной production-проверкой; до публичного запуска обязателен Webhook HTTPS:443 с быстрой фиксацией события и отдельной фоновой обработкой.
 
 ## Сайт Pixora
 

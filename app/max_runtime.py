@@ -24,6 +24,11 @@ LOGGER = logging.getLogger(__name__)
 def build_max_application(
     settings: Settings, client: MaxApiClient | None = None
 ) -> tuple[MaxApplication, MaxApiClient, MaxConversationStore]:
+    if not settings.max_owner_user_ids:
+        raise MaxTransportError(
+            "MAX owner allowlist is required when user handlers are enabled",
+            kind="configuration_missing",
+        )
     database = Database(settings.database_path)
     transport = client or MaxApiClient(
         settings.max_bot_token,
@@ -51,6 +56,12 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
     )
     application = None
     if not settings.max_poll_observe_only:
+        if not settings.max_owner_user_ids:
+            client.close()
+            raise MaxTransportError(
+                "MAX owner allowlist is required when observe-only mode is disabled",
+                kind="configuration_missing",
+            )
         application, client, store = build_max_application(settings, client)
     try:
         with SingleInstanceLock(settings.max_poll_lock_path):

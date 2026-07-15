@@ -14,7 +14,7 @@ Hetzner, SSH hardening, UFW/fail2ban, отдельный deploy user, Python 3.1
 
 ## Этап 2 — пользовательский канал (частично)
 
-Реализованы проверенный официальный MAX API contract, thin HTTP transport, SQLite dialog state, legal versions, idempotency, single-instance polling smoke runner и полный fake vertical slice до Gallery/delete. Реальный модерированный бот `Pixora обработка фото ИИ` и Environment token подтверждены; systemd-supervised polling подключён только в transport-only observe mode без сообщений и генераций. Следующий шаг — отдельный owner `/start` smoke с allowlist и проверкой реального payload. До публичного запуска остаётся production Webhook HTTPS:443, durable queue/worker и отказ от Long Polling.
+Реализованы проверенный официальный MAX API contract, thin HTTP transport, SQLite dialog state, legal versions, idempotency, single-instance polling, owner allowlist и полный автоматический fake vertical slice до Gallery/delete. Без owner secret production остаётся в transport-only observe mode. Следующий шаг — записать подтверждённый MAX user ID владельца в Environment secret и пройти live `/start`/upload/generation/history/repeat/correction E2E. До публичного запуска остаются production Webhook HTTPS:443, durable queue/worker и отказ от Long Polling.
 
 ## Этап 3 — операции и монетизация (частично)
 
