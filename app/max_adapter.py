@@ -79,6 +79,20 @@ def scenario_catalog() -> View:
     return View("Выберите готовый сценарий:", buttons)
 
 
+def studio_menu_contract() -> View:
+    """Future navigation contract; no MAX routing is attached yet."""
+    return View(
+        "Ваша личная AI-фотостудия",
+        (
+            Button("📁 Мои работы", "studio:works"),
+            Button("⭐ Избранное", "studio:favorites"),
+            Button("🕒 Последние", "studio:recent"),
+            Button("📂 Коллекции", "studio:collections"),
+            Button("🗑 Корзина", "studio:trash"),
+        ),
+    )
+
+
 def result_actions(remaining: int) -> View:
     if remaining > 0:
         text = (
@@ -166,6 +180,7 @@ class MaxDemoAdapter:
         event_id: str,
         scenario_id: str | None = None,
         correction: bool = False,
+        parent_version_id: str | None = None,
     ) -> DemoGenerationResult:
         self._require_consent(platform_user_id)
         def deliver(preview: Path, _attempt_id: str) -> bool:
@@ -183,6 +198,7 @@ class MaxDemoAdapter:
             scenario_id=scenario_id,
             correction=correction,
             delivery_override=deliver,
+            parent_version_id=parent_version_id,
         )
 
     def delete(self, session_id: str) -> None:

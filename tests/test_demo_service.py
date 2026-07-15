@@ -222,10 +222,29 @@ class DemoServiceTests(TestCase):
         service.confirm_payment(intent)
         service.confirm_payment(intent)
         self.assertTrue(service.original_for_paid_intent(intent).is_file())
+        with service.database.read() as connection:
+            gallery_item_id = connection.execute(
+                "SELECT gallery_item_id FROM demo_sessions WHERE id=?", (session.session_id,)
+            ).fetchone()[0]
+            retention_until = connection.execute(
+                "SELECT retention_until FROM gallery_items WHERE id=?", (gallery_item_id,)
+            ).fetchone()[0]
+        versions = service.gallery.list_versions(session.user_id, gallery_item_id)
+        self.assertTrue(versions[0].original_path.is_file())
+        self.assertGreaterEqual(
+            datetime.fromisoformat(retention_until),
+            self.clock() + timedelta(days=self.settings.paid_retention_days),
+        )
         root = service.storage.session_root(session.user_id, session.session_id)
         self.assertTrue(root.exists())
         service.delete_session(session.session_id)
-        self.assertFalse(root.exists())
+        self.assertTrue(root.exists())
+        with service.database.read() as connection:
+            deleted = connection.execute(
+                "SELECT deleted FROM gallery_items WHERE id=(SELECT gallery_item_id FROM demo_sessions WHERE id=?)",
+                (session.session_id,),
+            ).fetchone()[0]
+        self.assertEqual(deleted, 1)
 
         expired_settings = replace(self.settings, base_dir=self.base / "expired", demo_session_ttl_minutes=1)
         for name in ("data", "logs", "temp"):

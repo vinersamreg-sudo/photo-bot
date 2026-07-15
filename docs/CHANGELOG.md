@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-15 — personal AI studio domain
+
+- добавлены одна Gallery на пользователя, работы, неизменяемые версии и version-specific originals;
+- repeat/correction сохраняют parent/effective prompt и создают новую версию той же работы;
+- добавлены favorites/current best, collections, tags, preferences, search, recent/continue, rating и rename;
+- добавлены soft delete/restore, dry-run cleanup и retention 30 дней для demo / 180 дней для paid;
+- migration v2 backfill связывает существующие demo-данные без перемещения production-файлов;
+- реальные MAX-экраны, slider, интерактивный поиск и экспорт оставлены следующему этапу.
+
 ## 15.07.2026 — guarded demo MVP foundation
 
 - принята механика «сначала фактический watermarked результат, затем оплата конкретного original»;

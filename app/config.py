@@ -38,6 +38,9 @@ class Settings:
     max_prompt_length: int = 1500
     generation_timeout_seconds: int = 300
     unlock_original_price_rub: int = 149
+    demo_retention_days: int = 30
+    paid_retention_days: int = 180
+    trash_retention_days: int = 30
 
     @property
     def data_dir(self) -> Path:
@@ -121,4 +124,7 @@ def load_settings(
         max_prompt_length=_positive_int(values, "MAX_PROMPT_LENGTH", 1500),
         generation_timeout_seconds=_positive_int(values, "GENERATION_TIMEOUT_SECONDS", 300),
         unlock_original_price_rub=_positive_int(values, "UNLOCK_ORIGINAL_PRICE_RUB", 149),
+        demo_retention_days=_positive_int(values, "DEMO_RETENTION_DAYS", 30),
+        paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),
+        trash_retention_days=_positive_int(values, "TRASH_RETENTION_DAYS", 30),
     )

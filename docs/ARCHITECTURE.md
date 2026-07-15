@@ -45,3 +45,13 @@ CI запускает unit-тесты, healthcheck, `pip check` и secret scan. 
 ## Ограничения масштаба
 
 2 GB RAM требуют ограничить размер изображений и число одновременных задач. Redis/Celery, отдельное хранилище и дополнительные узлы вводятся только после измерения очереди, памяти и времени обработки.
+
+## Personal studio domain
+
+`platform user → одна Gallery → gallery_item (source) → gallery_version (preview + version-specific original)`.
+
+`app/gallery.py` отвечает за работы, версии, favorites, current best, collections, tags, preferences, recent, trash и retention. Успешная demo-попытка и её версия Gallery фиксируются в одной транзакции. Repeat использует effective prompt родителя; correction добавляет замечание и сохраняет parent link. Внешний DTO проверяет владельца и скрывает `original_path`, пока конкретная версия не разблокирована.
+
+Migration v2 добавляет `galleries`, `gallery_items`, `gallery_versions`, `collections`, `tags`, `gallery_item_tags`, `user_preferences` и `schema_migrations`. Backfill существующих demo-данных не перемещает файлы. Новые независимые работы используют `data/users/<opaque-user-id>/gallery/<item-id>/{source,versions,metadata}`, а legacy demo layout остаётся читаемым.
+
+Удаление имеет две стадии: soft delete задаёт `deleted_at`/`purge_after`; отдельный `gallery-cleanup` сначала показывает кандидатов, а с `--execute` удаляет приватное дерево и связанные строки. Поиск намеренно использует индексированные фильтры SQLite и `LIKE`; FTS и object storage отложены до измеримого объёма.

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
+from uuid import NAMESPACE_URL, uuid5
 
 
 SCHEMA = """
@@ -95,6 +97,105 @@ CREATE TABLE IF NOT EXISTS legal_consents (
 """
 
 
+GALLERY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS galleries (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(user_id, name)
+);
+CREATE TABLE IF NOT EXISTS gallery_items (
+    id TEXT PRIMARY KEY,
+    gallery_id TEXT NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    scenario_id TEXT,
+    original_source_path TEXT NOT NULL,
+    storage_root_path TEXT NOT NULL,
+    current_best_version_id TEXT,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT,
+    purge_after TEXT,
+    purged_at TEXT,
+    cover_preview_path TEXT,
+    preview_small_path TEXT,
+    preview_large_path TEXT,
+    generation_count INTEGER NOT NULL DEFAULT 0,
+    folder_id TEXT REFERENCES collections(id) ON DELETE SET NULL,
+    last_opened_at TEXT,
+    unlock_status TEXT NOT NULL DEFAULT 'demo',
+    retention_until TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gallery_user_updated ON gallery_items(user_id, deleted, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gallery_search ON gallery_items(user_id, title, scenario_id, folder_id, favorite, deleted);
+CREATE TABLE IF NOT EXISTS gallery_versions (
+    id TEXT PRIMARY KEY,
+    gallery_item_id TEXT NOT NULL REFERENCES gallery_items(id) ON DELETE CASCADE,
+    attempt_id TEXT UNIQUE REFERENCES generation_attempts(id) ON DELETE SET NULL,
+    version_number INTEGER NOT NULL,
+    parent_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
+    source_path TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    correction_prompt TEXT,
+    effective_prompt TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    preview_watermarked_path TEXT,
+    original_path TEXT,
+    created_at TEXT NOT NULL,
+    processing_time_ms INTEGER,
+    estimated_cost REAL,
+    status TEXT NOT NULL,
+    rating INTEGER,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    unlock_status TEXT NOT NULL DEFAULT 'demo',
+    UNIQUE(gallery_item_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_versions_item_number ON gallery_versions(gallery_item_id, version_number DESC);
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, normalized_name)
+);
+CREATE TABLE IF NOT EXISTS gallery_item_tags (
+    gallery_item_id TEXT NOT NULL REFERENCES gallery_items(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY(gallery_item_id, tag_id)
+);
+CREATE TABLE IF NOT EXISTS user_preferences (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    favorite_style TEXT,
+    favorite_background TEXT,
+    favorite_clothing TEXT,
+    favorite_format TEXT,
+    favorite_quality TEXT,
+    favorite_scenarios_json TEXT NOT NULL DEFAULT '[]',
+    recent_scenarios_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL
+);
+"""
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -123,11 +224,31 @@ class Database:
                 ("requested_size", "TEXT"),
                 ("requested_quality", "TEXT"),
                 ("output_format", "TEXT"),
+                ("parent_version_id", "TEXT"),
+                ("correction_prompt", "TEXT"),
+                ("effective_prompt", "TEXT"),
             ):
                 if name not in existing:
                     connection.execute(
                         f"ALTER TABLE generation_attempts ADD COLUMN {name} {declaration}"
                     )
+            session_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(demo_sessions)")
+            }
+            if "gallery_item_id" not in session_columns:
+                connection.execute(
+                    "ALTER TABLE demo_sessions ADD COLUMN gallery_item_id TEXT"
+                )
+            connection.executescript(GALLERY_SCHEMA)
+            migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=2"
+            ).fetchone()
+            if migration is None:
+                self._backfill_gallery(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(2,?,?)",
+                    ("personal_ai_studio_gallery", datetime.now(timezone.utc).isoformat()),
+                )
             connection.execute(
                 """UPDATE generation_attempts
                    SET status='failed_technical', completed_at=datetime('now'),
@@ -138,6 +259,108 @@ class Database:
             )
         finally:
             connection.close()
+
+    @staticmethod
+    def _backfill_gallery(connection: sqlite3.Connection) -> None:
+        sessions = connection.execute(
+            "SELECT * FROM demo_sessions WHERE gallery_item_id IS NULL"
+        ).fetchall()
+        for session in sessions:
+            gallery_id = uuid5(
+                NAMESPACE_URL, f"photo-bot:user-gallery:{session['user_id']}"
+            ).hex
+            connection.execute(
+                """INSERT OR IGNORE INTO galleries(id,user_id,created_at,updated_at)
+                   VALUES(?,?,?,?)""",
+                (gallery_id, session["user_id"], session["created_at"], session["updated_at"]),
+            )
+            item_id = uuid5(NAMESPACE_URL, f"photo-bot:gallery:{session['id']}").hex
+            root = str(Path(session["source_file_path"]).parent.parent)
+            retention = (
+                datetime.fromisoformat(session["started_at"])
+                + timedelta(days=180 if session["converted_to_paid"] else 30)
+            ).isoformat()
+            attempts = connection.execute(
+                """SELECT * FROM generation_attempts
+                   WHERE session_id=? AND status='succeeded'
+                   ORDER BY completed_at, created_at""",
+                (session["id"],),
+            ).fetchall()
+            unlock_status = "unlocked" if any(row["result_unlocked"] for row in attempts) else "demo"
+            connection.execute(
+                """INSERT OR IGNORE INTO gallery_items(
+                       id,gallery_id,user_id,title,created_at,updated_at,scenario_id,original_source_path,
+                       storage_root_path,generation_count,last_opened_at,unlock_status,retention_until
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    item_id,
+                    gallery_id,
+                    session["user_id"],
+                    "Моя работа",
+                    session["created_at"],
+                    session["updated_at"],
+                    attempts[-1]["scenario_id"] if attempts else None,
+                    session["source_file_path"],
+                    root,
+                    len(attempts),
+                    session["updated_at"],
+                    unlock_status,
+                    retention,
+                ),
+            )
+            last_version_id = None
+            for number, attempt in enumerate(attempts, start=1):
+                version_id = uuid5(
+                    NAMESPACE_URL, f"photo-bot:gallery-version:{attempt['id']}"
+                ).hex
+                effective_prompt = attempt["effective_prompt"] or attempt["prompt"]
+                version_unlock = "unlocked" if attempt["result_unlocked"] else "demo"
+                connection.execute(
+                    """INSERT OR IGNORE INTO gallery_versions(
+                           id,gallery_item_id,attempt_id,version_number,parent_version_id,
+                           source_path,prompt,correction_prompt,effective_prompt,provider,model,
+                           preview_watermarked_path,original_path,created_at,processing_time_ms,
+                           estimated_cost,status,unlock_status
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        version_id,
+                        item_id,
+                        attempt["id"],
+                        number,
+                        attempt["parent_version_id"],
+                        attempt["source_path"],
+                        attempt["prompt"],
+                        attempt["correction_prompt"],
+                        effective_prompt,
+                        attempt["provider"],
+                        attempt["model"],
+                        attempt["demo_result_path"],
+                        attempt["original_result_path"],
+                        attempt["completed_at"] or attempt["created_at"],
+                        attempt["duration_ms"],
+                        attempt["estimated_cost"],
+                        attempt["status"],
+                        version_unlock,
+                    ),
+                )
+                last_version_id = version_id
+            if last_version_id:
+                last = attempts[-1]
+                connection.execute(
+                    """UPDATE gallery_items SET current_best_version_id=?,cover_preview_path=?,
+                       preview_small_path=?,preview_large_path=? WHERE id=?""",
+                    (
+                        last_version_id,
+                        last["demo_result_path"],
+                        last["demo_result_path"],
+                        last["demo_result_path"],
+                        item_id,
+                    ),
+                )
+            connection.execute(
+                "UPDATE demo_sessions SET gallery_item_id=? WHERE id=?",
+                (item_id, session["id"]),
+            )
 
     @contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:

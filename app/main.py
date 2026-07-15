@@ -25,6 +25,8 @@ from app.database import Database
 from app.domain import DemoError
 from app.image_service import build_demo_service
 from app.stats import collect_demo_stats
+from app.gallery import GalleryService
+from app.storage import PrivateStorage
 
 
 LOGGER = logging.getLogger(__name__)
@@ -189,11 +191,25 @@ def run_demo_stats(settings: Settings) -> int:
     return 0
 
 
+def run_gallery_cleanup(settings: Settings, execute: bool) -> int:
+    database = Database(settings.database_path)
+    service = GalleryService(
+        database,
+        PrivateStorage(settings.users_dir, settings.max_source_file_size_mb * 1024 * 1024),
+        settings,
+    )
+    due = service.purge_due(execute=execute)
+    print(json.dumps({"mode": "execute" if execute else "dry-run", "count": len(due), "gallery_item_ids": due}))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-bot")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("health", "openai-check", "run", "demo-stats"):
         subparsers.add_parser(command)
+    cleanup = subparsers.add_parser("gallery-cleanup")
+    cleanup.add_argument("--execute", action="store_true")
     demo = subparsers.add_parser("demo-edit")
     demo.add_argument("--user-id", required=True)
     demo.add_argument("--image", required=True)
@@ -216,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_demo_edit(settings, args)
     if args.command == "demo-stats":
         return run_demo_stats(settings)
+    if args.command == "gallery-cleanup":
+        return run_gallery_cleanup(settings, args.execute)
     return run_process(settings)
 
 

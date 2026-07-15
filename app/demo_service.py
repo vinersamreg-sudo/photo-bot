@@ -28,6 +28,7 @@ from app.domain import (
     SourceReplacementError,
 )
 from app.image_provider import ImageProvider
+from app.gallery import GalleryService
 from app.scenarios import get_scenario
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
@@ -64,6 +65,7 @@ class DemoService:
         self.storage = storage
         self.watermarker = watermarker
         self.provider = provider
+        self.gallery = GalleryService(database, storage, settings, clock)
         self.deliver_preview = deliver_preview or (lambda _path, _attempt: True)
         self.clock = clock
         with self._semaphore_guard:
@@ -130,6 +132,9 @@ class DemoService:
                     iso(now),
                 ),
             )
+            self.gallery.create_linked_demo_item(
+                connection, user_id, session_id, stored_source, now
+            )
             connection.execute("UPDATE users SET demo_used=1 WHERE id=?", (user_id,))
             self.storage.write_metadata(
                 user_id,
@@ -158,6 +163,7 @@ class DemoService:
         scenario_id: Optional[str] = None,
         correction: bool = False,
         delivery_override: Optional[DeliverPreview] = None,
+        parent_version_id: Optional[str] = None,
     ) -> DemoGenerationResult:
         clean_prompt = prompt.strip()
         if not clean_prompt or len(clean_prompt) > self.settings.max_prompt_length:
@@ -165,7 +171,7 @@ class DemoService:
         scenario = get_scenario(scenario_id)
         if scenario_id and scenario is None:
             raise InvalidInputError("Unknown or inactive scenario")
-        provider_prompt = (
+        base_provider_prompt = (
             scenario.prompt_template.format(instruction=clean_prompt) if scenario else clean_prompt
         )
         now = self.clock()
@@ -201,6 +207,13 @@ class DemoService:
                 raise DemoExpiredError("Demo session has expired")
             if session["successful_generations"] >= session["max_generations"]:
                 raise DemoLimitError("Demo successful-generation limit is exhausted")
+            provider_prompt, parent_version_id, correction_prompt = self.gallery.compose_prompt(
+                connection,
+                session["gallery_item_id"],
+                base_provider_prompt if not correction else clean_prompt,
+                parent_version_id,
+                correction,
+            )
             user = connection.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
             if user["blocked_until"] and now < datetime.fromisoformat(user["blocked_until"]):
                 raise CooldownError("User is temporarily blocked")
@@ -245,8 +258,9 @@ class DemoService:
                 """INSERT INTO generation_attempts(
                        id,idempotency_key,session_id,user_id,prompt,scenario_id,status,started_at,
                        provider,model,source_path,input_size_bytes,requested_size,
-                       requested_quality,output_format,correction,created_at
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       requested_quality,output_format,correction,parent_version_id,
+                       correction_prompt,effective_prompt,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     attempt_id,
                     idempotency_key,
@@ -264,11 +278,15 @@ class DemoService:
                     getattr(self.provider, "quality", None),
                     getattr(self.provider, "output_format", None),
                     int(correction),
+                    parent_version_id,
+                    correction_prompt,
+                    provider_prompt,
                     iso(now),
                 ),
             )
             user_id = session["user_id"]
             source_path = Path(session["source_file_path"])
+            gallery_item_id = session["gallery_item_id"]
 
         started = time.monotonic()
         original_path = self.storage.original_path(user_id, session_id, attempt_id)
@@ -338,6 +356,7 @@ class DemoService:
                     "UPDATE demo_sessions SET status='completed', completed_at=?, updated_at=? WHERE id=?",
                     (iso(completed), iso(completed), session_id),
                 )
+            self.gallery.record_attempt_version(connection, attempt_id, gallery_item_id)
         self.storage.append_attempt_metadata(
             user_id,
             session_id,
@@ -365,20 +384,16 @@ class DemoService:
             )
 
     def delete_session(self, session_id: str) -> None:
-        with self.database.transaction() as connection:
+        with self.database.read() as connection:
             session = connection.execute(
                 "SELECT * FROM demo_sessions WHERE id=?", (session_id,)
             ).fetchone()
-            if not session:
-                return
-            self.storage.delete_session(session["user_id"], session_id)
+        if not session:
+            return
+        self.gallery.soft_delete(session["user_id"], session["gallery_item_id"])
+        with self.database.transaction() as connection:
             connection.execute(
-                """UPDATE generation_attempts SET source_path='', original_result_path=NULL,
-                   demo_result_path=NULL WHERE session_id=?""",
-                (session_id,),
-            )
-            connection.execute(
-                "UPDATE demo_sessions SET status='deleted', source_file_path='', updated_at=? WHERE id=?",
+                "UPDATE demo_sessions SET status='deleted', updated_at=? WHERE id=?",
                 (iso(self.clock()), session_id),
             )
 
@@ -430,6 +445,21 @@ class DemoService:
                    )""",
                 (now, intent["attempt_id"]),
             )
+            version = connection.execute(
+                "SELECT gallery_item_id FROM gallery_versions WHERE attempt_id=?",
+                (intent["attempt_id"],),
+            ).fetchone()
+            if version:
+                retention = self.clock() + timedelta(days=self.settings.paid_retention_days)
+                connection.execute(
+                    "UPDATE gallery_versions SET unlock_status='unlocked' WHERE attempt_id=?",
+                    (intent["attempt_id"],),
+                )
+                connection.execute(
+                    """UPDATE gallery_items SET unlock_status='unlocked',retention_until=?,updated_at=?
+                       WHERE id=?""",
+                    (iso(retention), now, version["gallery_item_id"]),
+                )
 
     def original_for_paid_intent(self, payment_intent_id: str) -> Path:
         with self.database.read() as connection:

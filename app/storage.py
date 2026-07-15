@@ -71,6 +71,45 @@ class PrivateStorage:
     def session_root(self, user_id: str, session_id: str) -> Path:
         return self.users_dir / user_id / "demo_sessions" / session_id
 
+    def gallery_item_root(self, user_id: str, gallery_item_id: str) -> Path:
+        return self.users_dir / user_id / "gallery" / gallery_item_id
+
+    def create_gallery_item_source(
+        self, user_id: str, gallery_item_id: str, source: Path
+    ) -> tuple[Path, str, int]:
+        digest, extension, size = self.validate_source(source)
+        root = self.gallery_item_root(user_id, gallery_item_id)
+        for directory in (
+            self.users_dir / user_id,
+            self.users_dir / user_id / "gallery",
+            root,
+            root / "source",
+            root / "versions",
+            root / "metadata",
+        ):
+            self._secure_directory(directory)
+        destination = root / "source" / f"source{extension}"
+        shutil.copyfile(source, destination)
+        try:
+            destination.chmod(0o600)
+        except OSError:
+            pass
+        return destination, digest, size
+
+    def gallery_version_paths(
+        self, user_id: str, gallery_item_id: str, version_id: str
+    ) -> dict[str, Path]:
+        root = self.gallery_item_root(user_id, gallery_item_id) / "versions" / version_id
+        for directory in (root, root / "original", root / "preview"):
+            self._secure_directory(directory)
+        return {
+            "root": root,
+            "original": root / "original" / "result.png",
+            "preview_small": root / "preview" / "small.jpg",
+            "preview_large": root / "preview" / "large.jpg",
+            "metadata": root / "metadata.json",
+        }
+
     def original_path(self, user_id: str, session_id: str, attempt_id: str, extension: str = ".png") -> Path:
         return self.session_root(user_id, session_id) / "originals" / f"{attempt_id}{extension}"
 
@@ -112,3 +151,11 @@ class PrivateStorage:
             raise RuntimeError("Refusing to delete outside private users storage")
         if root.exists():
             shutil.rmtree(root)
+
+    def delete_private_tree(self, root: Path) -> None:
+        resolved = root.resolve()
+        allowed = self.users_dir.resolve()
+        if allowed not in resolved.parents:
+            raise RuntimeError("Refusing to delete outside private users storage")
+        if resolved.exists():
+            shutil.rmtree(resolved)

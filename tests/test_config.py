@@ -22,6 +22,9 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.demo_max_successful_generations, 5)
         self.assertEqual(settings.demo_watermark_text, "ОБРАЗЕЦ")
         self.assertEqual(settings.global_max_concurrent_generations, 2)
+        self.assertEqual(settings.demo_retention_days, 30)
+        self.assertEqual(settings.paid_retention_days, 180)
+        self.assertEqual(settings.trash_retention_days, 30)
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]

@@ -49,3 +49,11 @@
 ## Проверенное окружение
 
 Сервер отвечает из Германии, имеет доступ к `api.openai.com` по HTTPS, а запрос без ключа возвращает ожидаемый `401`. Публично слушает только SSH, failed systemd units отсутствуют, свободно около 35 GB. После системных обновлений выполнена контролируемая перезагрузка; key-based root access и состояние systemd повторно проверены.
+
+## Personal studio — состояние 15.07.2026
+
+Реализованы одна Gallery на пользователя, работы и версия-специфичные originals; автоматическая запись успешных demo-результатов и совместимый backfill migration v2; repeat/correction с parent/effective prompt; favorites/current best, rating, rename, collections, tags и явные preferences; поиск по title/scenario/tag/date/folder/favorite; recent/continue; soft delete/restore и `gallery-cleanup` с dry-run. Retention настраивается отдельно для demo (30 дней), paid (180 дней) и корзины.
+
+Gallery API проверяет владельца и не раскрывает original заблокированной версии. MAX adapter содержит только контракт меню «Мои работы / Избранное / Последние / Коллекции / Корзина».
+
+Не реализованы реальные экраны и маршрутизация Gallery в MAX, before/after slider, интерактивный поиск, экспорт и scheduler cleanup. Поиск пока основан на SQLite `LIKE`, хранение — на приватном filesystem; backfill сохраняет legacy demo paths.

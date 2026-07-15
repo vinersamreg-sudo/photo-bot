@@ -1,6 +1,6 @@
 # photo-bot
 
-Отдельный коммерческий ИИ-фоторедактор. `photo-bot` — техническое имя; публичный бренд пока не утверждён. Реализованы защищённая бесплатная demo-сессия, SQLite, image-edit gateway, watermark, приватное файловое хранение, CLI vertical slice, telemetry и транспорт-независимый MAX adapter. Реальный MAX transport и эквайринг ещё не подключены.
+Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя; публичный бренд пока не утверждён. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. Реальный MAX transport и эквайринг ещё не подключены.
 
 ## Быстрый старт
 
@@ -30,6 +30,19 @@ python -m app.main demo-stats
 Без `--provider fake` команда использует настроенный OpenAI `images.edit`. Она выводит только путь к уменьшенному watermarked preview. Оригинал хранится отдельно в `data/users/<opaque-id>/demo_sessions/<session-id>/originals` и не входит в пользовательский ответ.
 
 Одна demo-сессия закрепляется за одной исходной фотографией и допускает до `DEMO_MAX_SUCCESSFUL_GENERATIONS` успешно доставленных preview. Технические и policy-ошибки, а также ошибка доставки лимит не расходуют.
+
+## Personal studio API
+
+Каждая успешная попытка автоматически становится новой версией одной работы Gallery. `app/gallery.py` предоставляет операции для repeat/correction, before/after metadata, favorites/current best, collections, tags, preferences, search, recent/continue, trash и restore. Заблокированный original никогда не возвращается пользовательским DTO.
+
+Новые работы используют `data/users/<opaque-user-id>/gallery/<item-id>`. Существующие demo-файлы не перемещаются: migration v2 создаёт ссылки на них и сохраняет обратную совместимость.
+
+```powershell
+python -m app.main gallery-cleanup           # dry-run
+python -m app.main gallery-cleanup --execute # физическая очистка
+```
+
+Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `TRASH_RETENTION_DAYS=30`. Реальные MAX-экраны Gallery, before/after slider, интерактивный поиск и экспорт пока не реализованы.
 
 ## Production
 

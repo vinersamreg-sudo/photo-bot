@@ -9,7 +9,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.database import Database
-from app.main import run_demo_edit, run_demo_stats
+from app.main import run_demo_edit, run_demo_stats, run_gallery_cleanup
 
 
 class Args:
@@ -54,3 +54,9 @@ class DemoCliTests(TestCase):
                 ).fetchone()
             self.assertNotEqual(row[0], row[1])
             self.assertTrue(Path(row[0]).is_file())
+
+            cleanup_output = io.StringIO()
+            with redirect_stdout(cleanup_output):
+                self.assertEqual(run_gallery_cleanup(settings, execute=False), 0)
+            cleanup = json.loads(cleanup_output.getvalue())
+            self.assertEqual(cleanup, {"mode": "dry-run", "count": 0, "gallery_item_ids": []})

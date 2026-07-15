@@ -23,3 +23,9 @@ SQLite, идемпотентность, technical non-debit, cost telemetry, cor
 ## Этап 5 — масштабирование по данным
 
 Оптимизировать конкурентность и ресурсы. Очередь, Redis, worker-процессы, объектное хранилище или новый сервер рассматриваются только после подтверждения bottleneck метриками.
+
+## Этап 3.5 — личная AI-фотостудия (домен готов)
+
+Реализованы Gallery, работы, версии, version-specific originals, favorites/current best, collections, tags, preferences, search, recent/continue, trash, retention cleanup и совместимый backfill. Следующий шаг — подключить эти операции к подтверждённому live MAX transport и платёжному UX, затем реализовать простые экраны Gallery.
+
+Before/after slider, экспорт и расширенный визуальный поиск не входят в текущий этап. SQLite FTS, object storage и отдельные workers откладываются до подтверждения необходимости метриками. До beta также нужны расписание cleanup и backup/restore drill.

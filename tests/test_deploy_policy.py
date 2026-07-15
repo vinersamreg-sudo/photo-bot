@@ -54,6 +54,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn("APP_ENV=production", self.workflow)
         self.assertIn("ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5", self.workflow)
         self.assertIn("ensure_env GLOBAL_MAX_CONCURRENT_GENERATIONS 2", self.workflow)
+        self.assertIn("ensure_env DEMO_RETENTION_DAYS 30", self.workflow)
+        self.assertIn("ensure_env PAID_RETENTION_DAYS 180", self.workflow)
+        self.assertIn("ensure_env TRASH_RETENTION_DAYS 30", self.workflow)
 
     def test_transfers_openai_key_via_stdin_and_checks_authorization(self) -> None:
         self.assertIn("Validate OpenAI credential from GitHub runner", self.workflow)

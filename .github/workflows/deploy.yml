@@ -147,6 +147,9 @@ jobs:
             ensure_env MAX_PROMPT_LENGTH 1500
             ensure_env GENERATION_TIMEOUT_SECONDS 300
             ensure_env UNLOCK_ORIGINAL_PRICE_RUB 149
+            ensure_env DEMO_RETENTION_DAYS 30
+            ensure_env PAID_RETENTION_DAYS 180
+            ensure_env TRASH_RETENTION_DAYS 30
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt

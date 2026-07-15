@@ -8,7 +8,7 @@ from app.config import Settings
 from app.database import Database
 from app.domain import InvalidInputError
 from app.image_service import build_demo_service
-from app.max_adapter import MaxDemoAdapter, WELCOME_TEXT, legal_view, main_menu, result_actions, scenario_catalog
+from app.max_adapter import MaxDemoAdapter, WELCOME_TEXT, legal_view, main_menu, result_actions, scenario_catalog, studio_menu_contract
 from app.scenarios import SCENARIO_CATEGORIES
 
 
@@ -30,6 +30,10 @@ class MaxAdapterTests(TestCase):
         self.assertGreaterEqual(len(scenario_catalog().buttons), 9)
         self.assertEqual(len(SCENARIO_CATEGORIES), 12)
         self.assertEqual(len(legal_view().buttons), 4)
+        self.assertEqual(
+            [button.text for button in studio_menu_contract().buttons],
+            ["📁 Мои работы", "⭐ Избранное", "🕒 Последние", "📂 Коллекции", "🗑 Корзина"],
+        )
         self.assertIn("одной исходной фотографии", WELCOME_TEXT)
         self.assertIn("Бесплатных правок осталось: 4", result_actions(4).text)
         self.assertIn("демонстрация завершена", result_actions(0).text)
@@ -71,4 +75,4 @@ class MaxAdapterTests(TestCase):
             self.assertTrue(intent)
             root = service.storage.session_root(session.user_id, session.session_id)
             adapter.delete(session.session_id)
-            self.assertFalse(root.exists())
+            self.assertTrue(root.exists())
