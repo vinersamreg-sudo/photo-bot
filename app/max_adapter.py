@@ -7,15 +7,16 @@ from pathlib import Path
 from typing import Protocol, Sequence
 
 from app.database import Database
-from app.demo_service import DemoService, iso, utc_now
+from app.demo_service import DeliverPreview, DemoService, iso, utc_now
 from app.domain import DemoGenerationResult, DemoSessionInfo, InvalidInputError
 from app.scenarios import SCENARIOS
 
 
 WELCOME_TEXT = (
-    "Попробуйте бесплатно.\n\n"
+    "ИИ-редактор фото\n\n"
+    "Попробуйте обработку бесплатно.\n\n"
     "Загрузите одну фотографию и получите до пяти вариантов с водяным знаком «ОБРАЗЕЦ».\n\n"
-    "Если результат понравится — сможете получить оригинал без водяного знака.\n\n"
+    "Если результат понравится, позже сможете получить оригинал без водяного знака.\n\n"
     "Бесплатная демонстрация действует для одной исходной фотографии."
 )
 
@@ -53,7 +54,8 @@ def main_menu() -> View:
             Button("🕰 Восстановить старое фото", "scenario:restore"),
             Button("✨ Улучшить качество", "scenario:enhance"),
             Button("📸 Готовые фотосессии", "catalog:photoshoot"),
-            Button("➕ Ещё сценарии", "catalog:all"),
+            Button("📁 Мои работы", "studio:works"),
+            Button("ℹ️ Правила и приватность", "legal:show"),
         ),
     )
 
@@ -64,8 +66,7 @@ def legal_view() -> View:
         (
             Button("📄 Оферта", "legal:offer"),
             Button("🔐 Обработка данных", "legal:privacy"),
-            Button("☑️ Принимаю оферту", "consent:offer"),
-            Button("☑️ Даю согласие на обработку данных", "consent:personal-data"),
+            Button("☑️ Принимаю обязательные документы", "legal:accept_all"),
         ),
     )
 
@@ -108,12 +109,55 @@ def result_actions(remaining: int) -> View:
     return View(
         text,
         (
-            Button("✅ Получить оригинал без водяного знака", "unlock"),
-            Button("✏️ Исправить результат", "correct"),
-            Button("🔄 Сделать другой вариант", "repeat"),
-            Button("🗑 Удалить фото", "delete"),
+            Button("✅ Получить оригинал", "result:unlock"),
+            Button("✏️ Исправить", "result:correct"),
+            Button("🔄 Другой вариант", "result:repeat"),
+            Button("⭐ В избранное", "result:favorite"),
+            Button("📁 Мои работы", "studio:works"),
+            Button("🗑 Удалить", "result:delete"),
             Button("🏠 Главное меню", "menu"),
         ),
+    )
+
+
+def confirmation_view(prompt: str, remaining: int) -> View:
+    safe_prompt = " ".join(prompt.split())[:500]
+    return View(
+        "Я понял задачу так:\n\n"
+        f"{safe_prompt}\n\n"
+        "Будет использована ваша текущая фотография.\n"
+        "Результат придёт с водяным знаком «ОБРАЗЕЦ».\n"
+        f"Бесплатных вариантов доступно: {remaining}.\n\n"
+        "Начать обработку?",
+        (
+            Button("✅ Начать", "prompt:start"),
+            Button("✏️ Изменить описание", "prompt:edit"),
+            Button("🗑 Отменить", "prompt:cancel"),
+        ),
+    )
+
+
+def delete_confirmation_view() -> View:
+    return View(
+        "Удалить эту работу и все её версии? Исходник, preview и originals будут удалены без восстановления.",
+        (
+            Button("🗑 Да, удалить", "delete:confirm"),
+            Button("↩️ Не удалять", "delete:cancel"),
+        ),
+    )
+
+
+def gallery_item_actions() -> tuple[Button, ...]:
+    return (
+        Button("⬅️ Предыдущая", "work:previous"),
+        Button("➡️ Следующая", "work:next"),
+        Button("🏆 Сделать главной", "work:main"),
+        Button("✏️ Исправить", "result:correct"),
+        Button("🔄 Другой вариант", "result:repeat"),
+        Button("⭐ В избранное", "result:favorite"),
+        Button("🗑 Удалить", "result:delete"),
+        Button("📁 К списку работ", "studio:works"),
+        Button("🏠 Главное меню", "menu"),
     )
 
 
@@ -181,6 +225,7 @@ class MaxDemoAdapter:
         scenario_id: str | None = None,
         correction: bool = False,
         parent_version_id: str | None = None,
+        delivery_override: DeliverPreview | None = None,
     ) -> DemoGenerationResult:
         self._require_consent(platform_user_id)
         def deliver(preview: Path, _attempt_id: str) -> bool:
@@ -197,7 +242,7 @@ class MaxDemoAdapter:
             event_id,
             scenario_id=scenario_id,
             correction=correction,
-            delivery_override=deliver,
+            delivery_override=delivery_override or deliver,
             parent_version_id=parent_version_id,
         )
 

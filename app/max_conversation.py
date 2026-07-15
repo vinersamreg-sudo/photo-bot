@@ -22,7 +22,7 @@ def _iso(value: datetime) -> str:
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "new_user": {"legal_required"},
     "legal_required": {"main_menu"},
-    "main_menu": {"waiting_for_source", "gallery", "legal_required"},
+    "main_menu": {"waiting_for_source", "waiting_for_prompt", "gallery", "legal_required"},
     "waiting_for_source": {"waiting_for_prompt", "main_menu", "deleted"},
     "waiting_for_prompt": {"confirmation", "main_menu", "deleted"},
     "confirmation": {"processing", "waiting_for_prompt", "main_menu", "deleted"},
@@ -50,6 +50,7 @@ class MaxDialog:
     selected_scenario_id: Optional[str]
     session_id: Optional[str]
     pending_prompt: Optional[str]
+    pending_action: Optional[str]
     current_gallery_item_id: Optional[str]
     current_version_id: Optional[str]
     gallery_cursor: int
@@ -68,6 +69,7 @@ class MaxConversationStore:
         return MaxDialog(
             row["platform_user_id"], row["chat_id"], row["user_id"], row["state"],
             row["selected_scenario_id"], row["session_id"], row["pending_prompt"],
+            row["pending_action"],
             row["current_gallery_item_id"], row["current_version_id"],
             row["gallery_cursor"], row["status_message_id"],
         )
@@ -111,6 +113,7 @@ class MaxConversationStore:
             raise InvalidInputError("Unknown MAX dialog state")
         allowed_fields = {
             "chat_id", "user_id", "selected_scenario_id", "session_id", "pending_prompt",
+            "pending_action",
             "current_gallery_item_id", "current_version_id", "gallery_cursor",
             "status_message_id",
         }

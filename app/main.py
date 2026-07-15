@@ -63,7 +63,9 @@ def configure_logging(settings: Settings) -> None:
     if settings.logs_dir.is_dir():
         handlers.append(logging.FileHandler(settings.log_file, encoding="utf-8"))
 
-    redaction_filter = SecretRedactionFilter([settings.openai_api_key])
+    redaction_filter = SecretRedactionFilter(
+        [settings.openai_api_key, settings.max_bot_token]
+    )
     for handler in handlers:
         handler.addFilter(redaction_filter)
 
@@ -134,7 +136,7 @@ def run_openai_check(settings: Settings) -> int:
 
 
 def run_process(settings: Settings) -> int:
-    """Run an idle, signal-aware process until real bot integration is added."""
+    """Run the configured MAX handler; disabled mode intentionally exits."""
 
     stop_event = threading.Event()
 
@@ -144,9 +146,38 @@ def run_process(settings: Settings) -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    LOGGER.info("photo-bot process skeleton started (pid=%s)", os.getpid())
-    while not stop_event.wait(timeout=30):
-        LOGGER.debug("photo-bot process skeleton is alive")
+    if settings.max_transport_mode == "disabled":
+        LOGGER.error(
+            "MAX transport is disabled; refusing to keep an idle production process"
+        )
+        return 2
+    if settings.max_transport_mode == "webhook":
+        LOGGER.error(
+            "Webhook runtime requires the pending HTTPS:443 endpoint configuration"
+        )
+        return 2
+    from app.max_runtime import run_polling
+    LOGGER.info("photo-bot MAX polling process starting (pid=%s)", os.getpid())
+    return run_polling(settings, stop_event)
+
+
+def run_max_check(settings: Settings) -> int:
+    from app.max_transport import MaxApiClient, MaxTransportError
+    try:
+        client = MaxApiClient(
+            settings.max_bot_token,
+            settings.max_api_base_url,
+            timeout_seconds=30,
+            media_host_suffixes=settings.max_media_host_suffixes,
+        )
+        try:
+            bot = client.get_me()
+        finally:
+            client.close()
+    except MaxTransportError as exc:
+        LOGGER.error("%s", exc)
+        return 1
+    LOGGER.info("MAX bot authorization check passed (bot_id_present=%s)", bool(bot.get("user_id")))
     return 0
 
 
@@ -206,7 +237,7 @@ def run_gallery_cleanup(settings: Settings, execute: bool) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-bot")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("health", "openai-check", "run", "demo-stats"):
+    for command in ("health", "openai-check", "max-check", "run", "demo-stats"):
         subparsers.add_parser(command)
     cleanup = subparsers.add_parser("gallery-cleanup")
     cleanup.add_argument("--execute", action="store_true")
@@ -228,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_health(settings)
     if args.command == "openai-check":
         return run_openai_check(settings)
+    if args.command == "max-check":
+        return run_max_check(settings)
     if args.command == "demo-edit":
         return run_demo_edit(settings, args)
     if args.command == "demo-stats":

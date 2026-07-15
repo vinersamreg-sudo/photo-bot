@@ -25,11 +25,11 @@ class MaxAdapterTests(TestCase):
     def test_menu_order_catalog_and_required_copy(self) -> None:
         menu = main_menu()
         self.assertEqual(menu.buttons[0].text, "💬 Своя идея")
-        self.assertEqual(len(menu.buttons), 8)
+        self.assertEqual(len(menu.buttons), 9)
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
         self.assertGreaterEqual(len(scenario_catalog().buttons), 9)
         self.assertEqual(len(SCENARIO_CATEGORIES), 12)
-        self.assertEqual(len(legal_view().buttons), 4)
+        self.assertEqual(len(legal_view().buttons), 3)
         self.assertEqual(
             [button.text for button in studio_menu_contract().buttons],
             ["📁 Мои работы", "⭐ Избранное", "🕒 Последние", "📂 Коллекции", "🗑 Корзина"],

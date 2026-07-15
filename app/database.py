@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS max_dialogs (
     selected_scenario_id TEXT,
     session_id TEXT REFERENCES demo_sessions(id) ON DELETE SET NULL,
     pending_prompt TEXT,
+    pending_action TEXT,
     current_gallery_item_id TEXT REFERENCES gallery_items(id) ON DELETE SET NULL,
     current_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
     gallery_cursor INTEGER NOT NULL DEFAULT 0,
@@ -316,6 +317,11 @@ class Database:
                     ("personal_ai_studio_gallery", datetime.now(timezone.utc).isoformat()),
                 )
             connection.executescript(MAX_SCHEMA)
+            dialog_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(max_dialogs)")
+            }
+            if "pending_action" not in dialog_columns:
+                connection.execute("ALTER TABLE max_dialogs ADD COLUMN pending_action TEXT")
             max_migration = connection.execute(
                 "SELECT 1 FROM schema_migrations WHERE version=3"
             ).fetchone()
