@@ -371,10 +371,39 @@ jobs:
                   "SELECT state,COUNT(*) AS total FROM max_dialogs GROUP BY state ORDER BY state"
               ):
                   print(f"dialog_state={row['state']} count={row['total']}")
+              for row in connection.execute(
+                  "SELECT status,error_type,technical_refund FROM generation_attempts ORDER BY created_at DESC LIMIT 5"
+              ):
+                  print(
+                      f"attempt_status={row['status']} error_type={row['error_type'] or 'none'} "
+                      f"technical_refund={row['technical_refund']}"
+                  )
+              for row in connection.execute(
+                  "SELECT status,successful_generations,max_generations FROM demo_sessions ORDER BY created_at DESC LIMIT 5"
+              ):
+                  print(
+                      f"session_status={row['status']} successful={row['successful_generations']} "
+                      f"maximum={row['max_generations']}"
+                  )
               state = connection.execute(
                   "SELECT updated_at FROM max_transport_state WHERE name='poll_last_success'"
               ).fetchone()
               print(f"poll_last_success={state['updated_at'] if state else 'missing'}")
+          PY
+            venv/bin/python - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path("logs/app.log")
+          if path.is_file():
+              text = path.read_text(encoding="utf-8")
+              for name in ("callback_id", "apiToken", "photoIds", "user_id"):
+                  text = re.sub(
+                      rf"({name}=)[^&\s\"]+",
+                      rf"\1[REDACTED]",
+                      text,
+                  )
+              path.write_text(text, encoding="utf-8")
           PY
             tail -n 120 logs/app.log | sed -E \
               -e 's/sk-[A-Za-z0-9_-]+/[REDACTED]/g' \
