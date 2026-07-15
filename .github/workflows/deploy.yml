@@ -189,7 +189,7 @@ jobs:
             set -euo pipefail
             ROOT=/opt/photo-bot
             DEPLOY_SHA="$1"
-            MAX_OWNER_HANDLERS_ENABLED="$2"
+            MAX_OWNER_HANDLERS_ENABLED="${2:-false}"
             test "$(id -un)" = "photoapp"
             test "$(stat -c '%U:%G' "$ROOT")" = "photoapp:photoapp"
             mkdir -p "$ROOT/data" "$ROOT/logs" "$ROOT/temp"
