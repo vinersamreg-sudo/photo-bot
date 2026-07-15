@@ -1,5 +1,9 @@
 # Architecture
 
+## Pixora website boundary
+
+Статический сайт Pixora изолирован в `site/public`. Он не импортирует Python backend, не имеет server-side runtime и разворачивается отдельным opt-in workflow в `/opt/pixora-site`; Nginx root не пересекается с `/opt/photo-bot`. Structural/HTTP/Lighthouse проверки сайта находятся в `site/tests`, `site/scripts` и `.github/workflows/site.yml`.
+
 ## Текущая схема
 
 `GitHub main → GitHub Actions → SSH/rsync → /opt/photo-bot → Python 3.12 venv → OpenAI API`.

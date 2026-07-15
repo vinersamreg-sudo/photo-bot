@@ -18,3 +18,6 @@ temp/*
 .idea/
 .vscode/
 .DS_Store
+site/node_modules/
+site/.lighthouse/
+site/.preview-server.pid

@@ -7,7 +7,7 @@
 3. Просмотреть diff и убедиться, что TripDay и секреты не затронуты.
 4. Commit и push в `main` запускают workflow `Test and deploy`.
 5. Job `test` использует Python 3.12. Job `deploy` работает только после него и через Environment `production`.
-6. Перед rsync безопасно останавливается только PID `photo-bot`; rsync обновляет `/opt/photo-bot`, сохраняя `.env`, `venv`, `data`, `logs`, `temp`.
+6. Перед rsync безопасно останавливается только PID `photo-bot`; rsync обновляет `/opt/photo-bot`, сохраняя `.env`, `venv`, `data`, `logs`, `temp` и исключая отдельный `site/`.
 7. На сервере устанавливаются зависимости, применяются идемпотентные SQLite migrations, повторяются тесты и healthcheck, фиксируется SHA, а при наличии `OPENAI_API_KEY` проверяются авторизация и модель. Runtime запускается только при `MAX_TRANSPORT_MODE=polling` и непустом token; disabled mode не оставляет idle-процесс.
 
 Ручной повтор: GitHub Actions → `Test and deploy` → `Run workflow`.

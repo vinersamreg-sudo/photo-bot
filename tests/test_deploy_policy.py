@@ -18,6 +18,7 @@ class DeployPolicyTests(TestCase):
     def test_preserves_runtime_state(self) -> None:
         for protected_path in (".env", "venv/", "data/", "logs/", "temp/"):
             self.assertIn(f"--exclude='{protected_path}'", self.workflow)
+        self.assertIn("--exclude='site/'", self.workflow)
 
     def test_uses_scoped_safe_operations(self) -> None:
         self.assertNotIn("sudo", self.workflow)

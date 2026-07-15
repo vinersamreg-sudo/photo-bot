@@ -1,0 +1,92 @@
+name: Pixora site CI and deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixora-site-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Run structural and HTTP smoke tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s site/tests -v
+          $server = Start-Process python -ArgumentList '-m','http.server','4173','--bind','127.0.0.1','--directory','site/public' -PassThru
+          try {
+            Start-Sleep -Seconds 1
+            ./site/scripts/smoke.ps1
+          } finally {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+          }
+      - name: Enforce Lighthouse budgets
+        working-directory: site
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          python -m http.server 4173 --bind 127.0.0.1 --directory public &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID' EXIT
+          sleep 1
+          mkdir -p .lighthouse
+          npm run lighthouse
+          python scripts/assert_lighthouse.py .lighthouse/report.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pixora-site-${{ github.sha }}
+          path: site/public
+          if-no-files-found: error
+
+  deploy:
+    needs: test
+    if: vars.PIXORA_SITE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_HOST" && test -n "$SSH_PORT"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Deploy immutable release
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          RELEASE="/opt/pixora-site/releases/$GITHUB_SHA"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$RELEASE'"
+          rsync -az --delete -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$RELEASE/"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
+            test -f '$RELEASE/index.html'
+            test -f '$RELEASE/styles.css'
+            ln -sfn '$RELEASE' /opt/pixora-site/current.tmp
+            mv -Tf /opt/pixora-site/current.tmp /opt/pixora-site/current
+            printf '%s\n' '$GITHUB_SHA' > /opt/pixora-site/deployed_commit.txt"

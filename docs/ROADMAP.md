@@ -1,5 +1,9 @@
 # Roadmap
 
+## Сайт Pixora — код готов, публикация ожидает инфраструктуру
+
+Статический лендинг, SEO, legal placeholders, CI, Lighthouse и atomic release workflow готовы. До публикации нужны DNS/TLS/Nginx ownership, реальный MAX deep link, подтверждённая почта и юридически утверждённые документы. Следующее развитие перечислено в `site/docs/FUTURE_ROADMAP.md`.
+
 ## Этап 0 — production-фундамент
 
 Hetzner, SSH hardening, UFW/fail2ban, отдельный deploy user, Python 3.12, CI/CD, healthcheck, secret scan и документация выполнены. Новый production OpenAI-ключ настроен; встроенный `openai-check` получил HTTP 200 и подтвердил доступность `gpt-image-2`.
@@ -18,7 +22,7 @@ SQLite, идемпотентность, technical non-debit, cost telemetry, cor
 
 ## Этап 4 — закрытая beta
 
-Базовые лимиты, delete, storage layout и cost/error telemetry реализованы. Остались retention cleanup, backup/restore SQLite, support, p95/quality dashboard, alerts, нагрузочная проверка, юридическая экспертиза и утверждение публичного бренда.
+Базовые лимиты, delete, storage layout и cost/error telemetry реализованы. Остались retention cleanup, backup/restore SQLite, support, p95/quality dashboard, alerts, нагрузочная проверка и юридическая экспертиза.
 
 ## Этап 5 — масштабирование по данным
 

@@ -1,0 +1,11 @@
+{
+  "name": "pixora-site-quality",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "lighthouse": "lighthouse http://127.0.0.1:4173/ --quiet --chrome-flags=\"--headless --no-sandbox\" --only-categories=performance,accessibility,best-practices,seo --output=json --output-path=.lighthouse/report.json"
+  },
+  "devDependencies": {
+    "lighthouse": "12.6.1"
+  }
+}

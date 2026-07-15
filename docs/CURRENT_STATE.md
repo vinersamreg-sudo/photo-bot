@@ -1,5 +1,9 @@
 # Current State
 
+## Сайт Pixora
+
+В `site/` реализован отдельный responsive static landing: продуктовый Hero, сценарии, собственные синтетические «До/После», преимущества, четыре шага, FAQ, SEO metadata/schema, draft legal pages и MAX placeholder CTA. Site CI проверяет структуру, HTTP smoke и Lighthouse budgets ≥95. Production deploy подготовлен, но выключен до DNS/TLS/Nginx и подтверждённого MAX deep link.
+
 Состояние на 15.07.2026.
 
 ## Реализовано

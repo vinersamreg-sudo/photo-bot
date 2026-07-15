@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-15 — Pixora AI product landing
+
+- добавлен изолированный static landing `pixoraai.ru` без изменений backend runtime;
+- реализованы responsive Hero, сценарии, собственные synthetic before/after, benefits, steps, FAQ, legal placeholders и MAX CTA;
+- добавлены SEO/schema/robots/sitemap, WebP responsive assets и accessible reduced-motion интерфейс;
+- добавлены structural tests, HTTP smoke, Lighthouse budget ≥95 и отдельный opt-in atomic Hetzner deploy;
+- подготовлены Hero-варианты, brand/color guidance, provenance изображений и roadmap сайта.
+
 ## 2026-07-15 — MAX transport and fake end-to-end slice
 
 - аудит не обнаружил отдельного старого MAX-кода/репозитория или production token;
