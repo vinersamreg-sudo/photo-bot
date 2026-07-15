@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import ssl
 from dataclasses import dataclass
@@ -13,6 +14,9 @@ from urllib.parse import urlparse
 import httpx
 
 from app.max_adapter import Button
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class MaxTransportError(RuntimeError):
@@ -342,6 +346,13 @@ class MaxApiClient:
             raise MaxTransportError("MAX upload returned invalid JSON") from exc
         token = result.get("token") or upload.get("token")
         if not token:
+            photos = result.get("photos")
+            if isinstance(photos, dict):
+                for photo in photos.values():
+                    if isinstance(photo, dict) and photo.get("token"):
+                        token = photo["token"]
+                        break
+        if not token:
             raise MaxTransportError("MAX upload did not return a media token")
         return str(token)
 
@@ -356,7 +367,12 @@ class MaxApiClient:
             token = self.upload_image(image)
             self.send_message(platform_user_id, caption, buttons, image_token=token)
             return True
-        except MaxTransportError:
+        except MaxTransportError as exc:
+            LOGGER.warning(
+                "MAX image delivery failed (kind=%s,http_status=%s)",
+                exc.kind,
+                exc.http_status,
+            )
             return False
 
 

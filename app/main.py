@@ -62,6 +62,11 @@ class SecretRedactionFilter(logging.Filter):
 def configure_logging(settings: Settings) -> None:
     """Configure console logging and a project-local/production log file."""
 
+    # httpx logs complete request URLs at INFO. MAX callback and one-time media
+    # upload credentials can be query parameters, so request-level logging must
+    # remain disabled even when application INFO logging is enabled.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     handlers: List[logging.Handler] = [logging.StreamHandler()]
     if settings.logs_dir.is_dir():
         handlers.append(logging.FileHandler(settings.log_file, encoding="utf-8"))
