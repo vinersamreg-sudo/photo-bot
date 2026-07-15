@@ -180,7 +180,7 @@ jobs:
       - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          MAX_OWNER_HANDLERS_ENABLED: ${{ env.MAX_OWNER_HANDLERS_ENABLED }}
+          MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
