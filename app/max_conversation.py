@@ -238,3 +238,21 @@ class MaxConversationStore:
                        updated_at=excluded.updated_at""",
                 (str(marker) if marker is not None else None, _iso(self.clock())),
             )
+
+    def touch_poll_success(self) -> None:
+        """Record a successful MAX response independently from marker movement."""
+
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO max_transport_state(name,value,updated_at)
+                   VALUES('poll_last_success','ok',?)
+                   ON CONFLICT(name) DO UPDATE SET value='ok',updated_at=excluded.updated_at""",
+                (_iso(self.clock()),),
+            )
+
+    def transport_state(self, name: str) -> Optional[tuple[Optional[str], str]]:
+        with self.database.read() as connection:
+            row = connection.execute(
+                "SELECT value,updated_at FROM max_transport_state WHERE name=?", (name,)
+            ).fetchone()
+        return (row["value"], row["updated_at"]) if row else None

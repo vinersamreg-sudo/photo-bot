@@ -17,6 +17,13 @@ from app.max_adapter import Button
 class MaxTransportError(RuntimeError):
     """Safe transport error which never includes response bodies or secret URLs."""
 
+    def __init__(
+        self, message: str, *, kind: str = "transport", http_status: int | None = None
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.http_status = http_status
+
 
 @dataclass(frozen=True)
 class MaxIncomingEvent:
@@ -115,7 +122,9 @@ class MaxApiClient:
         media_client: Optional[httpx.Client] = None,
     ) -> None:
         if not token:
-            raise MaxTransportError("MAX_BOT_TOKEN is not configured")
+            raise MaxTransportError(
+                "MAX_BOT_TOKEN is not configured", kind="configuration_missing"
+            )
         self._token = token
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -127,6 +136,7 @@ class MaxApiClient:
         )
         self.media_client = media_client or httpx.Client(timeout=timeout_seconds)
         self._owns_media_client = media_client is None
+        self.last_status_code: int | None = None
 
     def close(self) -> None:
         self.client.close()
@@ -137,19 +147,50 @@ class MaxApiClient:
         try:
             response = self.client.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
-            raise MaxTransportError("MAX API request timed out") from exc
+            raise MaxTransportError(
+                "MAX API request timed out", kind="timeout"
+            ) from exc
         except httpx.HTTPError as exc:
             raise MaxTransportError(
-                f"MAX API network failure ({type(exc).__name__})"
+                f"MAX API network failure ({type(exc).__name__})", kind="network"
             ) from exc
+        self.last_status_code = response.status_code
         if response.status_code >= 400:
-            raise MaxTransportError(f"MAX API returned HTTP {response.status_code}")
+            kind = {
+                401: "invalid_token",
+                403: "forbidden",
+                408: "timeout",
+                429: "rate_limit",
+            }.get(response.status_code, "http_error")
+            try:
+                error_payload = response.json()
+            except ValueError:
+                error_payload = {}
+            error_code = ""
+            if isinstance(error_payload, dict):
+                error_code = str(
+                    error_payload.get("code")
+                    or error_payload.get("error_code")
+                    or error_payload.get("error")
+                    or ""
+                ).lower()
+            if "bot_not_active" in error_code or "bot_inactive" in error_code:
+                kind = "bot_not_active"
+            raise MaxTransportError(
+                f"MAX API returned HTTP {response.status_code}",
+                kind=kind,
+                http_status=response.status_code,
+            )
         try:
             payload = response.json()
         except (ValueError, json.JSONDecodeError) as exc:
-            raise MaxTransportError("MAX API returned invalid JSON") from exc
+            raise MaxTransportError(
+                "MAX API returned invalid JSON", kind="invalid_response"
+            ) from exc
         if not isinstance(payload, dict):
-            raise MaxTransportError("MAX API returned unexpected data")
+            raise MaxTransportError(
+                "MAX API returned unexpected data", kind="invalid_response"
+            )
         return payload
 
     def get_me(self) -> dict[str, Any]:
@@ -314,9 +355,6 @@ class SingleInstanceLock:
     def __enter__(self) -> "SingleInstanceLock":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.path.open("a+")
-        self._file.seek(0)
-        self._file.write("0")
-        self._file.flush()
         try:
             if os.name == "nt":
                 import msvcrt
@@ -328,7 +366,13 @@ class SingleInstanceLock:
         except OSError as exc:
             self._file.close()
             self._file = None
-            raise MaxTransportError("Another MAX polling process already holds the lock") from exc
+            raise MaxTransportError(
+                "Another MAX polling process already holds the lock",
+                kind="duplicate_polling_instance",
+            ) from exc
+        self._file.seek(0)
+        self._file.write("0")
+        self._file.flush()
         return self
 
     def __exit__(self, *_args: Any) -> None:

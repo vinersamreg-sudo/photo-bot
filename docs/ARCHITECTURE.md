@@ -1,5 +1,11 @@
 # Architecture
 
+## Owner-only transport topology
+
+`MAX Long Polling → MaxApiClient → transport-only observer → SQLite poll_marker/poll_last_success`.
+
+В `MAX_POLL_OBSERVE_ONLY=true` runtime намеренно не строит `MaxApplication` и OpenAI image service. Systemd supervises единственный процесс под `photoapp`; advisory lock является второй независимой защитой от двух consumers. Operational health не доверяет одному PID: он проверяет unit state/MainPID/command, SQLite quick-check, свежесть `poll_last_success` и факт занятого lock. Это временная инфраструктурная топология; публичная целевая схема остаётся `MAX Webhook HTTPS:443 → быстрый durable accept → queue/worker`.
+
 ## Pixora website boundary
 
 Статический сайт Pixora изолирован в `site/public`. Он не импортирует Python backend, не имеет server-side runtime и разворачивается отдельным opt-in workflow в `/opt/pixora-site`; Nginx root не пересекается с `/opt/photo-bot`. Structural/HTTP/Lighthouse проверки сайта находятся в `site/tests`, `site/scripts` и `.github/workflows/site.yml`.

@@ -1,5 +1,11 @@
 # Current State
 
+## MAX owner-only transport smoke — 15.07.2026
+
+Бот `Pixora обработка фото ИИ` создан владельцем и прошёл модерацию. `MAX_BOT_TOKEN` хранится в GitHub Environment `production` и доставляется в production `.env` только через stdin. Для текущего инфраструктурного этапа используется Long Polling в режиме `MAX_POLL_OBSERVE_ONLY=true`: соединение и marker живые, но пользовательские handlers, ответы, callback-обработка и OpenAI image generation отключены. Runtime управляется только `photo-bot.service` под `photoapp`; health требует свежую успешную связь с MAX, SQLite, MainPID и single-instance lock.
+
+Реальный пользовательский `/start` не проверялся, сообщения и фотографии не отправлялись. Long Polling остаётся только закрытым smoke-механизмом; до публичного запуска обязателен Webhook HTTPS:443 с быстрой фиксацией события и отдельной фоновой обработкой.
+
 ## Сайт Pixora
 
 В `site/` реализован отдельный responsive static landing: продуктовый Hero, сценарии, собственные синтетические «До/После», преимущества, четыре шага, FAQ, SEO metadata/schema, draft legal pages и MAX placeholder CTA. Site CI проверяет структуру, HTTP smoke и Lighthouse budgets ≥95. Production deploy подготовлен, но выключен до DNS/TLS/Nginx и подтверждённого MAX deep link.
@@ -48,16 +54,16 @@
 - correction/repeat той же GalleryItem, unlock placeholder, последние 10 работ, version navigation, favorite/current best;
 - delete confirmation и немедленный физический purge файлов/путей;
 - single-instance polling lock; `run` больше не поддерживает бессмысленный idle loop;
-- systemd hardening template в `ops/photo-bot.service`.
+- установленный systemd runtime из hardening template `ops/photo-bot.service`.
 
 ## Не реализовано или не подтверждено live
 
-Фактический MAX bot/token, живое сообщение/image/callback, production Webhook endpoint HTTPS:443, установка systemd unit, эквайринг/callback verification, платное продолжение, monitoring/alerting и backup/restore SQLite. Long Polling реализован только для закрытого smoke и не считается production transport.
+Живое пользовательское сообщение/image/callback, production Webhook endpoint HTTPS:443, эквайринг/callback verification, платное продолжение, monitoring/alerting и backup/restore SQLite. Long Polling активен только для закрытого transport smoke и не считается публичным production transport.
 
 ## Известные ограничения
 
-- официальный контракт проверен, но реальный payload конкретного бота и delivery в клиенте MAX ещё не подтверждены;
-- GitHub Environment и production `.env` не содержат `MAX_BOT_TOKEN`; зарегистрированный бот и тестовый user не подтверждены;
+- официальный контракт и авторизация реального бота проверены, но пользовательский payload и delivery в клиенте MAX ещё не подтверждены;
+- Environment `production` содержит `MAX_BOT_TOKEN`; значение не читается и доставляется на VPS через stdin, тестовый user пока не подтверждён;
 - текущий VPS принимает только SSH; для Webhook нужны домен, TLS, 443 и firewall change;
 - резервная стоимость smoke записана как 10 ₽ через `DEMO_ESTIMATED_COST_RUB_PER_GENERATION`; API не вернул готовую сумму в валюте, поэтому тарифы всё ещё требуют сверки token usage с фактическим счётом;
 - payment confirmation пока является внутренней границей без реального провайдера и не должен вызываться из публичного transport;

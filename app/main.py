@@ -7,9 +7,12 @@ import json
 import logging
 import os
 import signal
+import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
 from uuid import uuid4
@@ -107,6 +110,86 @@ def health_errors(settings: Settings) -> List[str]:
             errors.append(f"Required directory is not writable: {path}")
         else:
             LOGGER.info("Directory check passed: %s (%s)", name, path)
+    if settings.max_transport_mode == "polling":
+        errors.extend(_polling_health_errors(settings))
+    return errors
+
+
+def _systemd_runtime_status() -> tuple[bool, int]:
+    try:
+        active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "photo-bot.service"],
+            check=False,
+        ).returncode == 0
+        result = subprocess.run(
+            ["systemctl", "show", "photo-bot.service", "--property=MainPID", "--value"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        pid = int(result.stdout.strip() or "0") if result.returncode == 0 else 0
+        return active, pid
+    except (OSError, ValueError):
+        return False, 0
+
+
+def _polling_health_errors(settings: Settings) -> List[str]:
+    from app.max_transport import MaxTransportError, SingleInstanceLock
+
+    errors: List[str] = []
+    if not settings.max_bot_token:
+        errors.append("MAX configuration missing: MAX_BOT_TOKEN")
+    try:
+        connection = sqlite3.connect(
+            f"file:{settings.database_path}?mode=rw", uri=True, timeout=1
+        )
+        try:
+            check = connection.execute("PRAGMA quick_check").fetchone()
+            if not check or check[0] != "ok":
+                errors.append("SQLite integrity check failed")
+            row = connection.execute(
+                "SELECT updated_at FROM max_transport_state WHERE name='poll_last_success'"
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.OperationalError as exc:
+        kind = "sqlite_lock" if "locked" in str(exc).lower() else "sqlite_unavailable"
+        errors.append(f"MAX database health failed ({kind})")
+        row = None
+    if row is None:
+        errors.append("MAX polling has no successful contact timestamp")
+    else:
+        try:
+            updated_at = datetime.fromisoformat(str(row[0]))
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+            if age < 0 or age > settings.max_poll_max_stale_seconds:
+                errors.append(
+                    f"MAX polling contact is stale ({int(max(age, 0))}s)"
+                )
+        except (TypeError, ValueError):
+            errors.append("MAX polling contact timestamp is invalid")
+
+    if settings.app_env == "production":
+        active, pid = _systemd_runtime_status()
+        if not active:
+            errors.append("photo-bot.service is not active")
+        if pid <= 0:
+            errors.append("photo-bot.service has no live MainPID")
+        else:
+            try:
+                command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ")
+                if b"-m app.main run" not in command:
+                    errors.append("photo-bot.service MainPID command is unexpected")
+            except OSError:
+                errors.append("photo-bot.service MainPID is not readable")
+        try:
+            with SingleInstanceLock(settings.max_poll_lock_path):
+                errors.append("MAX polling runtime lock is not held")
+        except MaxTransportError as exc:
+            if exc.kind != "duplicate_polling_instance":
+                errors.append(f"MAX polling lock check failed ({exc.kind})")
     return errors
 
 
@@ -158,7 +241,19 @@ def run_process(settings: Settings) -> int:
         return 2
     from app.max_runtime import run_polling
     LOGGER.info("photo-bot MAX polling process starting (pid=%s)", os.getpid())
-    return run_polling(settings, stop_event)
+    try:
+        return run_polling(settings, stop_event)
+    except Exception as exc:
+        from app.max_transport import MaxTransportError
+        if isinstance(exc, MaxTransportError):
+            LOGGER.error(
+                "MAX runtime stopped (kind=%s,http_status=%s): %s",
+                exc.kind,
+                exc.http_status,
+                exc,
+            )
+            return 3
+        raise
 
 
 def run_max_check(settings: Settings) -> int:
@@ -175,9 +270,21 @@ def run_max_check(settings: Settings) -> int:
         finally:
             client.close()
     except MaxTransportError as exc:
-        LOGGER.error("%s", exc)
+        LOGGER.error(
+            "MAX authorization check failed (kind=%s,http_status=%s): %s",
+            exc.kind,
+            exc.http_status,
+            exc,
+        )
         return 1
-    LOGGER.info("MAX bot authorization check passed (bot_id_present=%s)", bool(bot.get("user_id")))
+    bot_id = bot.get("user_id") or bot.get("bot_id")
+    username = bot.get("username")
+    LOGGER.info(
+        "MAX bot authorization check passed (http_status=%s,bot_id=%s,username=%s)",
+        client.last_status_code,
+        bot_id if bot_id is not None else "not-returned",
+        username if username else "not-returned",
+    )
     return 0
 
 

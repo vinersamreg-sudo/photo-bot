@@ -1,5 +1,11 @@
 # Delivery Process
 
+## Текущий owner-only MAX deploy
+
+Если Environment secret `MAX_BOT_TOKEN` существует, workflow передаёт его по stdin в `/opt/photo-bot/.env`, выставляет `MAX_TRANSPORT_MODE=polling` и обязательный `MAX_POLL_OBSERVE_ONLY=true`, выполняет `max-check`, устанавливает `/etc/systemd/system/photo-bot.service`, включает autostart и ожидает полноценный readiness. Readiness означает active unit, один `photoapp` MainPID с `python -m app.main run`, удерживаемый polling lock и свежий `poll_last_success` в SQLite. Workflow затем доказывает отказ второго runtime и graceful systemd restart. Значения secrets не попадают в shell arguments или отчёт.
+
+Если MAX secret отсутствует, deploy кода разрешён, но mode принудительно остаётся `disabled`, unit останавливается и readiness MAX не заявляется. Прямой background-start и cron watchdog не используются. Изменение systemd ограничено отдельными разрешёнными deployment-командами; само приложение не имеет root/sudo.
+
 ## Обычный выпуск
 
 1. Изменить код и документацию в локальном репозитории.
@@ -14,7 +20,7 @@
 
 ## Секреты
 
-Инфраструктурные секреты: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`. API secrets: `OPENAI_API_KEY`; после подтверждения бота — `MAX_BOT_TOKEN`; для Webhook — `MAX_WEBHOOK_SECRET`. Они передаются deploy через stdin, никогда не являются shell argument и не выводятся. Сейчас MAX secrets не созданы.
+Инфраструктурные секреты: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`. API secrets: `OPENAI_API_KEY` и подтверждённый `MAX_BOT_TOKEN`; для будущего Webhook потребуется `MAX_WEBHOOK_SECRET`. API secrets передаются deploy через stdin, никогда не являются shell argument и не выводятся.
 
 ## Откат
 

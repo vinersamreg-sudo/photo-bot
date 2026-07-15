@@ -46,6 +46,13 @@ jobs:
           OPENAI_IMAGE_MODEL: gpt-image-2
           APP_ENV: ci
         run: python -m app.main openai-check
+      - name: Validate MAX credential from GitHub runner
+        if: env.MAX_KEY_CONFIGURED == 'true'
+        env:
+          MAX_BOT_TOKEN: ${{ secrets.MAX_BOT_TOKEN }}
+          MAX_API_BASE_URL: https://platform-api2.max.ru
+          APP_ENV: ci
+        run: python -m app.main max-check
 
   deploy:
     needs: test
@@ -82,6 +89,9 @@ jobs:
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" '
+            if systemctl cat photo-bot.service >/dev/null 2>&1; then
+              sudo -n systemctl stop photo-bot.service
+            fi
             if [ -f /opt/photo-bot/data/photo-bot.pid ]; then
               /opt/photo-bot/scripts/stop_bot.sh
             fi'
@@ -178,8 +188,25 @@ jobs:
             ensure_env TRASH_RETENTION_DAYS 30
             ensure_env MAX_BOT_TOKEN ''
             ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
-            ensure_env MAX_TRANSPORT_MODE disabled
-            ensure_env MAX_POLL_TIMEOUT_SECONDS 30
+            set_env() {
+              NAME="$1"
+              VALUE="$2"
+              TMP="$ROOT/.env.runtime.tmp"
+              grep -v "^$NAME=" "$ROOT/.env" > "$TMP" || true
+              printf '%s=%s\n' "$NAME" "$VALUE" >> "$TMP"
+              chmod 600 "$TMP"
+              mv "$TMP" "$ROOT/.env"
+            }
+            if grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
+              set_env MAX_TRANSPORT_MODE polling
+            else
+              set_env MAX_TRANSPORT_MODE disabled
+            fi
+            set_env MAX_POLL_OBSERVE_ONLY true
+            set_env MAX_POLL_TIMEOUT_SECONDS 20
+            set_env MAX_POLL_RETRY_SECONDS 5
+            set_env MAX_POLL_IDLE_SECONDS 1
+            set_env MAX_POLL_MAX_STALE_SECONDS 90
             ensure_env MAX_MEDIA_HOST_SUFFIXES .max.ru,.oneme.ru,.okcdn.ru
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
@@ -187,9 +214,10 @@ jobs:
             "$ROOT"/venv/bin/python --version
             "$ROOT"/venv/bin/pip check
             "$ROOT"/venv/bin/python -c 'from app.config import load_settings; from app.database import Database; Database(load_settings().database_path)'
-            "$ROOT"/venv/bin/python -m unittest discover -v
-            "$ROOT"/scripts/healthcheck.sh
+            MAX_TRANSPORT_MODE=disabled "$ROOT"/venv/bin/python -m unittest discover -v
+            MAX_TRANSPORT_MODE=disabled "$ROOT"/scripts/healthcheck.sh
             test "$(stat -c '%a' "$ROOT/.env")" = "600"
+            test "$(stat -c '%U:%G' "$ROOT/.env")" = "photoapp:photoapp"
             for dir in "$ROOT/data" "$ROOT/logs" "$ROOT/temp"; do
               test -d "$dir"
               test -w "$dir"
@@ -203,12 +231,6 @@ jobs:
             for path in app tests scripts docs ops requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
               test -e "$ROOT/$path"
             done
-            if [ -f "$ROOT/logs/app.log" ] && grep -Eq '(OPENAI_API_KEY|MAX_BOT_TOKEN|sk-[A-Za-z0-9_-]{20,})' "$ROOT/logs/app.log"; then
-              echo "Potential secret material detected in app.log" >&2
-              exit 1
-            fi
-            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
-            mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
             if grep -Eq '^OPENAI_API_KEY=.+$' "$ROOT/.env"; then
               "$ROOT"/venv/bin/python -m app.main openai-check
             else
@@ -216,9 +238,57 @@ jobs:
             fi
             MODE=$(sed -n 's/^MAX_TRANSPORT_MODE=//p' "$ROOT/.env" | tail -n 1)
             if [ "$MODE" = polling ] && grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
-              "$ROOT"/scripts/start_bot.sh
+              "$ROOT"/venv/bin/python -m app.main max-check
+              sudo -n install -o root -g root -m 644 \
+                "$ROOT/ops/photo-bot.service" /etc/systemd/system/photo-bot.service
+              sudo -n systemctl daemon-reload
+              sudo -n systemctl enable photo-bot.service
+              sudo -n systemctl restart photo-bot.service
+              READY=0
+              for attempt in $(seq 1 24); do
+                if "$ROOT"/scripts/healthcheck.sh; then
+                  READY=1
+                  break
+                fi
+                sleep 3
+              done
+              test "$READY" = 1
+              MAIN_PID=$(systemctl show photo-bot.service --property=MainPID --value)
+              test "$MAIN_PID" -gt 0
+              test "$(ps -o user= -p "$MAIN_PID" | xargs)" = photoapp
+              tr '\0' ' ' < "/proc/$MAIN_PID/cmdline" | grep -F -- '-m app.main run' >/dev/null
+              test "$(pgrep -u photoapp -f '^/opt/photo-bot/venv/bin/python -m app.main run$' | wc -l)" -eq 1
+
+              DUPLICATE_LOG="$ROOT/temp/duplicate-polling-check.log"
+              set +e
+              timeout 10 "$ROOT"/venv/bin/python -m app.main run >"$DUPLICATE_LOG" 2>&1
+              DUPLICATE_EXIT=$?
+              set -e
+              test "$DUPLICATE_EXIT" -eq 3
+              grep -F 'duplicate_polling_instance' "$DUPLICATE_LOG" >/dev/null
+              rm -f "$DUPLICATE_LOG"
+
+              OLD_PID="$MAIN_PID"
+              sudo -n systemctl restart photo-bot.service
+              RESTARTED=0
+              for attempt in $(seq 1 24); do
+                NEW_PID=$(systemctl show photo-bot.service --property=MainPID --value)
+                if [ "$NEW_PID" -gt 0 ] && [ "$NEW_PID" != "$OLD_PID" ] && "$ROOT"/scripts/healthcheck.sh; then
+                  RESTARTED=1
+                  break
+                fi
+                sleep 3
+              done
+              test "$RESTARTED" = 1
+              ! kill -0 "$OLD_PID" 2>/dev/null
             else
               rm -f "$ROOT/data/photo-bot.pid"
+              if systemctl cat photo-bot.service >/dev/null 2>&1; then
+                sudo -n systemctl disable --now photo-bot.service
+              fi
               echo "MAX runtime not started (mode=$MODE)"
             fi
+            "$ROOT"/venv/bin/python -m scripts.check_runtime_secrets
+            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
+            mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
           REMOTE

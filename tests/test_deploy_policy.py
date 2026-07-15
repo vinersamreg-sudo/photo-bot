@@ -21,7 +21,6 @@ class DeployPolicyTests(TestCase):
         self.assertIn("--exclude='site/'", self.workflow)
 
     def test_uses_scoped_safe_operations(self) -> None:
-        self.assertNotIn("sudo", self.workflow)
         self.assertNotIn("pkill", self.workflow)
         self.assertIn("/opt/photo-bot", self.workflow)
         self.assertNotIn("REG_RU_", self.workflow)
@@ -33,9 +32,11 @@ class DeployPolicyTests(TestCase):
         self.assertIn('"$ROOT"/venv/bin/pip check', self.workflow)
         self.assertIn("Database(load_settings().database_path)", self.workflow)
         self.assertIn('"$ROOT"/scripts/healthcheck.sh', self.workflow)
+        self.assertIn("sudo -n systemctl", self.workflow)
+        self.assertNotIn("sudo", SERVICE.read_text(encoding="utf-8"))
 
     def test_verifies_log_safety_and_tripday_isolation(self) -> None:
-        self.assertIn("Potential secret material detected in app.log", self.workflow)
+        self.assertIn("scripts.check_runtime_secrets", self.workflow)
         self.assertIn("MAX_BOT_TOKEN", self.workflow)
         self.assertNotIn("TripDay", self.workflow)
 
@@ -44,11 +45,11 @@ class DeployPolicyTests(TestCase):
         self.assertIn("python scripts/scan_secrets.py", self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
-        health_position = self.workflow.index('"$ROOT"/scripts/healthcheck.sh')
-        marker_position = self.workflow.index("data/deployed_commit.txt")
+        health_position = self.workflow.rindex('"$ROOT"/scripts/healthcheck.sh')
+        marker_position = self.workflow.rindex("data/deployed_commit.txt")
         openai_position = self.workflow.rindex("python -m app.main openai-check")
         self.assertGreater(marker_position, health_position)
-        self.assertLess(marker_position, openai_position)
+        self.assertGreater(marker_position, openai_position)
 
     def test_creates_but_does_not_overwrite_production_env(self) -> None:
         self.assertIn('if [ ! -f "$ROOT/.env" ]', self.workflow)
@@ -73,10 +74,21 @@ class DeployPolicyTests(TestCase):
         self.assertIn("Configure MAX credential", self.workflow)
         self.assertIn("secrets.MAX_BOT_TOKEN", self.workflow)
         self.assertIn('printf \'%s\' "$MAX_BOT_TOKEN" |', self.workflow)
-        self.assertIn("ensure_env MAX_TRANSPORT_MODE disabled", self.workflow)
+        self.assertIn("set_env MAX_TRANSPORT_MODE polling", self.workflow)
+        self.assertIn("set_env MAX_POLL_OBSERVE_ONLY true", self.workflow)
         self.assertIn("ensure_env MAX_API_BASE_URL https://platform-api2.max.ru", self.workflow)
         self.assertIn("/opt/photo-bot/scripts/stop_bot.sh", self.workflow)
         self.assertIn('if [ "$MODE" = polling ]', self.workflow)
+        self.assertIn("python -m app.main max-check", self.workflow)
+
+    def test_deploy_uses_one_systemd_service_without_background_watchdogs(self) -> None:
+        self.assertIn("install -o root -g root -m 644", self.workflow)
+        self.assertIn("systemctl enable photo-bot.service", self.workflow)
+        self.assertIn("systemctl restart photo-bot.service", self.workflow)
+        self.assertIn("duplicate_polling_instance", self.workflow)
+        self.assertNotIn("nohup", self.workflow)
+        self.assertNotIn("crontab", self.workflow)
+        self.assertNotIn("pkill", self.workflow)
 
     def test_systemd_template_uses_least_privilege_and_restart_safety(self) -> None:
         service = SERVICE.read_text(encoding="utf-8")
@@ -86,3 +98,4 @@ class DeployPolicyTests(TestCase):
         self.assertIn("Restart=on-failure", service)
         self.assertIn("KillSignal=SIGTERM", service)
         self.assertIn("NoNewPrivileges=true", service)
+        self.assertIn("ReadWritePaths=/opt/photo-bot/data /opt/photo-bot/logs /opt/photo-bot/temp", service)

@@ -39,16 +39,50 @@ def build_max_application(
 def run_polling(settings: Settings, stop_event: threading.Event) -> int:
     """Development/closed-smoke mode. Official production mode remains Webhook."""
 
-    application, client, store = build_max_application(settings)
+    database = Database(settings.database_path)
+    store = MaxConversationStore(database)
+    client = MaxApiClient(
+        settings.max_bot_token,
+        settings.max_api_base_url,
+        timeout_seconds=max(30, settings.max_poll_timeout_seconds + 5),
+        media_host_suffixes=settings.max_media_host_suffixes,
+    )
+    application = None
+    if not settings.max_poll_observe_only:
+        application, client, store = build_max_application(settings, client)
     try:
         with SingleInstanceLock(settings.max_poll_lock_path):
             marker = store.get_marker()
-            LOGGER.info("MAX closed-test polling started")
+            LOGGER.info(
+                "MAX closed-test polling started (observe_only=%s)",
+                settings.max_poll_observe_only,
+            )
             while not stop_event.is_set():
                 try:
                     updates, next_marker = client.get_updates(
                         marker, timeout=settings.max_poll_timeout_seconds
                     )
+                    store.touch_poll_success()
+                    if settings.max_poll_observe_only:
+                        if updates:
+                            event_types = sorted(
+                                {
+                                    str(update.get("update_type") or "unknown")
+                                    for update in updates
+                                    if isinstance(update, dict)
+                                }
+                            )
+                            LOGGER.info(
+                                "MAX transport-only batch observed (count=%s,event_types=%s)",
+                                len(updates),
+                                ",".join(event_types),
+                            )
+                        if next_marker is not None:
+                            marker = next_marker
+                        store.set_marker(marker)
+                        if not updates:
+                            stop_event.wait(settings.max_poll_idle_seconds)
+                        continue
                     batch_ok = True
                     for raw_update in updates:
                         event = parse_update(raw_update)
@@ -67,10 +101,15 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                         marker = next_marker
                         store.set_marker(marker)
                     elif not batch_ok:
-                        stop_event.wait(2)
+                        stop_event.wait(settings.max_poll_retry_seconds)
                 except MaxTransportError as exc:
-                    LOGGER.error("MAX polling transport failure: %s", exc)
-                    stop_event.wait(5)
+                    LOGGER.error(
+                        "MAX polling transport failure (kind=%s,http_status=%s): %s",
+                        exc.kind,
+                        exc.http_status,
+                        exc,
+                    )
+                    stop_event.wait(settings.max_poll_retry_seconds)
     finally:
         client.close()
     LOGGER.info("MAX polling stopped")

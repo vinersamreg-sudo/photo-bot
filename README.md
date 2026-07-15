@@ -2,7 +2,18 @@
 
 Официальный бренд продукта — **Pixora**. Отдельный статический лендинг находится в [`site/`](site/README.md); он не импортирует backend и имеет собственный CI/deploy boundary.
 
-Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. MAX transport реализован и fake-проверен, но live bot/token и эквайринг ещё не подключены.
+Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. Реальный модерированный MAX-бот подключён к production только для owner-only transport smoke: `MAX_POLL_OBSERVE_ONLY=true` получает marker/health, но не отправляет сообщения и не запускает генерацию. Пользовательский `/start`, webhook и эквайринг ещё не подключены.
+
+## MAX production smoke
+
+Безопасные административные команды:
+
+```bash
+python -m app.main max-check   # GET /me, без polling и сообщений
+python -m app.main health      # SQLite + systemd + MainPID + fresh MAX contact + lock
+```
+
+Runtime запускается только как `/etc/systemd/system/photo-bot.service` под `photoapp`. Прямой background-start выведен из эксплуатации. Long Polling не считается публичным production transport; перед приглашением пользователей требуется Webhook HTTPS:443 и отдельный проверенный owner `/start` этап.
 
 ## Быстрый старт
 

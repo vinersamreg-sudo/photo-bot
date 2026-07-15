@@ -33,6 +33,8 @@ class MaxConversationTests(TestCase):
 
             store.set_marker(123)
             self.assertEqual(store.get_marker(), 123)
+            store.touch_poll_success()
+            self.assertEqual(store.transport_state("poll_last_success")[0], "ok")
             with database.transaction() as connection:
                 connection.execute(
                     "UPDATE max_legal_documents SET active=0 WHERE document_type='offer'"

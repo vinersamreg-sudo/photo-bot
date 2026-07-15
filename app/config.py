@@ -44,7 +44,11 @@ class Settings:
     max_bot_token: str = ""
     max_api_base_url: str = "https://platform-api2.max.ru"
     max_transport_mode: str = "disabled"
-    max_poll_timeout_seconds: int = 30
+    max_poll_timeout_seconds: int = 20
+    max_poll_retry_seconds: int = 5
+    max_poll_idle_seconds: int = 1
+    max_poll_max_stale_seconds: int = 90
+    max_poll_observe_only: bool = True
     max_media_host_suffixes: tuple[str, ...] = (".max.ru", ".oneme.ru", ".okcdn.ru")
 
     @property
@@ -90,6 +94,17 @@ def _positive_float(values: Mapping[str, str], name: str, default: float) -> flo
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = values.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def load_settings(
@@ -154,6 +169,10 @@ def load_settings(
             "MAX_API_BASE_URL", "https://platform-api2.max.ru"
         ).strip().rstrip("/"),
         max_transport_mode=max_transport_mode,
-        max_poll_timeout_seconds=_positive_int(values, "MAX_POLL_TIMEOUT_SECONDS", 30),
+        max_poll_timeout_seconds=_positive_int(values, "MAX_POLL_TIMEOUT_SECONDS", 20),
+        max_poll_retry_seconds=_positive_int(values, "MAX_POLL_RETRY_SECONDS", 5),
+        max_poll_idle_seconds=_positive_int(values, "MAX_POLL_IDLE_SECONDS", 1),
+        max_poll_max_stale_seconds=_positive_int(values, "MAX_POLL_MAX_STALE_SECONDS", 90),
+        max_poll_observe_only=_boolean(values, "MAX_POLL_OBSERVE_ONLY", True),
         max_media_host_suffixes=media_suffixes,
     )

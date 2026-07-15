@@ -123,6 +123,8 @@ class MaxTransportTests(TestCase):
         client = MaxApiClient("max-secret-test", client=api, media_client=api)
         with self.assertRaises(MaxTransportError) as caught:
             client.get_me()
+        self.assertEqual(caught.exception.kind, "invalid_token")
+        self.assertEqual(caught.exception.http_status, 401)
         self.assertNotIn("max-secret-test", str(caught.exception))
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(MaxTransportError):
@@ -137,3 +139,33 @@ class MaxTransportTests(TestCase):
                 with self.assertRaises(MaxTransportError):
                     with SingleInstanceLock(path):
                         pass
+
+    def test_timeout_network_rate_limit_and_forbidden_are_classified(self) -> None:
+        cases = (
+            (httpx.ReadTimeout("slow"), "timeout"),
+            (httpx.ConnectError("offline"), "network"),
+        )
+        for failure, kind in cases:
+            client = MaxApiClient(
+                "test",
+                client=httpx.Client(
+                    base_url="https://platform-api2.max.ru",
+                    transport=httpx.MockTransport(lambda _request, exc=failure: (_ for _ in ()).throw(exc)),
+                ),
+            )
+            with self.assertRaises(MaxTransportError) as caught:
+                client.get_me()
+            self.assertEqual(caught.exception.kind, kind)
+        for status, kind in ((403, "forbidden"), (429, "rate_limit")):
+            client = MaxApiClient(
+                "test",
+                client=httpx.Client(
+                    base_url="https://platform-api2.max.ru",
+                    transport=httpx.MockTransport(
+                        lambda _request, code=status: httpx.Response(code, json={})
+                    ),
+                ),
+            )
+            with self.assertRaises(MaxTransportError) as caught:
+                client.get_me()
+            self.assertEqual(caught.exception.kind, kind)

@@ -14,7 +14,7 @@ Hetzner, SSH hardening, UFW/fail2ban, отдельный deploy user, Python 3.1
 
 ## Этап 2 — пользовательский канал (частично)
 
-Реализованы проверенный официальный MAX API contract, thin HTTP transport, SQLite dialog state, legal versions, idempotency, single-instance polling smoke runner и полный fake vertical slice до Gallery/delete. Остались `MAX_BOT_TOKEN`, подтверждение реального bot/user, живой smoke и production Webhook HTTPS:443. Systemd template готов, но не установлен до появления рабочего transport mode.
+Реализованы проверенный официальный MAX API contract, thin HTTP transport, SQLite dialog state, legal versions, idempotency, single-instance polling smoke runner и полный fake vertical slice до Gallery/delete. Реальный модерированный бот `Pixora обработка фото ИИ` и Environment token подтверждены; systemd-supervised polling подключён только в transport-only observe mode без сообщений и генераций. Следующий шаг — отдельный owner `/start` smoke с allowlist и проверкой реального payload. До публичного запуска остаётся production Webhook HTTPS:443, durable queue/worker и отказ от Long Polling.
 
 ## Этап 3 — операции и монетизация (частично)
 

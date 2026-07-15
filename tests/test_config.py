@@ -28,7 +28,10 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.max_bot_token, "")
         self.assertEqual(settings.max_api_base_url, "https://platform-api2.max.ru")
         self.assertEqual(settings.max_transport_mode, "disabled")
-        self.assertEqual(settings.max_poll_timeout_seconds, 30)
+        self.assertEqual(settings.max_poll_timeout_seconds, 20)
+        self.assertEqual(settings.max_poll_retry_seconds, 5)
+        self.assertEqual(settings.max_poll_max_stale_seconds, 90)
+        self.assertTrue(settings.max_poll_observe_only)
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]

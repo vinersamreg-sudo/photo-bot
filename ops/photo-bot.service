@@ -14,11 +14,16 @@ Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
 KillSignal=SIGTERM
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/photo-bot/data /opt/photo-bot/logs /opt/photo-bot/temp
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=photo-bot
 
 [Install]
 WantedBy=multi-user.target
