@@ -129,6 +129,24 @@ jobs:
             grep -q '^OPENAI_IMAGE_MODEL=' "$ROOT/.env" || printf '%s\n' 'OPENAI_IMAGE_MODEL=gpt-image-2' >> "$ROOT/.env"
             grep -q '^APP_ENV=' "$ROOT/.env" || printf '%s\n' 'APP_ENV=production' >> "$ROOT/.env"
             grep -q '^BASE_DIR=' "$ROOT/.env" || printf '%s\n' 'BASE_DIR=/opt/photo-bot' >> "$ROOT/.env"
+            ensure_env() { grep -q "^$1=" "$ROOT/.env" || printf '%s=%s\n' "$1" "$2" >> "$ROOT/.env"; }
+            ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5
+            ensure_env DEMO_SESSION_TTL_MINUTES 60
+            ensure_env DEMO_WATERMARK_TEXT ОБРАЗЕЦ
+            ensure_env DEMO_MAX_DIMENSION 1024
+            ensure_env DEMO_OUTPUT_FORMAT JPEG
+            ensure_env DEMO_JPEG_QUALITY 82
+            ensure_env DEMO_MIN_REQUEST_INTERVAL_SECONDS 15
+            ensure_env DEMO_MAX_ATTEMPTS_PER_HOUR 10
+            ensure_env DEMO_MAX_CONCURRENT_PER_USER 1
+            ensure_env GLOBAL_MAX_CONCURRENT_GENERATIONS 2
+            ensure_env DEMO_DAILY_COST_LIMIT_RUB 1000
+            ensure_env DEMO_DAILY_GENERATION_LIMIT 100
+            ensure_env DEMO_ESTIMATED_COST_RUB_PER_GENERATION 10
+            ensure_env MAX_SOURCE_FILE_SIZE_MB 15
+            ensure_env MAX_PROMPT_LENGTH 1500
+            ensure_env GENERATION_TIMEOUT_SECONDS 300
+            ensure_env UNLOCK_ORIGINAL_PRICE_RUB 149
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
@@ -141,6 +159,12 @@ jobs:
               test -d "$dir"
               test -w "$dir"
             done
+            if [ -d "$ROOT/data/users" ]; then
+              test "$(stat -c '%a' "$ROOT/data/users")" = "700"
+            fi
+            if [ -f "$ROOT/data/photo_bot.sqlite3" ]; then
+              test "$(stat -c '%a' "$ROOT/data/photo_bot.sqlite3")" = "600"
+            fi
             for path in app tests scripts docs requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
               test -e "$ROOT/$path"
             done

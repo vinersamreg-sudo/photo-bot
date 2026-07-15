@@ -52,6 +52,12 @@ class PrivateStorage:
     def create_session(self, user_id: str, session_id: str, source: Path) -> tuple[Path, str, int]:
         digest, extension, size = self.validate_source(source)
         root = self.session_root(user_id, session_id)
+        for directory in (
+            self.users_dir / user_id,
+            self.users_dir / user_id / "demo_sessions",
+            root,
+        ):
+            self._secure_directory(directory)
         for name in ("source", "originals", "previews"):
             self._secure_directory(root / name)
         destination = root / "source" / f"source{extension}"
@@ -86,6 +92,18 @@ class PrivateStorage:
         path = self.session_root(user_id, session_id) / "metadata.json"
         self.write_private(path, json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"))
         return path
+
+    def append_attempt_metadata(self, user_id: str, session_id: str, attempt: dict[str, Any]) -> None:
+        path = self.session_root(user_id, session_id) / "metadata.json"
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            current = {"session_id": session_id}
+        current.setdefault("attempts", []).append(attempt)
+        self.write_private(
+            path,
+            json.dumps(current, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
 
     def delete_session(self, user_id: str, session_id: str) -> None:
         root = self.session_root(user_id, session_id).resolve()

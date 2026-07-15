@@ -1,6 +1,6 @@
 # photo-bot
 
-Отдельный коммерческий ИИ-фотобот. `photo-bot` — техническое имя; публичный бренд пока не утверждён. Сейчас репозиторий содержит production-каркас: конфигурацию, healthcheck, безопасную проверку OpenAI API, процессные скрипты, тесты и автоматический деплой. Пользовательский бот, обработка фотографий, платежи и очередь ещё не реализованы.
+Отдельный коммерческий ИИ-фоторедактор. `photo-bot` — техническое имя; публичный бренд пока не утверждён. Реализованы защищённая бесплатная demo-сессия, SQLite, image-edit gateway, watermark, приватное файловое хранение, CLI vertical slice, telemetry и транспорт-независимый MAX adapter. Реальный MAX transport и эквайринг ещё не подключены.
 
 ## Быстрый старт
 
@@ -17,6 +17,19 @@ python -m app.main health
 ```
 
 Для локального запуска укажите в `.env` локальный `BASE_DIR`. Реальный ключ хранится только в локальном `.env`, GitHub Environment `production` и production `.env`; он никогда не коммитится.
+
+## Demo vertical slice
+
+Локальная проверка без внешнего API:
+
+```powershell
+python -m app.main demo-edit --user-id test-user --image path\to\image.jpg --prompt "Сделай светлый фон для резюме" --provider fake
+python -m app.main demo-stats
+```
+
+Без `--provider fake` команда использует настроенный OpenAI `images.edit`. Она выводит только путь к уменьшенному watermarked preview. Оригинал хранится отдельно в `data/users/<opaque-id>/demo_sessions/<session-id>/originals` и не входит в пользовательский ответ.
+
+Одна demo-сессия закрепляется за одной исходной фотографией и допускает до `DEMO_MAX_SUCCESSFUL_GENERATIONS` успешно доставленных preview. Технические и policy-ошибки, а также ошибка доставки лимит не расходуют.
 
 ## Production
 
@@ -37,7 +50,7 @@ Push в `main` запускает тесты и деплой через GitHub A
 /opt/photo-bot/scripts/stop_bot.sh
 ```
 
-Процесс `run` пока является пустым signal-aware каркасом, поэтому постоянно запускать его в production до появления реального обработчика не требуется.
+Процесс `run` пока является signal-aware каркасом без MAX polling/webhook, поэтому постоянно запускать его до появления подтверждённого transport handler не требуется.
 
 ## Документация
 

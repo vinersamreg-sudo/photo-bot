@@ -219,6 +219,9 @@ class DemoServiceTests(TestCase):
         intent = service.unlock_original(result.attempt_id, "pay-1")
         with self.assertRaises(PaymentRequiredError):
             service.original_for_paid_intent(intent)
+        service.confirm_payment(intent)
+        service.confirm_payment(intent)
+        self.assertTrue(service.original_for_paid_intent(intent).is_file())
         root = service.storage.session_root(session.user_id, session.session_id)
         self.assertTrue(root.exists())
         service.delete_session(session.session_id)
@@ -241,3 +244,37 @@ class DemoServiceTests(TestCase):
         oversized.write_bytes(b"0" * (1024 * 1024 + 1))
         with self.assertRaises(InvalidInputError):
             self.service(settings=tiny_limit).start_session("max", "oversized", oversized)
+
+    def test_restart_recovers_processing_attempt_without_debit(self) -> None:
+        service = self.service()
+        session = service.start_session("max", "restart", self.source)
+        with service.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO generation_attempts(
+                       id,idempotency_key,session_id,user_id,prompt,status,started_at,
+                       provider,model,source_path,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "interrupted",
+                    "restart-event",
+                    session.session_id,
+                    session.user_id,
+                    "test",
+                    "processing",
+                    self.clock().isoformat(),
+                    "fake",
+                    "fake-image-edit-v1",
+                    str(session.source_path),
+                    self.clock().isoformat(),
+                ),
+            )
+        Database(self.settings.database_path)
+        with service.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT status,technical_refund FROM generation_attempts WHERE id='interrupted'"
+            ).fetchone()
+            count = connection.execute(
+                "SELECT successful_generations FROM demo_sessions WHERE id=?", (session.session_id,)
+            ).fetchone()[0]
+        self.assertEqual(tuple(attempt), ("failed_technical", 1))
+        self.assertEqual(count, 0)

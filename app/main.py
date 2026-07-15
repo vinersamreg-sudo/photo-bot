@@ -161,8 +161,11 @@ def run_demo_edit(settings: Settings, args: argparse.Namespace) -> int:
     except DemoError as exc:
         LOGGER.error("Demo request rejected: %s", exc)
         return 2
-    except Exception:
-        LOGGER.exception("Demo generation failed without exposing provider response data")
+    except Exception as exc:
+        LOGGER.error(
+            "Demo generation failed without exposing provider response data (error_type=%s)",
+            type(exc).__name__,
+        )
         return 1
     print(
         json.dumps(

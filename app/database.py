@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS generation_attempts (
     duration_ms INTEGER,
     input_size_bytes INTEGER,
     output_size_bytes INTEGER,
+    requested_size TEXT,
+    requested_quality TEXT,
+    output_format TEXT,
     retries INTEGER NOT NULL DEFAULT 0,
     technical_refund INTEGER NOT NULL DEFAULT 0,
     correction INTEGER NOT NULL DEFAULT 0,
@@ -97,6 +100,10 @@ class Database:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
@@ -109,6 +116,18 @@ class Database:
         connection = self.connect()
         try:
             connection.executescript(SCHEMA)
+            existing = {
+                row[1] for row in connection.execute("PRAGMA table_info(generation_attempts)")
+            }
+            for name, declaration in (
+                ("requested_size", "TEXT"),
+                ("requested_quality", "TEXT"),
+                ("output_format", "TEXT"),
+            ):
+                if name not in existing:
+                    connection.execute(
+                        f"ALTER TABLE generation_attempts ADD COLUMN {name} {declaration}"
+                    )
             connection.execute(
                 """UPDATE generation_attempts
                    SET status='failed_technical', completed_at=datetime('now'),

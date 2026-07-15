@@ -27,6 +27,8 @@ class OpenAIImageProvider:
         self.client = client
         self.model = model
         self.quality = quality
+        self.size = "1024x1024"
+        self.output_format = "png"
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
         try:
@@ -36,8 +38,8 @@ class OpenAIImageProvider:
                     image=source,
                     prompt=prompt,
                     quality=self.quality,
-                    size="1024x1024",
-                    output_format="png",
+                    size=self.size,
+                    output_format=self.output_format,
                 )
         except BadRequestError as exc:
             if getattr(exc, "code", None) == "moderation_blocked":
@@ -66,6 +68,9 @@ class FakeImageProvider:
 
     name = "fake"
     model = "fake-image-edit-v1"
+    quality = "fake"
+    size = "source"
+    output_format = "png"
 
     def __init__(self, fail: Exception | None = None, color: str = "#d7e8ff") -> None:
         self.fail = fail

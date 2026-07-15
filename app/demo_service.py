@@ -98,6 +98,7 @@ class DemoService:
                         connection.execute(
                             "UPDATE users SET risk_score=risk_score+1 WHERE id=?", (user_id,)
                         )
+                        connection.commit()
                         raise SourceReplacementError(
                             "Бесплатная демонстрация действует для одной исходной фотографии. "
                             "Для обработки нового фото потребуется платная операция или новый пакет"
@@ -220,6 +221,7 @@ class DemoService:
                     "UPDATE users SET risk_score=risk_score+1, blocked_until=? WHERE id=?",
                     (iso(now + timedelta(minutes=15)), session["user_id"]),
                 )
+                connection.commit()
                 raise CooldownError("Too many attempts; temporary cooldown applied")
             if recent[1]:
                 seconds = (now - datetime.fromisoformat(recent[1])).total_seconds()
@@ -242,8 +244,9 @@ class DemoService:
             connection.execute(
                 """INSERT INTO generation_attempts(
                        id,idempotency_key,session_id,user_id,prompt,scenario_id,status,started_at,
-                       provider,model,source_path,input_size_bytes,correction,created_at
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       provider,model,source_path,input_size_bytes,requested_size,
+                       requested_quality,output_format,correction,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     attempt_id,
                     idempotency_key,
@@ -257,6 +260,9 @@ class DemoService:
                     self.provider.model,
                     session["source_file_path"],
                     Path(session["source_file_path"]).stat().st_size,
+                    getattr(self.provider, "size", None),
+                    getattr(self.provider, "quality", None),
+                    getattr(self.provider, "output_format", None),
                     int(correction),
                     iso(now),
                 ),
@@ -332,6 +338,22 @@ class DemoService:
                     "UPDATE demo_sessions SET status='completed', completed_at=?, updated_at=? WHERE id=?",
                     (iso(completed), iso(completed), session_id),
                 )
+        self.storage.append_attempt_metadata(
+            user_id,
+            session_id,
+            {
+                "attempt_id": attempt_id,
+                "status": "succeeded",
+                "completed_at": iso(completed),
+                "provider": self.provider.name,
+                "model": self.provider.model,
+                "requested_size": getattr(self.provider, "size", None),
+                "requested_quality": getattr(self.provider, "quality", None),
+                "estimated_cost_rub": estimated_cost,
+                "original_file": original_path.name,
+                "preview_file": preview_path.name,
+            },
+        )
         return DemoGenerationResult(attempt_id, preview_path, remaining)
 
     def _fail_attempt(self, attempt_id: str, status: str, error_type: str, message: str, refund: bool) -> None:
@@ -380,6 +402,34 @@ class DemoService:
                 (intent_id, attempt_id, idempotency_key, self.settings.unlock_original_price_rub, "pending", now),
             )
             return intent_id
+
+    def confirm_payment(self, payment_intent_id: str) -> None:
+        """Idempotently unlock after a future payment adapter verifies paid status."""
+        now = iso(self.clock())
+        with self.database.transaction() as connection:
+            intent = connection.execute(
+                "SELECT * FROM payment_intents WHERE id=?", (payment_intent_id,)
+            ).fetchone()
+            if not intent:
+                raise PaymentRequiredError("Unknown payment intent")
+            if intent["status"] == "paid":
+                return
+            if intent["status"] != "pending":
+                raise PaymentRequiredError("Payment intent cannot be confirmed")
+            connection.execute(
+                "UPDATE payment_intents SET status='paid', confirmed_at=? WHERE id=? AND status='pending'",
+                (now, payment_intent_id),
+            )
+            connection.execute(
+                "UPDATE generation_attempts SET result_unlocked=1 WHERE id=?",
+                (intent["attempt_id"],),
+            )
+            connection.execute(
+                """UPDATE demo_sessions SET converted_to_paid=1, updated_at=? WHERE id=(
+                       SELECT session_id FROM generation_attempts WHERE id=?
+                   )""",
+                (now, intent["attempt_id"]),
+            )
 
     def original_for_paid_intent(self, payment_intent_id: str) -> Path:
         with self.database.read() as connection:

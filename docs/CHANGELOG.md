@@ -1,5 +1,14 @@
 # Changelog
 
+## 15.07.2026 — guarded demo MVP foundation
+
+- принята механика «сначала фактический watermarked результат, затем оплата конкретного original»;
+- добавлены SQLite demo-сессии, attempts, legal consents и payment intents;
+- реализованы одна фотография, пять успешно доставленных результатов, TTL, idempotency, cooldown, concurrency и дневные бюджеты;
+- добавлены private filesystem storage, кириллический watermark, OpenAI/fake provider и cost telemetry;
+- добавлены CLI `demo-edit`/`demo-stats` и транспорт-независимый MAX UX adapter;
+- реальный MAX transport, эквайринг и юридическая экспертиза остаются незавершёнными; публичный бренд не утверждён.
+
 ## 2026-07-15 — MAX competitor mystery shopping
 
 - в отдельном researcher-проекте пройдены безопасные пользовательские пути восьми выбранных конкурентов без платежей и личных фото;

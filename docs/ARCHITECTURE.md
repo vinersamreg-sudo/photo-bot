@@ -10,19 +10,37 @@ CI запускает unit-тесты, healthcheck, `pip check` и secret scan. 
 
 - configuration: environment variables и `.env` через `app/config.py`;
 - OpenAI boundary: создание клиента, классификация безопасных ошибок и проверка модели в `app/openai_client.py`;
-- runtime CLI: health, API-check и idle run-loop в `app/main.py`;
+- runtime CLI: health, API-check, `demo-edit`, `demo-stats` и idle run-loop в `app/main.py`;
+- demo policy: quota, TTL, idempotency, concurrency, daily budgets и unlock guards в `app/demo_service.py`;
+- persistence: SQLite schema/transactions/recovery в `app/database.py`;
+- image boundary: OpenAI/fake providers в `app/image_provider.py`;
+- private storage: `source/`, `originals/`, `previews/`, `metadata.json` в `app/storage.py`;
+- preview protection: масштабируемый watermark в `app/watermark.py`;
+- MAX UX boundary: меню, consent gate и action mapping в `app/max_adapter.py`, без неподтверждённого сетевого transport;
 - filesystem state: локальные каталоги `data`, `logs`, `temp`;
 - operations: скрипты в `scripts/` и GitHub Actions.
 
-## Целевая схема MVP
+## Demo workflow
 
-Один Python-процесс принимает события мессенджера, валидирует фото и команду, создаёт локальную операцию, вызывает OpenAI image API, сохраняет минимальные метаданные и отправляет результат. Для малой нагрузки достаточно SQLite и последовательной/ограниченно-параллельной обработки внутри одного приложения.
+`legal consent → source signature/size validation → user/session transaction → quota/budget/concurrency guard → idempotent attempt → OpenAI images.edit → private original → reduced watermark preview → delivery → single transactional quota increment`.
+
+При network/provider/timeout/storage/policy/delivery failure попытка получает отдельный статус, но `successful_generations` не меняется. После перезапуска незавершённые `pending/processing` переводятся в `failed_technical`.
+
+Файлы располагаются в `data/users/<opaque-user-id>/demo_sessions/<session-id>/{source,originals,previews}`. Platform ID, username или телефон не используются в путях. Original не входит в `DemoGenerationResult` и может быть получен только через paid payment intent.
 
 Границы модулей: transport adapter, use-case/service, OpenAI image gateway, repository для операций/баланса, storage policy, observability. Внешние интеграции должны быть заменяемыми и покрываться тестами через fake-клиенты.
 
+## Cost telemetry
+
+Для каждой попытки сохраняются provider/model, requested size/quality/format, duration, status, request id, provider usage metadata, input/output bytes, retries, correction и technical-refund flags. Если provider не возвращает достаточных данных для точной стоимости, `estimated_cost` равен конфигурируемому budget reserve:
+
+`estimated demo spend = successful attempts × DEMO_ESTIMATED_COST_RUB_PER_GENERATION`.
+
+Это консервативный operational guard, а не бухгалтерская стоимость. После получения provider usage формула должна учитывать text input, high-fidelity image input и image output, а затем проверяться по фактическому счёту.
+
 ## Безопасность и эксплуатация
 
-Секреты поступают только из окружения; логи редактируют известные значения ключей; пользовательский ввод и файлы имеют ограничения; временные файлы удаляются; операции получают correlation ID без персональных данных. Сервис не запускается от root. Systemd появится при реализации реального обработчика.
+Секреты поступают только из окружения; логи редактируют известные значения ключей; пользовательский ввод и файлы имеют ограничения; операции получают UUID без персональных данных. Private directories/files закрыты от других POSIX-пользователей. Сервис не запускается от root. Systemd появится при реализации реального обработчика.
 
 ## Ограничения масштаба
 
