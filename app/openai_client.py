@@ -52,7 +52,11 @@ def create_openai_client(settings: Settings) -> OpenAI:
         raise OpenAIConfigurationError(
             "OPENAI_API_KEY is not configured. Add it to the local .env file."
         )
-    return OpenAI(api_key=settings.openai_api_key)
+    return OpenAI(
+        api_key=settings.openai_api_key,
+        timeout=settings.generation_timeout_seconds,
+        max_retries=2,
+    )
 
 
 def check_openai_connection(client: Any, image_model: str) -> None:

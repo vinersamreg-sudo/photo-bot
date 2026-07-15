@@ -21,6 +21,23 @@ class Settings:
     openai_image_model: str
     app_env: str
     base_dir: Path
+    demo_max_successful_generations: int = 5
+    demo_session_ttl_minutes: int = 60
+    demo_watermark_text: str = "ОБРАЗЕЦ"
+    demo_max_dimension: int = 1024
+    demo_output_format: str = "JPEG"
+    demo_jpeg_quality: int = 82
+    demo_min_request_interval_seconds: int = 15
+    demo_max_attempts_per_hour: int = 10
+    demo_max_concurrent_per_user: int = 1
+    global_max_concurrent_generations: int = 2
+    demo_daily_cost_limit_rub: float = 1000.0
+    demo_daily_generation_limit: int = 100
+    demo_estimated_cost_rub_per_generation: float = 10.0
+    max_source_file_size_mb: int = 15
+    max_prompt_length: int = 1500
+    generation_timeout_seconds: int = 300
+    unlock_original_price_rub: int = 149
 
     @property
     def data_dir(self) -> Path:
@@ -38,6 +55,30 @@ class Settings:
     def log_file(self) -> Path:
         return self.logs_dir / "app.log"
 
+    @property
+    def database_path(self) -> Path:
+        return self.data_dir / "photo_bot.sqlite3"
+
+    @property
+    def users_dir(self) -> Path:
+        return self.data_dir / "users"
+
+
+def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
+    raw = values.get(name, "").strip()
+    value = int(raw) if raw else default
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _positive_float(values: Mapping[str, str], name: str, default: float) -> float:
+    raw = values.get(name, "").strip()
+    value = float(raw) if raw else default
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
 
 def load_settings(
     env_file: Optional[Path] = None,
@@ -54,9 +95,30 @@ def load_settings(
     base_dir_value = values.get("BASE_DIR", "").strip()
     base_dir = Path(base_dir_value).expanduser() if base_dir_value else PROJECT_ROOT
 
+    output_format = values.get("DEMO_OUTPUT_FORMAT", "JPEG").strip().upper() or "JPEG"
+    if output_format not in {"JPEG", "WEBP"}:
+        raise ValueError("DEMO_OUTPUT_FORMAT must be JPEG or WEBP")
+
     return Settings(
         openai_api_key=values.get("OPENAI_API_KEY", "").strip(),
         openai_image_model=values.get("OPENAI_IMAGE_MODEL", "").strip(),
         app_env=values.get("APP_ENV", "production").strip() or "production",
         base_dir=base_dir.resolve(),
+        demo_max_successful_generations=_positive_int(values, "DEMO_MAX_SUCCESSFUL_GENERATIONS", 5),
+        demo_session_ttl_minutes=_positive_int(values, "DEMO_SESSION_TTL_MINUTES", 60),
+        demo_watermark_text=values.get("DEMO_WATERMARK_TEXT", "ОБРАЗЕЦ").strip() or "ОБРАЗЕЦ",
+        demo_max_dimension=_positive_int(values, "DEMO_MAX_DIMENSION", 1024),
+        demo_output_format=output_format,
+        demo_jpeg_quality=_positive_int(values, "DEMO_JPEG_QUALITY", 82),
+        demo_min_request_interval_seconds=_positive_int(values, "DEMO_MIN_REQUEST_INTERVAL_SECONDS", 15),
+        demo_max_attempts_per_hour=_positive_int(values, "DEMO_MAX_ATTEMPTS_PER_HOUR", 10),
+        demo_max_concurrent_per_user=_positive_int(values, "DEMO_MAX_CONCURRENT_PER_USER", 1),
+        global_max_concurrent_generations=_positive_int(values, "GLOBAL_MAX_CONCURRENT_GENERATIONS", 2),
+        demo_daily_cost_limit_rub=_positive_float(values, "DEMO_DAILY_COST_LIMIT_RUB", 1000.0),
+        demo_daily_generation_limit=_positive_int(values, "DEMO_DAILY_GENERATION_LIMIT", 100),
+        demo_estimated_cost_rub_per_generation=_positive_float(values, "DEMO_ESTIMATED_COST_RUB_PER_GENERATION", 10.0),
+        max_source_file_size_mb=_positive_int(values, "MAX_SOURCE_FILE_SIZE_MB", 15),
+        max_prompt_length=_positive_int(values, "MAX_PROMPT_LENGTH", 1500),
+        generation_timeout_seconds=_positive_int(values, "GENERATION_TIMEOUT_SECONDS", 300),
+        unlock_original_price_rub=_positive_int(values, "UNLOCK_ORIGINAL_PRICE_RUB", 149),
     )

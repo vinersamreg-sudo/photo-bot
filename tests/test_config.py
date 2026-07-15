@@ -19,6 +19,9 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.openai_image_model, "test-image-model")
         self.assertEqual(settings.app_env, "test")
         self.assertEqual(settings.base_dir, PROJECT_ROOT)
+        self.assertEqual(settings.demo_max_successful_generations, 5)
+        self.assertEqual(settings.demo_watermark_text, "ОБРАЗЕЦ")
+        self.assertEqual(settings.global_max_concurrent_generations, 2)
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]
