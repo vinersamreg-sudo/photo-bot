@@ -1,16 +1,47 @@
-"""Future image-processing service boundary.
-
-Image editing is intentionally not implemented at the infrastructure-bootstrap
-stage. This module only reserves a stable place for that functionality.
-"""
+"""Composition root for the demo image workflow."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any, Optional
+
+from app.config import Settings
+from app.database import Database
+from app.demo_service import DemoService, DeliverPreview
+from app.image_provider import FakeImageProvider, OpenAIImageProvider
+from app.openai_client import create_openai_client
+from app.storage import PrivateStorage
+from app.watermark import WatermarkService
 
 
-class ImageService:
-    """Placeholder service with no commercial workflow or fake processing."""
-
-    def __init__(self, temp_dir: Path) -> None:
-        self.temp_dir = temp_dir
+def build_demo_service(
+    settings: Settings,
+    provider_name: str = "openai",
+    deliver_preview: Optional[DeliverPreview] = None,
+    client: Any = None,
+) -> DemoService:
+    if provider_name == "fake":
+        provider = FakeImageProvider()
+    elif provider_name == "openai":
+        provider = OpenAIImageProvider(
+            client or create_openai_client(settings),
+            settings.openai_image_model,
+            quality="low",
+        )
+    else:
+        raise ValueError("provider must be 'openai' or 'fake'")
+    return DemoService(
+        settings,
+        Database(settings.database_path),
+        PrivateStorage(
+            settings.users_dir,
+            settings.max_source_file_size_mb * 1024 * 1024,
+        ),
+        WatermarkService(
+            settings.demo_watermark_text,
+            settings.demo_max_dimension,
+            settings.demo_output_format,
+            settings.demo_jpeg_quality,
+        ),
+        provider,
+        deliver_preview=deliver_preview,
+    )

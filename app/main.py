@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -11,6 +12,7 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import Iterable, List
+from uuid import uuid4
 
 from app.config import Settings, load_settings
 from app.openai_client import (
@@ -19,6 +21,10 @@ from app.openai_client import (
     check_openai_connection,
     create_openai_client,
 )
+from app.database import Database
+from app.domain import DemoError
+from app.image_service import build_demo_service
+from app.stats import collect_demo_stats
 
 
 LOGGER = logging.getLogger(__name__)
@@ -142,9 +148,56 @@ def run_process(settings: Settings) -> int:
     return 0
 
 
+def run_demo_edit(settings: Settings, args: argparse.Namespace) -> int:
+    try:
+        service = build_demo_service(settings, provider_name=args.provider)
+        session = service.start_session("cli", args.user_id, Path(args.image))
+        result = service.generate(
+            session.session_id,
+            args.prompt,
+            args.event_id or f"cli-{uuid4().hex}",
+            scenario_id=args.scenario,
+        )
+    except DemoError as exc:
+        LOGGER.error("Demo request rejected: %s", exc)
+        return 2
+    except Exception:
+        LOGGER.exception("Demo generation failed without exposing provider response data")
+        return 1
+    print(
+        json.dumps(
+            {
+                "status": "succeeded",
+                "session_id": session.session_id,
+                "attempt_id": result.attempt_id,
+                "demo_preview": str(result.preview_path),
+                "remaining_free_corrections": result.remaining_generations,
+                "original_disclosed": False,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def run_demo_stats(settings: Settings) -> int:
+    database = Database(settings.database_path)
+    print(json.dumps(collect_demo_stats(database), ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-bot")
-    parser.add_argument("command", choices=("health", "openai-check", "run"))
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("health", "openai-check", "run", "demo-stats"):
+        subparsers.add_parser(command)
+    demo = subparsers.add_parser("demo-edit")
+    demo.add_argument("--user-id", required=True)
+    demo.add_argument("--image", required=True)
+    demo.add_argument("--prompt", required=True)
+    demo.add_argument("--scenario")
+    demo.add_argument("--event-id")
+    demo.add_argument("--provider", choices=("openai", "fake"), default="openai")
     return parser
 
 
@@ -156,6 +209,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_health(settings)
     if args.command == "openai-check":
         return run_openai_check(settings)
+    if args.command == "demo-edit":
+        return run_demo_edit(settings, args)
+    if args.command == "demo-stats":
+        return run_demo_stats(settings)
     return run_process(settings)
 
 
