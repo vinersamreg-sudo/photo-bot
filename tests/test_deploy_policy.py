@@ -30,6 +30,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn('cd "$ROOT"', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip install', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip check', self.workflow)
+        self.assertIn("Database(load_settings().database_path)", self.workflow)
         self.assertIn('"$ROOT"/scripts/healthcheck.sh', self.workflow)
 
     def test_verifies_log_safety_and_tripday_isolation(self) -> None:

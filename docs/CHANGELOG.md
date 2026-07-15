@@ -7,6 +7,7 @@
 - добавлены MAX HTTP/media/callback client, SQLite state/legal/idempotency migration v3 и single-instance polling smoke runner;
 - реализованы `/start` → legal → custom/upload → confirmation → preview → correction/repeat → works → delete;
 - original не отправляется, quota меняется только после успешного preview delivery, delete немедленно очищает файлы;
+- deploy применяет SQLite migrations до выбора runtime mode, поэтому disabled transport не оставляет production schema устаревшей;
 - live MAX smoke, Webhook, systemd install и payment не заявляются готовыми из-за отсутствующих credentials/domain.
 
 ## 2026-07-15 — personal AI studio domain

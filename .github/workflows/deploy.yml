@@ -185,6 +185,7 @@ jobs:
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
             "$ROOT"/venv/bin/python --version
             "$ROOT"/venv/bin/pip check
+            "$ROOT"/venv/bin/python -c 'from app.config import load_settings; from app.database import Database; Database(load_settings().database_path)'
             "$ROOT"/venv/bin/python -m unittest discover -v
             "$ROOT"/scripts/healthcheck.sh
             test "$(stat -c '%a' "$ROOT/.env")" = "600"
