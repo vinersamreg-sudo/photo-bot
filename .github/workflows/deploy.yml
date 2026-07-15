@@ -221,6 +221,10 @@ jobs:
             if [ -f "$ROOT/data/photo_bot.sqlite3" ]; then
               test "$(stat -c '%a' "$ROOT/data/photo_bot.sqlite3")" = "600"
             fi
+            if [ -f "$ROOT/logs/app.log" ]; then
+              chmod 600 "$ROOT/logs/app.log"
+              test "$(stat -c '%a' "$ROOT/logs/app.log")" = "600"
+            fi
             for path in app tests scripts docs ops requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
               test -e "$ROOT/$path"
             done

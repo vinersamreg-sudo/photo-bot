@@ -8,6 +8,7 @@
 - для `platform-api2.max.ru` добавлен официальный `Russian Trusted Root CA` из `gu-st.ru`; он применяется только к MAX API client с полной TLS-проверкой, DER SHA-256 закреплён тестом;
 - production healthcheck проверяет SQLite, свежесть связи с MAX, active systemd MainPID, команду процесса и удерживаемый single-instance lock;
 - deploy передаёт MAX token через stdin, устанавливает hardened systemd unit, проверяет один PID, duplicate start, graceful restart и отсутствие значений секретов в runtime log;
+- существующий runtime log приведён к правам `600`; новые файлы создаются с systemd `UMask=0077`;
 - прямой background-start выведен из эксплуатации; публичный webhook, пользовательский `/start`, изображения, callbacks, оплата и сайт остаются вне этапа.
 
 ## 2026-07-15 — Pixora AI product landing

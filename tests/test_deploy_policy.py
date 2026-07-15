@@ -37,6 +37,7 @@ class DeployPolicyTests(TestCase):
 
     def test_verifies_log_safety_and_tripday_isolation(self) -> None:
         self.assertIn("scripts.check_runtime_secrets", self.workflow)
+        self.assertIn('chmod 600 "$ROOT/logs/app.log"', self.workflow)
         self.assertIn("MAX_BOT_TOKEN", self.workflow)
         self.assertNotIn("TripDay", self.workflow)
 
