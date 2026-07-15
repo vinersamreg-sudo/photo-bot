@@ -6,7 +6,7 @@ Hetzner, SSH hardening, UFW/fail2ban, отдельный deploy user, Python 3.1
 
 ## Этап 1 — технический image vertical slice
 
-Выполнено: fake/OpenAI image-edit gateway, проверка сигнатуры и размера изображения, prompt/timeout limits, приватное filesystem storage, watermark preview, SQLite и CLI `demo-edit`/`demo-stats`. Осталось измерить production cost/latency на синтетическом smoke и подтвердить качество сохранения личности.
+Выполнено: fake/OpenAI image-edit gateway, проверка сигнатуры и размера изображения, prompt/timeout limits, приватное filesystem storage, watermark preview, SQLite и CLI `demo-edit`/`demo-stats`. Один production smoke на синтетическом портрете подтвердил HTTP 200, latency около 33 секунд, сохранение личности и корректный watermark. Осталось накопить выборку и сверить provider usage с фактическим биллингом.
 
 ## Этап 2 — пользовательский канал (частично)
 

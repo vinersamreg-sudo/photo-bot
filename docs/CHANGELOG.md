@@ -8,6 +8,7 @@
 - добавлены private filesystem storage, кириллический watermark, OpenAI/fake provider и cost telemetry;
 - добавлены CLI `demo-edit`/`demo-stats` и транспорт-независимый MAX UX adapter;
 - реальный MAX transport, эквайринг и юридическая экспертиза остаются незавершёнными; публичный бренд не утверждён.
+- один ограниченный production smoke на синтетическом портрете успешно прошёл через тот же CLI/OpenAI provider: original не раскрыт, preview защищён watermark, двойного списания квоты нет.
 
 ## 2026-07-15 — MAX competitor mystery shopping
 

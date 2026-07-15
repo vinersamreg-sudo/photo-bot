@@ -31,6 +31,8 @@
 - добавлены OpenAI/fake image-edit providers, CLI `demo-edit`, административный `demo-stats` и cost/latency/error telemetry;
 - подготовлен idempotent `unlock_original`: pending intent не раскрывает original, paid status открывает конкретный файл;
 - реализован транспорт-независимый MAX adapter с legal gate, меню, каталогом, correction/repeat/delete/unlock actions.
+- production smoke 15.07.2026 через CLI и реальный `gpt-image-2 images.edit` на синтетическом портрете получил HTTP 200 примерно за 33 секунды; создан 1024×1024 preview 134 KB с читаемым кириллическим watermark, original 1.59 MB пользователю не раскрыт, квота уменьшилась ровно с 5 до 4;
+- после smoke production idle-процесс перезапущен на актуальном коде, log secret scan чистый.
 
 ## Не реализовано
 
@@ -39,7 +41,7 @@
 ## Известные ограничения
 
 - MAX UX/domain adapter реализован, но сетевой transport требует подтверждённого API/event contract и credentials;
-- резервная стоимость `DEMO_ESTIMATED_COST_RUB_PER_GENERATION` нужна только для budget guard; тарифы требуют измерения фактической all-in себестоимости;
+- резервная стоимость smoke записана как 10 ₽ через `DEMO_ESTIMATED_COST_RUB_PER_GENERATION`; API не вернул готовую сумму в валюте, поэтому тарифы всё ещё требуют сверки token usage с фактическим счётом;
 - payment confirmation пока является внутренней границей без реального провайдера и не должен вызываться из публичного transport;
 - юридические тексты являются техническим draft и требуют отдельной экспертизы;
 - Hetzner Cloud Firewall не настроен; внешний доступ сейчас ограничивает UFW.
