@@ -155,6 +155,20 @@ class MaxApplication:
 
     def _callback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         action = event.callback_payload or ""
+        if action == "legal:offer":
+            self.transport.send_message(
+                event.user_id,
+                "Оферта (черновик): сервис предоставляет демонстрационную обработку фото. "
+                "Оплата и выдача оригинала пока не подключены.",
+            )
+            return
+        if action == "legal:privacy":
+            self.transport.send_message(
+                event.user_id,
+                "Обработка данных (черновик): фото передаётся внешнему AI-провайдеру "
+                "для выполнения выбранной обработки и хранится по правилам сервиса.",
+            )
+            return
         if action == "legal:accept_all":
             self.store.accept_required_documents(event.user_id)
             self.adapter.record_consent(
@@ -343,7 +357,7 @@ class MaxApplication:
                 parent_version_id=dialog.current_version_id if (correction or repeat) else None,
                 delivery_override=deliver,
             )
-        except DemoError:
+        except Exception:
             recovery_state = "result_ready" if dialog.current_version_id else "confirmation"
             self.store.transition(
                 event.user_id, recovery_state, event_key=event.event_key,

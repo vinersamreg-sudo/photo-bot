@@ -7,14 +7,14 @@
 3. Просмотреть diff и убедиться, что TripDay и секреты не затронуты.
 4. Commit и push в `main` запускают workflow `Test and deploy`.
 5. Job `test` использует Python 3.12. Job `deploy` работает только после него и через Environment `production`.
-6. rsync обновляет `/opt/photo-bot`, сохраняя `.env`, `venv`, `data`, `logs`, `temp`.
-7. На сервере повторяются тесты и healthcheck, фиксируется SHA, а при наличии `OPENAI_API_KEY` проверяются авторизация и модель.
+6. Перед rsync безопасно останавливается только PID `photo-bot`; rsync обновляет `/opt/photo-bot`, сохраняя `.env`, `venv`, `data`, `logs`, `temp`.
+7. На сервере повторяются тесты и healthcheck, фиксируется SHA, а при наличии `OPENAI_API_KEY` проверяются авторизация и модель. Runtime запускается только при `MAX_TRANSPORT_MODE=polling` и непустом token; disabled mode не оставляет idle-процесс.
 
 Ручной повтор: GitHub Actions → `Test and deploy` → `Run workflow`.
 
 ## Секреты
 
-Инфраструктурные секреты: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`. При ротации создаётся отдельный ключ, публичная часть добавляется `photoapp`, приватная — только в GitHub Environment, временная локальная копия удаляется. `OPENAI_API_KEY` меняется тем же способом и никогда не выводится.
+Инфраструктурные секреты: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`. API secrets: `OPENAI_API_KEY`; после подтверждения бота — `MAX_BOT_TOKEN`; для Webhook — `MAX_WEBHOOK_SECRET`. Они передаются deploy через stdin, никогда не являются shell argument и не выводятся. Сейчас MAX secrets не созданы.
 
 ## Откат
 
@@ -26,4 +26,4 @@
 
 ## Проверка выпуска
 
-Проверить зелёный Actions run, соответствие `data/deployed_commit.txt` SHA коммита, healthcheck, отсутствие секрета в логах и, когда ключ настроен, успешный `openai-check`.
+Проверить зелёный Actions run, соответствие `data/deployed_commit.txt` SHA коммита, healthcheck, отсутствие секретов в логах и, когда ключи настроены, `openai-check`/`max-check`. Systemd template устанавливает администратор из `ops/photo-bot.service` только после готовности transport mode; unit работает под `photoapp`, читает `/opt/photo-bot/.env`, имеет restart-on-failure и graceful SIGTERM.

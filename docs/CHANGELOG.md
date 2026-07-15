@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-15 — MAX transport and fake end-to-end slice
+
+- аудит не обнаружил отдельного старого MAX-кода/репозитория или production token;
+- зафиксирован официальный `platform-api2.max.ru` contract и решение о thin transport в одном Python-приложении;
+- добавлены MAX HTTP/media/callback client, SQLite state/legal/idempotency migration v3 и single-instance polling smoke runner;
+- реализованы `/start` → legal → custom/upload → confirmation → preview → correction/repeat → works → delete;
+- original не отправляется, quota меняется только после успешного preview delivery, delete немедленно очищает файлы;
+- live MAX smoke, Webhook, systemd install и payment не заявляются готовыми из-за отсутствующих credentials/domain.
+
 ## 2026-07-15 — personal AI studio domain
 
 - добавлены одна Gallery на пользователя, работы, неизменяемые версии и version-specific originals;

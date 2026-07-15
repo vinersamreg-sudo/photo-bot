@@ -10,7 +10,7 @@ Hetzner, SSH hardening, UFW/fail2ban, отдельный deploy user, Python 3.1
 
 ## Этап 2 — пользовательский канал (частично)
 
-Реализован транспорт-независимый MAX adapter: согласия, «Своя идея» первой, компактное меню, каталог сценариев, upload одного source, demo preview, remaining count, correction/repeat/delete и unlock placeholder. Остались подтверждённый MAX API/event contract, live transport, сохранение состояния диалога, systemd, restart policy и operational check реального handler.
+Реализованы проверенный официальный MAX API contract, thin HTTP transport, SQLite dialog state, legal versions, idempotency, single-instance polling smoke runner и полный fake vertical slice до Gallery/delete. Остались `MAX_BOT_TOKEN`, подтверждение реального bot/user, живой smoke и production Webhook HTTPS:443. Systemd template готов, но не установлен до появления рабочего transport mode.
 
 ## Этап 3 — операции и монетизация (частично)
 
@@ -29,3 +29,7 @@ SQLite, идемпотентность, technical non-debit, cost telemetry, cor
 Реализованы Gallery, работы, версии, version-specific originals, favorites/current best, collections, tags, preferences, search, recent/continue, trash, retention cleanup и совместимый backfill. Следующий шаг — подключить эти операции к подтверждённому live MAX transport и платёжному UX, затем реализовать простые экраны Gallery.
 
 Before/after slider, экспорт и расширенный визуальный поиск не входят в текущий этап. SQLite FTS, object storage и отдельные workers откладываются до подтверждения необходимости метриками. До beta также нужны расписание cleanup и backup/restore drill.
+
+## Следующий контрольный шаг — live MAX smoke
+
+Владелец подтверждает/создаёт тестового бота, безопасно добавляет `MAX_BOT_TOKEN` в GitHub Environment и сообщает username бота. После `max-check` временно запускается single-instance polling для одного синтетического сценария. Не более двух OpenAI edits, без оплаты, personal photo и original delivery. Затем polling останавливается; production включается только после Webhook/domain/TLS решения.

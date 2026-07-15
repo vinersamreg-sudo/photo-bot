@@ -10,13 +10,14 @@ CI запускает unit-тесты, healthcheck, `pip check` и secret scan. 
 
 - configuration: environment variables и `.env` через `app/config.py`;
 - OpenAI boundary: создание клиента, классификация безопасных ошибок и проверка модели в `app/openai_client.py`;
-- runtime CLI: health, API-check, `demo-edit`, `demo-stats` и idle run-loop в `app/main.py`;
+- runtime CLI: health, OpenAI/MAX checks, `demo-edit`, `demo-stats` и MAX runtime selection в `app/main.py`;
 - demo policy: quota, TTL, idempotency, concurrency, daily budgets и unlock guards в `app/demo_service.py`;
 - persistence: SQLite schema/transactions/recovery в `app/database.py`;
 - image boundary: OpenAI/fake providers в `app/image_provider.py`;
 - private storage: `source/`, `originals/`, `previews/`, `metadata.json` в `app/storage.py`;
 - preview protection: масштабируемый watermark в `app/watermark.py`;
-- MAX UX boundary: меню, consent gate и action mapping в `app/max_adapter.py`, без неподтверждённого сетевого transport;
+- MAX HTTPS boundary: официальный API client/Update parser/media и polling lock в `app/max_transport.py`;
+- MAX application: durable dialog orchestration в `app/max_application.py`, state/legal/idempotency в `app/max_conversation.py`, runtime composition в `app/max_runtime.py`;
 - filesystem state: локальные каталоги `data`, `logs`, `temp`;
 - operations: скрипты в `scripts/` и GitHub Actions.
 
@@ -55,3 +56,13 @@ CI запускает unit-тесты, healthcheck, `pip check` и secret scan. 
 Migration v2 добавляет `galleries`, `gallery_items`, `gallery_versions`, `collections`, `tags`, `gallery_item_tags`, `user_preferences` и `schema_migrations`. Backfill существующих demo-данных не перемещает файлы. Новые независимые работы используют `data/users/<opaque-user-id>/gallery/<item-id>/{source,versions,metadata}`, а legacy demo layout остаётся читаемым.
 
 Удаление имеет две стадии: soft delete задаёт `deleted_at`/`purge_after`; отдельный `gallery-cleanup` сначала показывает кандидатов, а с `--execute` удаляет приватное дерево и связанные строки. Поиск намеренно использует индексированные фильтры SQLite и `LIKE`; FTS и object storage отложены до измеримого объёма.
+
+## MAX transport
+
+`MAX Update → parse_update → processed-event guard → MaxApplication → MaxDemoAdapter → DemoService/GalleryService → MaxApiClient response`.
+
+Transport не содержит quota, watermark, generation, payment или retention rules. `message.body.mid` дедуплицирует message, `callback.callback_id` — callback. Dialog state и Long Polling marker находятся в SQLite. Callback payload содержит только короткое действие и при необходимости opaque GalleryItem id.
+
+API base URL — `platform-api2.max.ru`, token передаётся заголовком Authorization. Входной image скачивается по проверенному HTTPS media URL во временный файл, валидируется Pillow/domain storage и удаляется из temp. Preview получает upload token через `/uploads?type=image` и отправляется `/messages`; original не передаётся transport-слою для отправки.
+
+Long Polling имеет advisory file lock и предназначен только для закрытой проверки. Целевая production topology: MAX Webhook → TLS termination на 443 → быстрый authenticated accept → durable SQLite event → application worker. Endpoint ещё не реализован, поскольку отсутствуют домен/TLS/secret и публичный порт; синхронно держать Webhook во время OpenAI edit нельзя из-за требования ответа MAX в пределах 30 секунд.

@@ -34,13 +34,27 @@
 - production smoke 15.07.2026 через CLI и реальный `gpt-image-2 images.edit` на синтетическом портрете получил HTTP 200 примерно за 33 секунды; создан 1024×1024 preview 134 KB с читаемым кириллическим watermark, original 1.59 MB пользователю не раскрыт, квота уменьшилась ровно с 5 до 4;
 - после smoke production idle-процесс перезапущен на актуальном коде, log secret scan чистый.
 
-## Не реализовано
+## MAX vertical slice — реализовано в коде
 
-Реальный MAX polling/webhook transport, production event handler, эквайринг/callback verification, платное продолжение, retention cleanup, systemd unit, мониторинг, alerting и backup/restore SQLite.
+- thin HTTP client официального `platform-api2.max.ru`: updates, messages, callbacks, media download/upload, edit/delete;
+- нормализация `bot_started`, `message_created`, `message_callback` и стабильные event keys из `mid`/`callback_id`;
+- SQLite migration v3: 12 состояний диалога, versioned legal acceptances, processed events, durable marker и transitions audit;
+- восстановление `processing` после restart в `confirmation` без расхода quota;
+- `/start`, legal gate, главное меню, «Своя идея», upload, prompt confirmation до OpenAI, processing status и preview-only delivery;
+- correction/repeat той же GalleryItem, unlock placeholder, последние 10 работ, version navigation, favorite/current best;
+- delete confirmation и немедленный физический purge файлов/путей;
+- single-instance polling lock; `run` больше не поддерживает бессмысленный idle loop;
+- systemd hardening template в `ops/photo-bot.service`.
+
+## Не реализовано или не подтверждено live
+
+Фактический MAX bot/token, живое сообщение/image/callback, production Webhook endpoint HTTPS:443, установка systemd unit, эквайринг/callback verification, платное продолжение, monitoring/alerting и backup/restore SQLite. Long Polling реализован только для закрытого smoke и не считается production transport.
 
 ## Известные ограничения
 
-- MAX UX/domain adapter реализован, но сетевой transport требует подтверждённого API/event contract и credentials;
+- официальный контракт проверен, но реальный payload конкретного бота и delivery в клиенте MAX ещё не подтверждены;
+- GitHub Environment и production `.env` не содержат `MAX_BOT_TOKEN`; зарегистрированный бот и тестовый user не подтверждены;
+- текущий VPS принимает только SSH; для Webhook нужны домен, TLS, 443 и firewall change;
 - резервная стоимость smoke записана как 10 ₽ через `DEMO_ESTIMATED_COST_RUB_PER_GENERATION`; API не вернул готовую сумму в валюте, поэтому тарифы всё ещё требуют сверки token usage с фактическим счётом;
 - payment confirmation пока является внутренней границей без реального провайдера и не должен вызываться из публичного transport;
 - юридические тексты являются техническим draft и требуют отдельной экспертизы;
@@ -56,4 +70,4 @@
 
 Gallery API проверяет владельца и не раскрывает original заблокированной версии. MAX adapter содержит только контракт меню «Мои работы / Избранное / Последние / Коллекции / Корзина».
 
-Не реализованы реальные экраны и маршрутизация Gallery в MAX, before/after slider, интерактивный поиск, экспорт и scheduler cleanup. Поиск пока основан на SQLite `LIKE`, хранение — на приватном filesystem; backfill сохраняет legacy demo paths.
+Минимальные fake-проверенные MAX views Gallery реализованы; реальный клиент MAX ещё не проверен. Не реализованы collections/tags/search UI, before/after slider, экспорт и scheduler cleanup. Поиск пока основан на SQLite `LIKE`, хранение — на приватном filesystem; backfill сохраняет legacy demo paths.

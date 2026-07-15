@@ -1,6 +1,6 @@
 # photo-bot
 
-Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя; публичный бренд пока не утверждён. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. Реальный MAX transport и эквайринг ещё не подключены.
+Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя; публичный бренд пока не утверждён. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. MAX transport реализован и fake-проверен, но live bot/token и эквайринг ещё не подключены.
 
 ## Быстрый старт
 
@@ -44,6 +44,17 @@ python -m app.main gallery-cleanup --execute # физическая очистк
 
 Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `TRASH_RETENTION_DAYS=30`. Реальные MAX-экраны Gallery, before/after slider, интерактивный поиск и экспорт пока не реализованы.
 
+## MAX closed-test transport
+
+Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы `/start`, versioned legal gate, меню, upload, prompt confirmation, processing, watermarked preview, correction/repeat, «Мои работы», favorite и физическое удаление.
+
+```powershell
+python -m app.main max-check
+python -m app.main run
+```
+
+`run` запускает MAX только при `MAX_TRANSPORT_MODE=polling` и настроенном `MAX_BOT_TOKEN`. Polling разрешён исключительно для разработки/закрытого smoke. В `disabled` процесс завершается, а `webhook` не запускается до появления HTTPS:443 endpoint. Original не входит ни в один transport response.
+
 ## Production
 
 - VPS: Hetzner `ai-prod-01`, Ubuntu 24.04 LTS, Python 3.12;
@@ -63,7 +74,7 @@ Push в `main` запускает тесты и деплой через GitHub A
 /opt/photo-bot/scripts/stop_bot.sh
 ```
 
-Процесс `run` пока является signal-aware каркасом без MAX polling/webhook, поэтому постоянно запускать его до появления подтверждённого transport handler не требуется.
+Systemd hardening template находится в `ops/photo-bot.service`, но не устанавливается до получения MAX credentials и рабочего mode. Официальный production-вариант — Webhook; текущий VPS пока слушает только SSH.
 
 ## Документация
 

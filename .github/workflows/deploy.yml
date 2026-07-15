@@ -18,6 +18,7 @@ jobs:
     environment: production
     env:
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
+      MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -53,6 +54,7 @@ jobs:
     env:
       DEPLOY_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' }}
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
+      MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
     steps:
       - name: Require Hetzner deployment configuration
         if: env.DEPLOY_CONFIGURED != 'true'
@@ -79,6 +81,10 @@ jobs:
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" '
+            if [ -f /opt/photo-bot/data/photo-bot.pid ]; then
+              /opt/photo-bot/scripts/stop_bot.sh
+            fi'
           rsync -az --delete \
             --exclude='.git/' \
             --exclude='.env' \
@@ -104,6 +110,25 @@ jobs:
             TMP="$ROOT/.env.tmp"
             grep -v "^OPENAI_API_KEY=" "$ROOT/.env" > "$TMP" || true
             printf "%s\n" "OPENAI_API_KEY=$KEY" >> "$TMP"
+            chmod 600 "$TMP"
+            mv "$TMP" "$ROOT/.env"
+            unset KEY'
+      - name: Configure MAX credential
+        if: env.DEPLOY_CONFIGURED == 'true' && env.MAX_KEY_CONFIGURED == 'true'
+        env:
+          MAX_BOT_TOKEN: ${{ secrets.MAX_BOT_TOKEN }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          printf '%s' "$MAX_BOT_TOKEN" | \
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
+            ROOT=/opt/photo-bot
+            KEY=$(cat)
+            test -n "$KEY"
+            TMP="$ROOT/.env.tmp"
+            grep -v "^MAX_BOT_TOKEN=" "$ROOT/.env" > "$TMP" || true
+            printf "%s\n" "MAX_BOT_TOKEN=$KEY" >> "$TMP"
             chmod 600 "$TMP"
             mv "$TMP" "$ROOT/.env"
             unset KEY'
@@ -150,6 +175,11 @@ jobs:
             ensure_env DEMO_RETENTION_DAYS 30
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
+            ensure_env MAX_BOT_TOKEN ''
+            ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
+            ensure_env MAX_TRANSPORT_MODE disabled
+            ensure_env MAX_POLL_TIMEOUT_SECONDS 30
+            ensure_env MAX_MEDIA_HOST_SUFFIXES .max.ru,.oneme.ru,.okcdn.ru
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
@@ -168,10 +198,10 @@ jobs:
             if [ -f "$ROOT/data/photo_bot.sqlite3" ]; then
               test "$(stat -c '%a' "$ROOT/data/photo_bot.sqlite3")" = "600"
             fi
-            for path in app tests scripts docs requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
+            for path in app tests scripts docs ops requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
               test -e "$ROOT/$path"
             done
-            if [ -f "$ROOT/logs/app.log" ] && grep -Eq '(OPENAI_API_KEY|sk-[A-Za-z0-9_-]{20,})' "$ROOT/logs/app.log"; then
+            if [ -f "$ROOT/logs/app.log" ] && grep -Eq '(OPENAI_API_KEY|MAX_BOT_TOKEN|sk-[A-Za-z0-9_-]{20,})' "$ROOT/logs/app.log"; then
               echo "Potential secret material detected in app.log" >&2
               exit 1
             fi
@@ -181,5 +211,12 @@ jobs:
               "$ROOT"/venv/bin/python -m app.main openai-check
             else
               echo "OPENAI_API_KEY is not configured; external API check skipped"
+            fi
+            MODE=$(sed -n 's/^MAX_TRANSPORT_MODE=//p' "$ROOT/.env" | tail -n 1)
+            if [ "$MODE" = polling ] && grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
+              "$ROOT"/scripts/start_bot.sh
+            else
+              rm -f "$ROOT/data/photo-bot.pid"
+              echo "MAX runtime not started (mode=$MODE)"
             fi
           REMOTE

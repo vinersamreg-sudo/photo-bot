@@ -4,6 +4,7 @@ from unittest import TestCase
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
+SERVICE = ROOT / "ops" / "photo-bot.service"
 
 
 class DeployPolicyTests(TestCase):
@@ -33,6 +34,7 @@ class DeployPolicyTests(TestCase):
 
     def test_verifies_log_safety_and_tripday_isolation(self) -> None:
         self.assertIn("Potential secret material detected in app.log", self.workflow)
+        self.assertIn("MAX_BOT_TOKEN", self.workflow)
         self.assertNotIn("TripDay", self.workflow)
 
     def test_uses_python_312_and_scans_for_secrets(self) -> None:
@@ -64,3 +66,21 @@ class DeployPolicyTests(TestCase):
         self.assertIn("secrets.OPENAI_API_KEY", self.workflow)
         self.assertIn('printf \'%s\' "$OPENAI_API_KEY" |', self.workflow)
         self.assertIn("python -m app.main openai-check", self.workflow)
+
+    def test_configures_max_without_exposing_the_token_as_an_argument(self) -> None:
+        self.assertIn("Configure MAX credential", self.workflow)
+        self.assertIn("secrets.MAX_BOT_TOKEN", self.workflow)
+        self.assertIn('printf \'%s\' "$MAX_BOT_TOKEN" |', self.workflow)
+        self.assertIn("ensure_env MAX_TRANSPORT_MODE disabled", self.workflow)
+        self.assertIn("ensure_env MAX_API_BASE_URL https://platform-api2.max.ru", self.workflow)
+        self.assertIn("/opt/photo-bot/scripts/stop_bot.sh", self.workflow)
+        self.assertIn('if [ "$MODE" = polling ]', self.workflow)
+
+    def test_systemd_template_uses_least_privilege_and_restart_safety(self) -> None:
+        service = SERVICE.read_text(encoding="utf-8")
+        self.assertIn("User=photoapp", service)
+        self.assertIn("Group=photoapp", service)
+        self.assertIn("EnvironmentFile=/opt/photo-bot/.env", service)
+        self.assertIn("Restart=on-failure", service)
+        self.assertIn("KillSignal=SIGTERM", service)
+        self.assertIn("NoNewPrivileges=true", service)

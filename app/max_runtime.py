@@ -28,7 +28,7 @@ def build_max_application(
     transport = client or MaxApiClient(
         settings.max_bot_token,
         settings.max_api_base_url,
-        timeout_seconds=settings.generation_timeout_seconds,
+        timeout_seconds=max(30, settings.max_poll_timeout_seconds + 5),
         media_host_suffixes=settings.max_media_host_suffixes,
     )
     demo = build_demo_service(settings, provider_name="openai")

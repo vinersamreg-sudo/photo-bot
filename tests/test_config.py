@@ -25,6 +25,10 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.demo_retention_days, 30)
         self.assertEqual(settings.paid_retention_days, 180)
         self.assertEqual(settings.trash_retention_days, 30)
+        self.assertEqual(settings.max_bot_token, "")
+        self.assertEqual(settings.max_api_base_url, "https://platform-api2.max.ru")
+        self.assertEqual(settings.max_transport_mode, "disabled")
+        self.assertEqual(settings.max_poll_timeout_seconds, 30)
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]

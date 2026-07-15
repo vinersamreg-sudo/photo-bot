@@ -112,6 +112,7 @@ class MaxApiClient:
         timeout_seconds: float = 30,
         media_host_suffixes: Sequence[str] = (".max.ru", ".oneme.ru", ".okcdn.ru"),
         client: Optional[httpx.Client] = None,
+        media_client: Optional[httpx.Client] = None,
     ) -> None:
         if not token:
             raise MaxTransportError("MAX_BOT_TOKEN is not configured")
@@ -124,9 +125,13 @@ class MaxApiClient:
             headers={"Authorization": token, "User-Agent": "photo-bot/1"},
             timeout=timeout_seconds,
         )
+        self.media_client = media_client or httpx.Client(timeout=timeout_seconds)
+        self._owns_media_client = media_client is None
 
     def close(self) -> None:
         self.client.close()
+        if self._owns_media_client:
+            self.media_client.close()
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:
@@ -157,11 +162,12 @@ class MaxApiClient:
         timeout: int = 30,
         types: Iterable[str] = ("bot_started", "message_created", "message_callback"),
     ) -> tuple[list[dict[str, Any]], Optional[int]]:
-        params: list[tuple[str, Any]] = [("timeout", timeout)]
+        params: list[tuple[str, Any]] = [
+            ("timeout", timeout),
+            ("types", ",".join(types)),
+        ]
         if marker is not None:
             params.append(("marker", marker))
-        for event_type in types:
-            params.append(("types", event_type))
         data = self._request("GET", "/updates", params=params)
         updates = data.get("updates") or []
         if not isinstance(updates, list):
@@ -238,7 +244,7 @@ class MaxApiClient:
         temporary = destination.with_suffix(destination.suffix + ".part")
         total = 0
         try:
-            with httpx.stream("GET", url, timeout=self.timeout_seconds) as response:
+            with self.media_client.stream("GET", url) as response:
                 if response.status_code >= 400:
                     raise MaxTransportError(f"MAX media download returned HTTP {response.status_code}")
                 with temporary.open("wb") as output:
@@ -266,10 +272,9 @@ class MaxApiClient:
         self._validate_media_url(url)
         try:
             with image.open("rb") as content:
-                response = httpx.post(
+                response = self.media_client.post(
                     url,
                     files={"data": (image.name, content, "application/octet-stream")},
-                    timeout=self.timeout_seconds,
                 )
         except httpx.HTTPError as exc:
             raise MaxTransportError(f"MAX upload failed ({type(exc).__name__})") from exc
