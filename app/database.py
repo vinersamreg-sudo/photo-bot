@@ -78,6 +78,17 @@ CREATE TABLE IF NOT EXISTS payment_intents (
     confirmed_at TEXT,
     UNIQUE(attempt_id)
 );
+CREATE TABLE IF NOT EXISTS legal_consents (
+    platform TEXT NOT NULL,
+    platform_user_id TEXT NOT NULL,
+    offer_accepted INTEGER NOT NULL,
+    personal_data_accepted INTEGER NOT NULL,
+    image_rights_confirmed INTEGER NOT NULL,
+    external_ai_acknowledged INTEGER NOT NULL,
+    appearance_change_acknowledged INTEGER NOT NULL,
+    accepted_at TEXT NOT NULL,
+    PRIMARY KEY(platform, platform_user_id)
+);
 """
 
 

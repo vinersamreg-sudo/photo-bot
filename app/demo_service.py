@@ -156,6 +156,7 @@ class DemoService:
         idempotency_key: str,
         scenario_id: Optional[str] = None,
         correction: bool = False,
+        delivery_override: Optional[DeliverPreview] = None,
     ) -> DemoGenerationResult:
         clean_prompt = prompt.strip()
         if not clean_prompt or len(clean_prompt) > self.settings.max_prompt_length:
@@ -273,7 +274,8 @@ class DemoService:
                 provider_result = self.provider.edit(source_path, provider_prompt)
             self.storage.write_private(original_path, provider_result.image_bytes)
             self.watermarker.create_preview(original_path, preview_path, attempt_id)
-            if not self.deliver_preview(preview_path, attempt_id):
+            delivery = delivery_override or self.deliver_preview
+            if not delivery(preview_path, attempt_id):
                 raise DeliveryError("Demo preview delivery failed")
         except PolicyRejectedError as exc:
             self._fail_attempt(attempt_id, "rejected_policy", "policy_rejected", str(exc), False)
