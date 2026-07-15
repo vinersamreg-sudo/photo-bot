@@ -1,3 +1,4 @@
 openai==2.45.0
 python-dotenv==1.2.2
 Pillow==12.2.0
+httpx==0.28.1

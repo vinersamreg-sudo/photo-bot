@@ -41,6 +41,11 @@ class Settings:
     demo_retention_days: int = 30
     paid_retention_days: int = 180
     trash_retention_days: int = 30
+    max_bot_token: str = ""
+    max_api_base_url: str = "https://platform-api2.max.ru"
+    max_transport_mode: str = "disabled"
+    max_poll_timeout_seconds: int = 30
+    max_media_host_suffixes: tuple[str, ...] = (".max.ru", ".oneme.ru", ".okcdn.ru")
 
     @property
     def data_dir(self) -> Path:
@@ -65,6 +70,10 @@ class Settings:
     @property
     def users_dir(self) -> Path:
         return self.data_dir / "users"
+
+    @property
+    def max_poll_lock_path(self) -> Path:
+        return self.data_dir / "max-polling.lock"
 
 
 def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
@@ -102,6 +111,19 @@ def load_settings(
     if output_format not in {"JPEG", "WEBP"}:
         raise ValueError("DEMO_OUTPUT_FORMAT must be JPEG or WEBP")
 
+    max_transport_mode = values.get("MAX_TRANSPORT_MODE", "disabled").strip().lower() or "disabled"
+    if max_transport_mode not in {"disabled", "polling", "webhook"}:
+        raise ValueError("MAX_TRANSPORT_MODE must be disabled, polling or webhook")
+    media_suffixes = tuple(
+        part.strip().lower()
+        for part in values.get(
+            "MAX_MEDIA_HOST_SUFFIXES", ".max.ru,.oneme.ru,.okcdn.ru"
+        ).split(",")
+        if part.strip()
+    )
+    if not media_suffixes:
+        raise ValueError("MAX_MEDIA_HOST_SUFFIXES must not be empty")
+
     return Settings(
         openai_api_key=values.get("OPENAI_API_KEY", "").strip(),
         openai_image_model=values.get("OPENAI_IMAGE_MODEL", "").strip(),
@@ -127,4 +149,11 @@ def load_settings(
         demo_retention_days=_positive_int(values, "DEMO_RETENTION_DAYS", 30),
         paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),
         trash_retention_days=_positive_int(values, "TRASH_RETENTION_DAYS", 30),
+        max_bot_token=values.get("MAX_BOT_TOKEN", "").strip(),
+        max_api_base_url=values.get(
+            "MAX_API_BASE_URL", "https://platform-api2.max.ru"
+        ).strip().rstrip("/"),
+        max_transport_mode=max_transport_mode,
+        max_poll_timeout_seconds=_positive_int(values, "MAX_POLL_TIMEOUT_SECONDS", 30),
+        max_media_host_suffixes=media_suffixes,
     )
