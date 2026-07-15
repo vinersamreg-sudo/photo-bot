@@ -8,7 +8,8 @@ from app.config import Settings
 from app.database import Database
 from app.domain import InvalidInputError
 from app.image_service import build_demo_service
-from app.max_adapter import MaxDemoAdapter, WELCOME_TEXT, main_menu, result_actions, scenario_catalog
+from app.max_adapter import MaxDemoAdapter, WELCOME_TEXT, legal_view, main_menu, result_actions, scenario_catalog
+from app.scenarios import SCENARIO_CATEGORIES
 
 
 class Transport:
@@ -26,7 +27,9 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(menu.buttons[0].text, "💬 Своя идея")
         self.assertEqual(len(menu.buttons), 8)
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
-        self.assertGreaterEqual(len(scenario_catalog().buttons), 7)
+        self.assertGreaterEqual(len(scenario_catalog().buttons), 9)
+        self.assertEqual(len(SCENARIO_CATEGORIES), 12)
+        self.assertEqual(len(legal_view().buttons), 4)
         self.assertIn("одной исходной фотографии", WELCOME_TEXT)
         self.assertIn("Бесплатных правок осталось: 4", result_actions(4).text)
         self.assertIn("демонстрация завершена", result_actions(0).text)
@@ -64,3 +67,8 @@ class MaxAdapterTests(TestCase):
                 ).fetchone()[0])
             self.assertNotEqual(delivered, original)
             self.assertNotIn(str(original), transport.sent[0][2])
+            intent = adapter.unlock(result.attempt_id, "unlock-event")
+            self.assertTrue(intent)
+            root = service.storage.session_root(session.user_id, session.session_id)
+            adapter.delete(session.session_id)
+            self.assertFalse(root.exists())

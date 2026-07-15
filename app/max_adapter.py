@@ -58,6 +58,18 @@ def main_menu() -> View:
     )
 
 
+def legal_view() -> View:
+    return View(
+        LEGAL_TEXT,
+        (
+            Button("📄 Оферта", "legal:offer"),
+            Button("🔐 Обработка данных", "legal:privacy"),
+            Button("☑️ Принимаю оферту", "consent:offer"),
+            Button("☑️ Даю согласие на обработку данных", "consent:personal-data"),
+        ),
+    )
+
+
 def scenario_catalog() -> View:
     buttons = tuple(
         Button(f"{scenario.emoji} {scenario.title}", f"scenario:{scenario.id}")
@@ -172,3 +184,9 @@ class MaxDemoAdapter:
             correction=correction,
             delivery_override=deliver,
         )
+
+    def delete(self, session_id: str) -> None:
+        self.service.delete_session(session_id)
+
+    def unlock(self, attempt_id: str, event_id: str) -> str:
+        return self.service.unlock_original(attempt_id, f"max:{event_id}")
