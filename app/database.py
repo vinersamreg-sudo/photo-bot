@@ -196,6 +196,72 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 """
 
 
+MAX_DIALOG_STATES = (
+    "new_user", "legal_required", "main_menu", "waiting_for_source",
+    "waiting_for_prompt", "confirmation", "processing", "result_ready",
+    "waiting_for_correction", "demo_exhausted", "gallery", "deleted",
+)
+
+MAX_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS max_dialogs (
+    platform_user_id TEXT PRIMARY KEY,
+    chat_id TEXT,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    state TEXT NOT NULL CHECK(state IN ({','.join(repr(value) for value in MAX_DIALOG_STATES)})),
+    selected_scenario_id TEXT,
+    session_id TEXT REFERENCES demo_sessions(id) ON DELETE SET NULL,
+    pending_prompt TEXT,
+    current_gallery_item_id TEXT REFERENCES gallery_items(id) ON DELETE SET NULL,
+    current_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
+    gallery_cursor INTEGER NOT NULL DEFAULT 0,
+    status_message_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS max_legal_documents (
+    document_type TEXT NOT NULL,
+    version TEXT NOT NULL,
+    required INTEGER NOT NULL DEFAULT 1,
+    draft INTEGER NOT NULL DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(document_type, version)
+);
+CREATE TABLE IF NOT EXISTS max_legal_acceptances (
+    platform_user_id TEXT NOT NULL,
+    document_type TEXT NOT NULL,
+    document_version TEXT NOT NULL,
+    accepted_at TEXT NOT NULL,
+    PRIMARY KEY(platform_user_id, document_type, document_version),
+    FOREIGN KEY(document_type, document_version)
+        REFERENCES max_legal_documents(document_type, version)
+);
+CREATE TABLE IF NOT EXISTS max_processed_events (
+    event_key TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('processing','completed','failed')),
+    attempts INTEGER NOT NULL DEFAULT 1,
+    first_seen_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_max_events_status ON max_processed_events(status, updated_at);
+CREATE TABLE IF NOT EXISTS max_transport_state (
+    name TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS max_dialog_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_user_id TEXT NOT NULL,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    event_key TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_max_transitions_user ON max_dialog_transitions(platform_user_id, id DESC);
+"""
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -249,6 +315,31 @@ class Database:
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(2,?,?)",
                     ("personal_ai_studio_gallery", datetime.now(timezone.utc).isoformat()),
                 )
+            connection.executescript(MAX_SCHEMA)
+            max_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=3"
+            ).fetchone()
+            if max_migration is None:
+                now = datetime.now(timezone.utc).isoformat()
+                for document_type in ("offer", "personal_data", "image_rights", "external_ai"):
+                    connection.execute(
+                        """INSERT OR IGNORE INTO max_legal_documents(
+                               document_type,version,required,draft,active,created_at
+                           ) VALUES(?,?,1,1,1,?)""",
+                        (document_type, "2026-07-draft-1", now),
+                    )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(3,?,?)",
+                    ("max_dialog_state_and_legal_versions", now),
+                )
+            connection.execute(
+                """UPDATE max_dialogs SET state='confirmation',status_message_id=NULL,
+                   updated_at=datetime('now') WHERE state='processing'"""
+            )
+            connection.execute(
+                """UPDATE max_processed_events SET status='failed',updated_at=datetime('now')
+                   WHERE status='processing'"""
+            )
             connection.execute(
                 """UPDATE generation_attempts
                    SET status='failed_technical', completed_at=datetime('now'),
