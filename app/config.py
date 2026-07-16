@@ -58,6 +58,16 @@ class Settings:
     max_poll_observe_only: bool = True
     max_owner_user_ids: tuple[str, ...] = ()
     max_media_host_suffixes: tuple[str, ...] = (".max.ru", ".oneme.ru", ".okcdn.ru")
+    processing_mode_router_enabled: bool = True
+    real_background_composite_enabled: bool = False
+    allow_ai_background_fallback: bool = False
+    background_asset_catalog: str = "assets/backgrounds/catalog.json"
+    segmentation_backend: str = "disabled"
+    segmentation_model: str = "u2net_human_seg"
+    segmentation_model_dir: str = "data/models/rembg"
+    segmentation_model_sha256: str = ""
+    segmentation_timeout_seconds: int = 120
+    local_ai_finishing_enabled: bool = False
 
     @property
     def data_dir(self) -> Path:
@@ -90,6 +100,16 @@ class Settings:
     @property
     def max_ca_bundle_path(self) -> Path:
         path = Path(self.max_ca_bundle).expanduser()
+        return path if path.is_absolute() else self.base_dir / path
+
+    @property
+    def background_asset_catalog_path(self) -> Path:
+        path = Path(self.background_asset_catalog).expanduser()
+        return path if path.is_absolute() else self.base_dir / path
+
+    @property
+    def segmentation_model_dir_path(self) -> Path:
+        path = Path(self.segmentation_model_dir).expanduser()
         return path if path.is_absolute() else self.base_dir / path
 
 
@@ -176,6 +196,19 @@ def load_settings(
     )
     if not media_suffixes:
         raise ValueError("MAX_MEDIA_HOST_SUFFIXES must not be empty")
+    segmentation_backend = (
+        values.get("SEGMENTATION_BACKEND", "disabled").strip().lower() or "disabled"
+    )
+    if segmentation_backend not in {"disabled", "rembg"}:
+        raise ValueError("SEGMENTATION_BACKEND must be disabled or rembg")
+    segmentation_model_sha256 = values.get("SEGMENTATION_MODEL_SHA256", "").strip().lower()
+    if segmentation_model_sha256 and (
+        len(segmentation_model_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in segmentation_model_sha256)
+    ):
+        raise ValueError("SEGMENTATION_MODEL_SHA256 must be a SHA-256 hex digest")
+    if segmentation_backend == "rembg" and not segmentation_model_sha256:
+        raise ValueError("SEGMENTATION_MODEL_SHA256 is required for rembg")
     owner_user_ids = tuple(
         dict.fromkeys(
             part.strip()
@@ -229,4 +262,30 @@ def load_settings(
         max_poll_observe_only=_boolean(values, "MAX_POLL_OBSERVE_ONLY", True),
         max_owner_user_ids=owner_user_ids,
         max_media_host_suffixes=media_suffixes,
+        processing_mode_router_enabled=_boolean(
+            values, "PROCESSING_MODE_ROUTER_ENABLED", True
+        ),
+        real_background_composite_enabled=_boolean(
+            values, "REAL_BACKGROUND_COMPOSITE_ENABLED", False
+        ),
+        allow_ai_background_fallback=_boolean(
+            values, "ALLOW_AI_BACKGROUND_FALLBACK", False
+        ),
+        background_asset_catalog=values.get(
+            "BACKGROUND_ASSET_CATALOG", "assets/backgrounds/catalog.json"
+        ).strip() or "assets/backgrounds/catalog.json",
+        segmentation_backend=segmentation_backend,
+        segmentation_model=values.get(
+            "SEGMENTATION_MODEL", "u2net_human_seg"
+        ).strip() or "u2net_human_seg",
+        segmentation_model_dir=values.get(
+            "SEGMENTATION_MODEL_DIR", "data/models/rembg"
+        ).strip() or "data/models/rembg",
+        segmentation_model_sha256=segmentation_model_sha256,
+        segmentation_timeout_seconds=_positive_int(
+            values, "SEGMENTATION_TIMEOUT_SECONDS", 120
+        ),
+        local_ai_finishing_enabled=_boolean(
+            values, "LOCAL_AI_FINISHING_ENABLED", False
+        ),
     )

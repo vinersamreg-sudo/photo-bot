@@ -96,3 +96,16 @@ leaking Russian to the provider. Image models can still change identity, composi
 or materials despite instructions, and sharpness cannot be guaranteed if the parent
 pixels lack detail. Direct contradictions are resolved conservatively in favor of
 an explicit negation; the main flow has no clarification screen.
+
+## Hybrid execution layer (v3)
+
+`EditPlan` no longer implies that every request is a generative edit. `ModeRouter`
+converts it to a typed `ProcessingPlan` with one of five modes, asset/mask lineage
+and preservation flags. `PromptBuilder v3` renders mode-specific English
+instructions. Corrections inherit the parent asset and effective scene; Repeat
+inherits the complete parent execution plan.
+
+For a real photographic location the preferred mode is a local licensed-asset
+composite. If the catalog or segmenter is unavailable, execution stops instead of
+quietly generating a different background. Enhancement is local and conservative.
+See `PROCESSING_MODES_ARCHITECTURE.md`.

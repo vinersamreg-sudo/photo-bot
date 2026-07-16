@@ -14,6 +14,7 @@ from uuid import uuid4
 from app.config import Settings
 from app.database import Database
 from app.domain import (
+    AssetUnavailableError,
     ConcurrentGenerationError,
     CooldownError,
     DailyBudgetError,
@@ -32,6 +33,9 @@ from app.edit_intent import EditPlan, merge_edit_plans, parse_edit_intent, repea
 from app.image_provider import ImageProvider
 from app.gallery import GalleryService
 from app.prompt_builder import PROMPT_BUILDER_VERSION, build_provider_prompt
+from app.processing_modes import ProcessingMode, ProcessingPlan, legacy_processing_plan
+from app.processing_pipeline import ProcessingExecutor
+from app.processing_router import ModeRouter
 from app.scenarios import get_scenario
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
@@ -62,6 +66,8 @@ class DemoService:
         provider: ImageProvider,
         deliver_preview: Optional[DeliverPreview] = None,
         clock: Callable[[], datetime] = utc_now,
+        processing_router: Optional[ModeRouter] = None,
+        processing_executor: Optional[ProcessingExecutor] = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -71,6 +77,8 @@ class DemoService:
         self.gallery = GalleryService(database, storage, settings, clock)
         self.deliver_preview = deliver_preview or (lambda _path, _attempt: True)
         self.clock = clock
+        self.processing_router = processing_router
+        self.processing_executor = processing_executor
         with self._semaphore_guard:
             self._global_semaphore = self._semaphores.setdefault(
                 settings.global_max_concurrent_generations,
@@ -278,6 +286,7 @@ class DemoService:
             if session["successful_generations"] >= session["max_generations"]:
                 raise DemoLimitError("Demo successful-generation limit is exhausted")
             parent = None
+            parent_processing_plan: Optional[ProcessingPlan] = None
             if parent_version_id:
                 parent = connection.execute(
                     """SELECT * FROM gallery_versions
@@ -288,6 +297,11 @@ class DemoService:
                     raise InvalidInputError(
                         "The selected parent version is missing or was not successful"
                     )
+                parent_processing_plan = (
+                    ProcessingPlan.from_json(parent["processing_plan_json"])
+                    if parent["processing_plan_json"]
+                    else legacy_processing_plan(parent["provider"], parent["model"])
+                )
             elif correction or repeat:
                 parent = connection.execute(
                     """SELECT * FROM gallery_versions
@@ -298,6 +312,11 @@ class DemoService:
                 if parent is None:
                     raise InvalidInputError("Correction or repeat requires a successful version")
                 parent_version_id = parent["id"]
+                parent_processing_plan = (
+                    ProcessingPlan.from_json(parent["processing_plan_json"])
+                    if parent["processing_plan_json"]
+                    else legacy_processing_plan(parent["provider"], parent["model"])
+                )
 
             if parent is None:
                 edit_plan = parse_edit_intent(
@@ -336,7 +355,30 @@ class DemoService:
                 raise IntentAmbiguityError(edit_plan.unresolved_ambiguities)
             if not source_path.is_file():
                 raise InvalidInputError("The selected edit source file is unavailable")
-            provider_prompt = build_provider_prompt(edit_plan)
+            if self.processing_router is None:
+                processing_plan = legacy_processing_plan(
+                    self.provider.name, self.provider.model
+                )
+            else:
+                from PIL import Image
+
+                with Image.open(source_path) as opened:
+                    width, height = opened.size
+                orientation = (
+                    "square" if width == height
+                    else "landscape" if width > height else "portrait"
+                )
+                processing_plan = self.processing_router.route(
+                    edit_plan,
+                    source_orientation=orientation,
+                    source_aspect_ratio=width / height,
+                    parent=parent_processing_plan,
+                )
+            if processing_plan.requires_user_confirmation:
+                raise AssetUnavailableError(
+                    "No approved real background is available; AI fallback requires explicit consent"
+                )
+            provider_prompt = build_provider_prompt(edit_plan, processing_plan)
             correction_prompt = clean_prompt if correction else None
             effective_user_prompt = edit_plan.effective_user_text
             user = connection.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
@@ -372,7 +414,15 @@ class DemoService:
                    FROM generation_attempts WHERE status='succeeded' AND completed_at>=?""",
                 (day_start,),
             ).fetchone()
-            projected = float(daily[1]) + self.settings.demo_estimated_cost_rub_per_generation
+            planned_cost = (
+                0.0
+                if processing_plan.selected_mode in {
+                    ProcessingMode.ENHANCEMENT,
+                    ProcessingMode.REAL_BACKGROUND_COMPOSITE,
+                }
+                else self.settings.demo_estimated_cost_rub_per_generation
+            )
+            projected = float(daily[1]) + planned_cost
             if daily[0] >= self.settings.demo_daily_generation_limit or projected > self.settings.demo_daily_cost_limit_rub:
                 raise DailyBudgetError(
                     "Сегодня бесплатные демонстрации временно закончились. "
@@ -386,7 +436,10 @@ class DemoService:
                        requested_quality,output_format,correction,parent_version_id,
                        correction_prompt,effective_prompt,edit_plan_json,provider_prompt,
                        source_version_id,prompt_builder_version,created_at
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       ,selected_mode,mode_reason,mode_confidence,fallback_mode,
+                       asset_source_type,asset_id,asset_checksum,mask_strategy,processing_provider,
+                       processing_provider_model,processing_pipeline_version,processing_plan_json
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     attempt_id,
                     idempotency_key,
@@ -396,12 +449,20 @@ class DemoService:
                     scenario_id,
                     "processing",
                     iso(now),
-                    self.provider.name,
-                    self.provider.model,
+                    processing_plan.provider,
+                    processing_plan.provider_model,
                     str(source_path),
                     source_path.stat().st_size,
-                    getattr(self.provider, "size", None),
-                    getattr(self.provider, "quality", None),
+                    (
+                        "source"
+                        if processing_plan.provider.startswith("local-")
+                        else getattr(self.provider, "size", None)
+                    ),
+                    (
+                        "local"
+                        if processing_plan.provider.startswith("local-")
+                        else getattr(self.provider, "quality", None)
+                    ),
                     getattr(self.provider, "output_format", None),
                     int(correction),
                     parent_version_id,
@@ -412,6 +473,18 @@ class DemoService:
                     source_version_id,
                     PROMPT_BUILDER_VERSION,
                     iso(now),
+                    processing_plan.selected_mode.value,
+                    processing_plan.mode_reason,
+                    processing_plan.confidence,
+                    processing_plan.fallback_mode.value if processing_plan.fallback_mode else None,
+                    processing_plan.asset_source_type.value,
+                    processing_plan.asset_id,
+                    processing_plan.asset_checksum,
+                    processing_plan.mask_strategy.value,
+                    processing_plan.provider,
+                    processing_plan.provider_model,
+                    processing_plan.processing_pipeline_version,
+                    processing_plan.to_json(),
                 ),
             )
             user_id = session["user_id"]
@@ -424,7 +497,13 @@ class DemoService:
         )
         try:
             with self._global_semaphore:
-                provider_result = self.provider.edit(source_path, provider_prompt)
+                provider_result = (
+                    self.processing_executor.execute(
+                        source_path, provider_prompt, processing_plan
+                    )
+                    if self.processing_executor is not None
+                    else self.provider.edit(source_path, provider_prompt)
+                )
             self.storage.write_private(original_path, provider_result.image_bytes)
             self.watermarker.create_preview(original_path, preview_path, attempt_id)
             delivery = delivery_override or self.deliver_preview
@@ -501,6 +580,10 @@ class DemoService:
                 "edit_mode": edit_plan.mode,
                 "parser_version": edit_plan.parser_version,
                 "prompt_builder_version": PROMPT_BUILDER_VERSION,
+                "selected_mode": processing_plan.selected_mode.value,
+                "processing_pipeline_version": processing_plan.processing_pipeline_version,
+                "asset_source_type": processing_plan.asset_source_type.value,
+                "asset_id": processing_plan.asset_id,
                 "estimated_cost_rub": estimated_cost,
                 "original_file": original_path.name,
                 "preview_file": preview_path.name,

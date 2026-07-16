@@ -152,8 +152,8 @@ class EditIntentTests(TestCase):
         plan = parse_edit_intent("Поменяй только одежду")
         restored = EditPlan.from_json(plan.to_json())
         self.assertEqual(restored, plan)
-        self.assertEqual(restored.parser_version, "rules-ru-v2")
-        self.assertEqual(restored.schema_version, 2)
+        self.assertEqual(restored.parser_version, "rules-ru-v3")
+        self.assertEqual(restored.schema_version, 3)
 
     def test_structured_scene_accumulates_field_updates(self) -> None:
         first = parse_edit_intent("Замени фон на Альпы")

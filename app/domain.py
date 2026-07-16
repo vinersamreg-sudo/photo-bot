@@ -70,6 +70,14 @@ class PaymentRequiredError(DemoError):
     pass
 
 
+class AssetUnavailableError(DemoError):
+    """A licensed resource was required but no approved asset was available."""
+
+
+class SegmentationFailedError(DemoError):
+    """Local foreground extraction failed its technical quality gate."""
+
+
 @dataclass(frozen=True)
 class ProviderResult:
     image_bytes: bytes

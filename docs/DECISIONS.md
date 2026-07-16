@@ -125,3 +125,15 @@ UFW разрешает только SSH, fail2ban защищает `sshd`. Hetzn
 Принято 15.07.2026 после аудита `docs/MAX_TRANSPORT_AUDIT.md`. Отдельного существующего MAX-проекта не найдено, поэтому transport добавляется тонким модулем в `photo-bot` и вызывает существующие application/domain services. Отдельный HTTP-микросервис не создаётся. Прямой клиент официального HTTPS API предпочтён обязательной зависимости от Python SDK, который сам обозначен как неофициальный форк, проверенный командой MAX.
 
 Production-механизм — Webhook с HTTPS:443 и проверкой `X-Max-Bot-Api-Secret`. Long Polling разрешён только как single-instance режим для разработки и закрытого live smoke и не считается production-ready. До появления MAX token, bot identity, домена/TLS и webhook secret запрещено утверждать, что live MAX integration работает.
+
+## ADR-027 — Typed hybrid processing и fail-closed real backgrounds
+
+Принято 16.07.2026. Generative provider больше не является единственным backend.
+Router выбирает `AI_GENERATION`, `REAL_BACKGROUND_COMPOSITE`, `LOCAL_AI_EDIT`,
+`ENHANCEMENT` или `RESTORATION`; `ProcessingPlan` сохраняется в attempt/version.
+
+Реальный фон разрешён только из локального каталога с commercial license record и
+SHA-256. Нет asset/model/mask — нет обработки. Silent fallback в AI запрещён.
+Опциональный rembg CPU с pre-provisioned `u2net_human_seg` и pinned checksum
+остаётся disabled до VPS resource benchmark и owner visual approval. AI finishing
+также disabled.

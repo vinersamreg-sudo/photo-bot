@@ -44,7 +44,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip check
       - name: Scan tracked files for secrets
-        run: python scripts/scan_secrets.py
+        run: |
+          python scripts/scan_secrets.py
+          python scripts/check_asset_licenses.py
       - name: Run unit tests and healthcheck
         env:
           APP_ENV: ci
@@ -260,6 +262,14 @@ jobs:
             set_env MAX_POLL_IDLE_SECONDS 1
             set_env MAX_POLL_MAX_STALE_SECONDS 90
             ensure_env MAX_MEDIA_HOST_SUFFIXES .max.ru,.oneme.ru,.okcdn.ru
+            set_env PROCESSING_MODE_ROUTER_ENABLED true
+            set_env REAL_BACKGROUND_COMPOSITE_ENABLED false
+            set_env ALLOW_AI_BACKGROUND_FALLBACK false
+            set_env BACKGROUND_ASSET_CATALOG assets/backgrounds/catalog.json
+            set_env SEGMENTATION_BACKEND disabled
+            set_env SEGMENTATION_MODEL u2net_human_seg
+            set_env SEGMENTATION_MODEL_DIR data/models/rembg
+            set_env LOCAL_AI_FINISHING_ENABLED false
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
@@ -267,6 +277,8 @@ jobs:
             "$ROOT"/venv/bin/pip check
             "$ROOT"/venv/bin/python -c 'from app.config import load_settings; from app.database import Database; Database(load_settings().database_path)'
             MAX_TRANSPORT_MODE=disabled "$ROOT"/venv/bin/python -m unittest discover -v
+            "$ROOT"/venv/bin/python "$ROOT/scripts/check_asset_licenses.py"
+            "$ROOT"/venv/bin/python "$ROOT/scripts/benchmark_processing.py" --iterations 3 --size 1024
             MAX_TRANSPORT_MODE=disabled "$ROOT"/scripts/healthcheck.sh
             test "$(stat -c '%a' "$ROOT/.env")" = "600"
             test "$(stat -c '%U:%G' "$ROOT/.env")" = "photoapp:photoapp"
@@ -354,13 +366,13 @@ jobs:
           connection = sqlite3.connect(settings.database_path)
           try:
               quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
-              migration_v4 = bool(connection.execute(
-                  "SELECT 1 FROM schema_migrations WHERE version=4"
+              migration_v5 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=5"
               ).fetchone())
           finally:
               connection.close()
           assert quick_check == "ok"
-          assert migration_v4
+          assert migration_v5
           print("runtime_audit=" + json.dumps({
               "model": settings.openai_image_model,
               "endpoint": "/v1/images/edits",
@@ -377,8 +389,12 @@ jobs:
               "transport": settings.max_transport_mode,
               "observe_only": settings.max_poll_observe_only,
               "owner_allowlist_configured": bool(settings.max_owner_user_ids),
+              "processing_mode_router_enabled": settings.processing_mode_router_enabled,
+              "real_background_composite_enabled": settings.real_background_composite_enabled,
+              "segmentation_backend": settings.segmentation_backend,
+              "local_ai_finishing_enabled": settings.local_ai_finishing_enabled,
               "sqlite_quick_check": quick_check,
-              "migration_v4": migration_v4,
+              "migration_v5": migration_v5,
           }, sort_keys=True))
           PY
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"

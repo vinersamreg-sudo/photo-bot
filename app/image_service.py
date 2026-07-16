@@ -5,9 +5,13 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.config import Settings
+from app.background_assets import BackgroundCatalog
 from app.database import Database
 from app.demo_service import DemoService, DeliverPreview
 from app.image_provider import FakeImageProvider, OpenAIImageProvider
+from app.processing_pipeline import HybridProcessingExecutor
+from app.processing_router import ModeRouter
+from app.segmentation import RembgSegmenter
 from app.openai_client import create_openai_client
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
@@ -32,6 +36,31 @@ def build_demo_service(
         )
     else:
         raise ValueError("provider must be 'openai' or 'fake'")
+    processing_router = None
+    processing_executor = None
+    if settings.processing_mode_router_enabled and provider_name == "openai":
+        catalog = BackgroundCatalog.load(settings.background_asset_catalog_path)
+        segmenter = (
+            RembgSegmenter(
+                settings.segmentation_model_dir_path,
+                settings.segmentation_model,
+                settings.segmentation_model_sha256,
+            )
+            if settings.segmentation_backend == "rembg"
+            else None
+        )
+        processing_router = ModeRouter(
+            catalog,
+            provider_name=provider.name,
+            provider_model=provider.model,
+            real_background_enabled=(
+                settings.real_background_composite_enabled and segmenter is not None
+            ),
+            allow_ai_background_fallback=settings.allow_ai_background_fallback,
+        )
+        processing_executor = HybridProcessingExecutor(
+            provider, catalog, segmenter, settings.temp_dir
+        )
     return DemoService(
         settings,
         Database(settings.database_path),
@@ -47,4 +76,6 @@ def build_demo_service(
         ),
         provider,
         deliver_preview=deliver_preview,
+        processing_router=processing_router,
+        processing_executor=processing_executor,
     )

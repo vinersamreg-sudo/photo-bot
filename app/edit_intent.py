@@ -22,8 +22,8 @@ PrimaryAction = Literal[
     "custom",
 ]
 
-PARSER_VERSION = "rules-ru-v2"
-EDIT_PLAN_SCHEMA_VERSION = 2
+PARSER_VERSION = "rules-ru-v3"
+EDIT_PLAN_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,10 @@ class BackgroundIntent:
     operation: str = "unchanged"
     setting: Optional[str] = None
     sharpness: str = "preserve"
+    category: Optional[str] = None
+    realism: str = "preserve"
+    blur: str = "preserve"
+    source: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,7 @@ class CameraIntent:
 class OutfitIntent:
     operation: str = "unchanged"
     style: Optional[str] = None
+    color: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,12 @@ class SceneIntent:
                 operation=str(background.get("operation") or "unchanged"),
                 setting=str(background["setting"]) if background.get("setting") else None,
                 sharpness=str(background.get("sharpness") or "preserve"),
+                category=(
+                    str(background["category"]) if background.get("category") else None
+                ),
+                realism=str(background.get("realism") or "preserve"),
+                blur=str(background.get("blur") or "preserve"),
+                source=str(background.get("source") or "auto"),
             ),
             lighting=LightingIntent(
                 style=str(lighting["style"]) if lighting.get("style") else None,
@@ -108,6 +119,7 @@ class SceneIntent:
             outfit=OutfitIntent(
                 operation=str(outfit.get("operation") or "unchanged"),
                 style=str(outfit["style"]) if outfit.get("style") else None,
+                color=str(outfit["color"]) if outfit.get("color") else None,
             ),
             pose=PoseIntent(
                 operation=str(pose.get("operation") or "unchanged"),
@@ -314,12 +326,18 @@ def parse_edit_intent(
         r"сделай\s+(?:мне\s+)?(?:фон|задн\w*\s+план)\s+(?:светл|бел|темн|студийн|скалист|горн)",
         r"^(?:светл|бел|темн|студийн|скалист|горн)\w*\s+фон$",
     )
+    explicit_ai_background = _has(
+        text,
+        r"(?:создай|сгенерируй|используй|сделай)\s+(?:мне\s+)?(?:ai|ии)[ -]?(?:фон|задн\w*\s+план)",
+        r"(?:ai|ии)[ -]?фон",
+    )
+    explicit_replace_background = explicit_replace_background or explicit_ai_background
     explicit_preserve_background = _has(
         text,
         r"не\s+(?:меняй|заменяй|трогай)\s+(?:эт\w*\s+|текущ\w*\s+)?(?:фон|скал|задн\w*\s+план)",
         r"(?:фон|скал\w*|задн\w*\s+план)\s+не\s+(?:меняй|заменяй|трогай)",
-        r"(?:оставь|сохрани)\s+(?:эт\w*\s+же\s+|текущ\w*\s+|прошл\w*\s+)?(?:фон|скал|задн\w*\s+план)",
-        r"не\s+надо\s+(?:менять|заменять)\s+(?:скал|фон)",
+        r"(?:оставь|сохрани)\s+(?:эт\w*\s+же\s+|текущ\w*\s+|прошл\w*\s+)?(?:фон|скал|гор\w*|задн\w*\s+план)",
+        r"не\s+надо\s+(?:менять|заменять)\s+(?:скал|гор\w*|фон)",
     )
     if "итоговое решение сохранить текущий фон" in text:
         explicit_replace_background = False
@@ -339,16 +357,29 @@ def parse_edit_intent(
         actions.append("replace_background")
         if "альп" in text:
             changes.append("Replace the background with realistic alpine mountains.")
-            background = BackgroundIntent("replace", "realistic alpine mountains", "sharp")
+            background = BackgroundIntent(
+                "replace", "realistic alpine mountains", "sharp",
+                "alpine_mountains", "photorealistic", "forbidden",
+            )
         elif "скал" in text or "камен" in text or "гор" in text:
             changes.append("Replace the background with realistic rocky mountains and visible rock formations.")
-            background = BackgroundIntent("replace", "realistic rocky mountains", "sharp")
+            background = BackgroundIntent(
+                "replace", "realistic rocky mountains", "sharp",
+                "rocky_mountains", "photorealistic", "forbidden",
+            )
         elif _has(text, r"светл|бел|студи"):
             changes.append("Replace the background with a clean light modern photo studio.")
-            background = BackgroundIntent("replace", "clean light modern photo studio", "sharp")
+            background = BackgroundIntent(
+                "replace", "clean light modern photo studio", "sharp",
+                "light_photo_studio", "photorealistic", "forbidden",
+            )
         else:
             changes.append("Replace the background according to the user's requested setting.")
-            background = BackgroundIntent("replace", "requested setting", "preserve")
+            background = BackgroundIntent(
+                "replace", "requested setting", "preserve", None, "preserve", "preserve"
+            )
+        if explicit_ai_background:
+            background = replace(background, source="ai")
 
     if explicit_preserve_background:
         targets.append("background")
@@ -356,7 +387,7 @@ def parse_edit_intent(
         forbid.append("Do not replace the current background with a different setting.")
         continuity.append("Continue from the exact background visible in the parent version.")
         actions.append("preserve_background")
-        background = BackgroundIntent("preserve", None, "preserve")
+        background = BackgroundIntent("preserve", None, "preserve", None, "preserve", "preserve")
         negative.append("replace background")
 
     blur_complaint = _has(
@@ -364,8 +395,8 @@ def parse_edit_intent(
         r"(?:фон|задн\w*\s+план|скал\w*)[^.]{0,25}(?:размыт|мыльн|нечетк)",
         r"(?:размыт|мыльн|нечетк)[^.]{0,25}(?:фон|задн\w*\s+план|скал)",
         r"все\s+равно\s+(?:размыт|мыльн|нечетк)",
-        r"(?:четч|резч|детальн).{0,20}(?:фон|скал|задн)",
-        r"(?:фон|скал|задн).{0,20}(?:четч|резч|детальн)",
+        r"(?:четч|резч|детальн).{0,20}(?:фон|скал|гор|задн)",
+        r"(?:фон|скал|гор).{0,20}(?:четч|резч|детальн)",
         r"убери\s+размыт",
         r"не\s+размывай\s+(?:фон|скал|задн)",
     )
@@ -384,12 +415,16 @@ def parse_edit_intent(
             "Do not apply background blur, bokeh, defocus or shallow depth of field.",
         ))
         continuity.append("Correct only the residual background blur in the parent version.")
-        background = BackgroundIntent("sharpen", background.setting, "sharp")
+        background = replace(
+            background, operation="sharpen", sharpness="sharp", blur="forbidden"
+        )
         negative.extend(("background blur", "replacement background"))
     elif request_more_blur:
         targets.append("background")
         changes.append("Increase natural background blur while keeping the subject sharp.")
-        background = BackgroundIntent("blur", background.setting, "blurred")
+        background = replace(
+            background, operation="blur", sharpness="blurred", blur="requested"
+        )
 
     if _has(text, r"верни\s+(?:прошл\w*|предыдущ\w*)\s+(?:фон|задн)", r"сделай\s+как\s+было"):
         targets.append("background")
@@ -397,7 +432,9 @@ def parse_edit_intent(
         changes.append("Restore the background appearance from the previous successful version.")
         continuity.append("Use the previous successful background while preserving later successful edits.")
         forbid.append("Do not invent a new replacement background.")
-        background = BackgroundIntent("restore_previous", None, "preserve")
+        background = BackgroundIntent(
+            "restore_previous", None, "preserve", None, "preserve", "preserve"
+        )
         negative.append("new replacement background")
 
     if _has(text, r"(?:переодень|смени\s+(?:только\s+)?одежд|замени\s+(?:только\s+)?одежд|поменяй\s+(?:только\s+)?одежд|одежд\w*\s+для\s+хайкинг)"):
@@ -419,6 +456,34 @@ def parse_edit_intent(
         style = "realistic hiking jacket" if _has(text, r"хайкинг|поход|турист") else "realistic jacket"
         changes.append(f"Change the outfit to include a {style}.")
         outfit = OutfitIntent("replace", style)
+
+    if _has(text, r"(?:смени|измени|поменяй|замени)\s+(?:мне\s+)?(?:куртк|пиджак)"):
+        targets.append("clothing")
+        actions.append("change_clothes")
+        changes.append("Replace the jacket with the requested realistic jacket.")
+        outfit = OutfitIntent("replace", "requested realistic jacket")
+
+    clothing_color = None
+    for russian, english in {
+        "темно зелен": "dark green",
+        "темно-зелен": "dark green",
+        "зелен": "green",
+        "черн": "black",
+        "бел": "white",
+        "син": "blue",
+        "красн": "red",
+        "сер": "gray",
+        "коричнев": "brown",
+        "бежев": "beige",
+    }.items():
+        if russian in text:
+            clothing_color = english
+            break
+    if clothing_color and _has(text, r"(?:цвет\s+)?(?:куртк|одежд|пиджак)", r"перекрась"):
+        targets.append("clothing")
+        actions.append("change_clothes")
+        changes.append(f"Change only the clothing color to {clothing_color}.")
+        outfit = OutfitIntent("recolor", outfit.style, clothing_color)
 
     if _has(text, r"(?:смени|измени|поменяй|скорректируй)\s+(?:немного\s+)?поз"):
         targets.append("pose")
@@ -534,22 +599,34 @@ def parse_edit_intent(
             if scenario_action not in actions:
                 actions.append(scenario_action)
             if scenario_id == "light-background":
-                background = BackgroundIntent("replace", "clean neutral light studio", "sharp")
+                background = BackgroundIntent(
+                    "replace", "clean neutral light studio", "sharp",
+                    "light_photo_studio", "photorealistic", "forbidden",
+                )
             elif scenario_id == "resume":
                 camera = CameraIntent("professional portrait")
                 outfit = OutfitIntent("replace", "restrained professional business outfit")
             elif scenario_id == "business-look":
                 outfit = OutfitIntent("replace", "realistic modern business outfit")
             elif scenario_id == "cafe":
-                background = BackgroundIntent("replace", "cozy modern cafe", "sharp")
+                background = BackgroundIntent(
+                    "replace", "cozy modern cafe", "sharp",
+                    "cafe", "photorealistic", "forbidden",
+                )
             elif scenario_id == "beach":
-                background = BackgroundIntent("replace", "bright realistic beach", "sharp")
+                background = BackgroundIntent(
+                    "replace", "bright realistic beach", "sharp",
+                    "beach", "photorealistic", "forbidden",
+                )
             elif scenario_id == "cat":
                 objects_to_add.append("cat")
             elif scenario_id == "neuro-session":
                 camera = CameraIntent("polished portrait")
             elif scenario_id == "documents":
-                background = BackgroundIntent("replace", "plain neutral document background", "sharp")
+                background = BackgroundIntent(
+                    "replace", "plain neutral document background", "sharp",
+                    "neutral_resume_background", "photorealistic", "forbidden",
+                )
                 camera = CameraIntent("document portrait")
             elif scenario_id == "memorial":
                 camera = CameraIntent("respectful memorial portrait")

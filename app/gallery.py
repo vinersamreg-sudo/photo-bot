@@ -14,6 +14,7 @@ from app.config import Settings
 from app.database import Database
 from app.domain import InvalidInputError
 from app.edit_intent import EditPlan
+from app.processing_modes import ProcessingPlan, legacy_processing_plan
 from app.storage import PrivateStorage
 
 
@@ -60,6 +61,7 @@ class GalleryVersion:
     provider_prompt: str
     source_version_id: Optional[str]
     prompt_builder_version: str
+    processing_plan: ProcessingPlan
 
 
 class GalleryService:
@@ -95,6 +97,11 @@ class GalleryService:
                 correction_target_version_id=row["parent_version_id"],
             )
         )
+        processing_plan = (
+            ProcessingPlan.from_json(row["processing_plan_json"])
+            if row["processing_plan_json"]
+            else legacy_processing_plan(row["provider"], row["model"])
+        )
         return GalleryVersion(
             row["id"], row["gallery_item_id"], row["version_number"],
             row["parent_version_id"], Path(row["source_path"]),
@@ -106,6 +113,7 @@ class GalleryService:
             bool(row["favorite"]), row["unlock_status"], row["status"],
             plan, row["provider_prompt"] or row["effective_prompt"],
             row["source_version_id"], row["prompt_builder_version"] or "legacy-concatenation",
+            processing_plan,
         )
 
     def create_item(
@@ -235,7 +243,10 @@ class GalleryService:
                    preview_watermarked_path,original_path,created_at,processing_time_ms,
                    estimated_cost,status,unlock_status,edit_plan_json,provider_prompt,
                    source_version_id,prompt_builder_version
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   ,selected_mode,mode_reason,mode_confidence,fallback_mode,
+                   asset_source_type,asset_id,asset_checksum,mask_strategy,processing_provider,
+                   processing_provider_model,processing_pipeline_version,processing_plan_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id, gallery_item_id, attempt_id, number,
                 attempt["parent_version_id"], attempt["source_path"], attempt["prompt"],
@@ -245,6 +256,12 @@ class GalleryService:
                 attempt["duration_ms"], attempt["estimated_cost"], attempt["status"], unlock,
                 attempt["edit_plan_json"], attempt["provider_prompt"],
                 attempt["source_version_id"], attempt["prompt_builder_version"],
+                attempt["selected_mode"], attempt["mode_reason"], attempt["mode_confidence"],
+                attempt["fallback_mode"], attempt["asset_source_type"], attempt["asset_id"],
+                attempt["asset_checksum"],
+                attempt["mask_strategy"], attempt["processing_provider"],
+                attempt["processing_provider_model"], attempt["processing_pipeline_version"],
+                attempt["processing_plan_json"],
             ),
         )
         connection.execute(

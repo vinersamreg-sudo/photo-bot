@@ -1,0 +1,3 @@
+# Optional owner-only backend. Do not install in production until the model
+# checksum, commercial-use record and VPS resource benchmark are approved.
+rembg[cpu]==2.0.76

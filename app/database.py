@@ -73,6 +73,18 @@ CREATE TABLE IF NOT EXISTS generation_attempts (
     provider_prompt TEXT,
     source_version_id TEXT,
     prompt_builder_version TEXT,
+    selected_mode TEXT,
+    mode_reason TEXT,
+    mode_confidence REAL,
+    fallback_mode TEXT,
+    asset_source_type TEXT,
+    asset_id TEXT,
+    asset_checksum TEXT,
+    mask_strategy TEXT,
+    processing_provider TEXT,
+    processing_provider_model TEXT,
+    processing_pipeline_version TEXT,
+    processing_plan_json TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_user_started ON generation_attempts(user_id, started_at);
@@ -174,6 +186,18 @@ CREATE TABLE IF NOT EXISTS gallery_versions (
     provider_prompt TEXT,
     source_version_id TEXT,
     prompt_builder_version TEXT,
+    selected_mode TEXT,
+    mode_reason TEXT,
+    mode_confidence REAL,
+    fallback_mode TEXT,
+    asset_source_type TEXT,
+    asset_id TEXT,
+    asset_checksum TEXT,
+    mask_strategy TEXT,
+    processing_provider TEXT,
+    processing_provider_model TEXT,
+    processing_pipeline_version TEXT,
+    processing_plan_json TEXT,
     UNIQUE(gallery_item_id, version_number)
 );
 CREATE INDEX IF NOT EXISTS idx_versions_item_number ON gallery_versions(gallery_item_id, version_number DESC);
@@ -317,6 +341,18 @@ class Database:
                 ("provider_prompt", "TEXT"),
                 ("source_version_id", "TEXT"),
                 ("prompt_builder_version", "TEXT"),
+                ("selected_mode", "TEXT"),
+                ("mode_reason", "TEXT"),
+                ("mode_confidence", "REAL"),
+                ("fallback_mode", "TEXT"),
+                ("asset_source_type", "TEXT"),
+                ("asset_id", "TEXT"),
+                ("asset_checksum", "TEXT"),
+                ("mask_strategy", "TEXT"),
+                ("processing_provider", "TEXT"),
+                ("processing_provider_model", "TEXT"),
+                ("processing_pipeline_version", "TEXT"),
+                ("processing_plan_json", "TEXT"),
             ):
                 if name not in existing:
                     connection.execute(
@@ -338,6 +374,18 @@ class Database:
                 ("provider_prompt", "TEXT"),
                 ("source_version_id", "TEXT"),
                 ("prompt_builder_version", "TEXT"),
+                ("selected_mode", "TEXT"),
+                ("mode_reason", "TEXT"),
+                ("mode_confidence", "REAL"),
+                ("fallback_mode", "TEXT"),
+                ("asset_source_type", "TEXT"),
+                ("asset_id", "TEXT"),
+                ("asset_checksum", "TEXT"),
+                ("mask_strategy", "TEXT"),
+                ("processing_provider", "TEXT"),
+                ("processing_provider_model", "TEXT"),
+                ("processing_pipeline_version", "TEXT"),
+                ("processing_plan_json", "TEXT"),
             ):
                 if name not in version_columns:
                     connection.execute(
@@ -382,6 +430,18 @@ class Database:
                 connection.execute(
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(4,?,?)",
                     ("structured_edit_plan_and_feedback", datetime.now(timezone.utc).isoformat()),
+                )
+            processing_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=5"
+            ).fetchone()
+            if processing_migration is None:
+                self._backfill_processing_plans(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(5,?,?)",
+                    (
+                        "hybrid_processing_modes_and_asset_lineage",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
                 )
             connection.execute(
                 """UPDATE max_dialogs SET state='confirmation',status_message_id=NULL,
@@ -542,6 +602,66 @@ class Database:
                        prompt_builder_version=COALESCE(prompt_builder_version,'legacy-concatenation')
                    WHERE id=?""",
                 (plan.to_json(), row["id"]),
+            )
+
+    @staticmethod
+    def _backfill_processing_plans(connection: sqlite3.Connection) -> None:
+        """Make historical versions explicit without changing their execution history."""
+
+        from app.processing_modes import legacy_processing_plan
+
+        attempts = connection.execute(
+            "SELECT * FROM generation_attempts WHERE processing_plan_json IS NULL"
+        ).fetchall()
+        for row in attempts:
+            plan = legacy_processing_plan(row["provider"], row["model"])
+            connection.execute(
+                """UPDATE generation_attempts SET selected_mode=?,mode_reason=?,mode_confidence=?,
+                          fallback_mode=?,asset_source_type=?,asset_id=?,asset_checksum=?,mask_strategy=?,
+                          processing_provider=?,processing_provider_model=?,
+                          processing_pipeline_version=?,processing_plan_json=? WHERE id=?""",
+                (
+                    plan.selected_mode.value,
+                    plan.mode_reason,
+                    plan.confidence,
+                    None,
+                    plan.asset_source_type.value,
+                    None,
+                    None,
+                    plan.mask_strategy.value,
+                    plan.provider,
+                    plan.provider_model,
+                    plan.processing_pipeline_version,
+                    plan.to_json(),
+                    row["id"],
+                ),
+            )
+
+        versions = connection.execute(
+            "SELECT * FROM gallery_versions WHERE processing_plan_json IS NULL"
+        ).fetchall()
+        for row in versions:
+            plan = legacy_processing_plan(row["provider"], row["model"])
+            connection.execute(
+                """UPDATE gallery_versions SET selected_mode=?,mode_reason=?,mode_confidence=?,
+                          fallback_mode=?,asset_source_type=?,asset_id=?,asset_checksum=?,mask_strategy=?,
+                          processing_provider=?,processing_provider_model=?,
+                          processing_pipeline_version=?,processing_plan_json=? WHERE id=?""",
+                (
+                    plan.selected_mode.value,
+                    plan.mode_reason,
+                    plan.confidence,
+                    None,
+                    plan.asset_source_type.value,
+                    None,
+                    None,
+                    plan.mask_strategy.value,
+                    plan.provider,
+                    plan.provider_model,
+                    plan.processing_pipeline_version,
+                    plan.to_json(),
+                    row["id"],
+                ),
             )
 
     @contextmanager

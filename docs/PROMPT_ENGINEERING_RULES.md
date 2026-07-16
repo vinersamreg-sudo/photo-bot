@@ -51,3 +51,14 @@ Technical prompts must contain no API keys, local paths or long internal IDs. Ag
 ## Quality
 
 `quality=low` is reserved for explicit draft/smoke use. Demo production defaults to `medium` pending a controlled owner-only comparison. Do not claim an exact cost from the configured ruble reserve: confirm pricing from current official documentation and actual billing/usage first.
+
+## Mode-specific prompts (v3)
+
+- `AI_GENERATION`: describe the scene; avoid CGI, repeated textures and accidental identity changes.
+- `REAL_BACKGROUND_COMPOSITE`: never generate the supplied licensed asset; current executor makes no provider call.
+- `LOCAL_AI_EDIT`: name only target regions and freeze untouched areas.
+- `ENHANCEMENT`: forbid new objects, composition change and redraw of face/background.
+- `RESTORATION`: preserve historical identity/materials and avoid invented detail.
+
+Correction MAIN contains only changed fields. Inherited successful fields may appear
+only as continuity constraints. Negative rules use normalized imperative grammar.

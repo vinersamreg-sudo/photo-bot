@@ -1,5 +1,17 @@
 # Current State
 
+## Hybrid processing foundation — 16.07.2026
+
+Pixora отделяет намерение от технологии: router выбирает AI generation, licensed
+real-background composite, local AI edit, enhancement или restoration. Plan и
+asset/mask/provider lineage сохраняются в SQLite migration v5 и GalleryVersion.
+Enhancement/composite локальны; failures до delivery не расходуют quota.
+
+Production безопасно закрыт: router включён, но real composite, segmentation и AI
+finishing выключены. Каталог валиден и содержит 0 active product assets. Optional
+rembg code подготовлен, weights и VPS quality/RSS не проверены. Функция реализована,
+но не готова к пользователям. Полный suite: 131 tests; OpenAI image requests: 0.
+
 ## Pixora direct flow + AI Brain 2.0 — 16.07.2026
 
 Основной MAX-путь сокращён до `/start → фото → текст → обработка`: нет главного меню, выбора «Своя идея», отдельной кнопки согласия или повторного подтверждения prompt. На стартовом экране только инструкция загрузить фото и «Подробнее». Согласие и актуальные версии обязательных документов фиксируются после фактической валидации и сохранения первой фотографии. Для возвращающегося пользователя допустимый сохранённый source возобновляется без бессмысленного запроса другого фото. Любой следующий текст после результата автоматически становится correction текущей версии — кнопка «Исправить» необязательна. Готовые сценарии находятся в необязательном каталоге «✨ Идеи».

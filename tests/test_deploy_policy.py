@@ -44,6 +44,17 @@ class DeployPolicyTests(TestCase):
     def test_uses_python_312_and_scans_for_secrets(self) -> None:
         self.assertIn('python-version: "3.12"', self.workflow)
         self.assertIn("python scripts/scan_secrets.py", self.workflow)
+        self.assertIn("python scripts/check_asset_licenses.py", self.workflow)
+
+    def test_hybrid_processing_deploy_is_fail_closed_and_audited(self) -> None:
+        self.assertIn("set_env PROCESSING_MODE_ROUTER_ENABLED true", self.workflow)
+        self.assertIn("set_env REAL_BACKGROUND_COMPOSITE_ENABLED false", self.workflow)
+        self.assertIn("set_env ALLOW_AI_BACKGROUND_FALLBACK false", self.workflow)
+        self.assertIn("set_env SEGMENTATION_BACKEND disabled", self.workflow)
+        self.assertIn("set_env LOCAL_AI_FINISHING_ENABLED false", self.workflow)
+        self.assertIn("scripts/benchmark_processing.py", self.workflow)
+        self.assertIn("WHERE version=5", self.workflow)
+        self.assertIn('"migration_v5": migration_v5', self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
         health_position = self.workflow.rindex('"$ROOT"/scripts/healthcheck.sh')

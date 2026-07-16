@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Iterable, Optional
 
 from app.edit_intent import EditPlan
+from app.processing_modes import ProcessingMode, ProcessingPlan
 
 
-PROMPT_BUILDER_VERSION = "technical-en-v2"
+PROMPT_BUILDER_VERSION = "technical-en-v3-modes"
 
 
 def _unique(values: Iterable[str]) -> tuple[str, ...]:
@@ -58,38 +59,52 @@ def contextual_forbidden_rules(plan: EditPlan) -> tuple[str, ...]:
     return _unique(rules)
 
 
-def _structured_change_lines(plan: EditPlan) -> tuple[str, ...]:
+def _structured_change_lines(
+    plan: EditPlan, processing_plan: Optional[ProcessingPlan] = None
+) -> tuple[str, ...]:
     """Translate provider-neutral scene fields into English model instructions."""
 
     scene = plan.scene
     lines: list[str] = []
+    targets = set(plan.target_regions)
+    render_all = plan.mode in {"initial_edit", "scenario", "repeat"}
     background = scene.background
-    if background.operation == "replace":
+    render_background = render_all or "background" in targets
+    if render_background and background.operation == "replace":
         lines.append(f"Replace the background with {background.setting or 'the requested setting'}.")
-    elif background.operation == "preserve":
+    elif render_background and background.operation == "preserve":
         lines.append("Preserve the exact current background.")
-    elif background.operation == "restore_previous":
+    elif render_background and background.operation == "restore_previous":
         lines.append("Restore the background visible in the previous successful version.")
-    elif background.operation == "sharpen":
+    elif render_background and background.operation == "sharpen":
         lines.append("Keep the current background and make it sharp, detailed and clearly readable.")
-    elif background.operation == "blur":
+    elif render_background and background.operation == "blur":
         lines.append("Apply natural background blur while keeping the subject sharp.")
-    if background.sharpness == "sharp" and background.operation != "sharpen":
+    if (
+        render_background
+        and background.sharpness == "sharp"
+        and background.operation != "sharpen"
+    ):
         lines.append("Render the background sharp and detailed without shallow depth of field.")
 
-    if scene.lighting.style:
+    if scene.lighting.style and (render_all or "whole_image" in targets):
         lines.append(f"Use {scene.lighting.style}.")
-    if scene.camera.framing:
+    if scene.camera.framing and (render_all or "whole_image" in targets):
         lines.append(f"Use {scene.camera.framing} framing.")
-    if scene.outfit.operation == "replace":
+    if scene.outfit.operation == "replace" and (render_all or "clothing" in targets):
         lines.append(f"Replace the outfit with {scene.outfit.style or 'the requested clothing'}.")
-    if scene.pose.operation == "change":
+    elif scene.outfit.operation == "recolor" and (render_all or "clothing" in targets):
+        lines.append(
+            f"Change only the clothing color to {scene.outfit.color or 'the requested color'}."
+        )
+    if scene.pose.operation == "change" and (render_all or "pose" in targets):
         lines.append(f"Change the pose to {scene.pose.description or 'a natural requested pose'}.")
-    lines.extend(f"Add a realistic {value}." for value in scene.objects.add)
-    lines.extend(
-        f"Remove the {value} and reconstruct the occluded area naturally."
-        for value in scene.objects.remove
-    )
+    if render_all or "object" in targets:
+        lines.extend(f"Add a realistic {value}." for value in scene.objects.add)
+        lines.extend(
+            f"Remove the {value} and reconstruct the occluded area naturally."
+            for value in scene.objects.remove
+        )
 
     if plan.primary_action == "restore_photo":
         lines.append("Restore damage, scratches, fading and lost detail without inventing a different photograph.")
@@ -97,13 +112,51 @@ def _structured_change_lines(plan: EditPlan) -> tuple[str, ...]:
         lines.append("Improve natural sharpness, lighting and detail without redesigning the photograph.")
     elif plan.primary_action == "custom" and not lines:
         lines.append("Apply a conservative photorealistic edit within the structured constraints.")
+    if processing_plan is not None:
+        if processing_plan.selected_mode == ProcessingMode.AI_GENERATION:
+            lines.extend((
+                "Create the requested scene photorealistically.",
+                "Avoid CGI materials, repeated synthetic textures and impossible terrain patterns.",
+            ))
+        elif processing_plan.selected_mode == ProcessingMode.REAL_BACKGROUND_COMPOSITE:
+            lines.extend((
+                "Do not generate or replace the supplied licensed background.",
+                "Limit any finishing to edge, shadow, light and color integration.",
+            ))
+        elif processing_plan.selected_mode == ProcessingMode.LOCAL_AI_EDIT:
+            lines.append("Edit only the explicitly targeted local regions.")
+        elif processing_plan.selected_mode == ProcessingMode.ENHANCEMENT:
+            lines.extend((
+                "Enhance only existing pixels and detail.",
+                "Do not add objects, redesign the composition, change the face or redraw the background.",
+            ))
+        elif processing_plan.selected_mode == ProcessingMode.RESTORATION:
+            lines.extend((
+                "Preserve historical authenticity, age and original facial features.",
+                "Do not modernize makeup, clothing or photographic style.",
+            ))
     return _unique(lines)
 
 
-def build_provider_prompt(plan: EditPlan) -> str:
+def _negative_rule(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"replace background", "replacement background"}:
+        return "Do not replace or regenerate the background."
+    if normalized == "background blur":
+        return "Do not blur, defocus or add bokeh to the background."
+    if normalized == "change identity or facial geometry":
+        return "Do not change identity or facial geometry."
+    if normalized == "over-retouch skin":
+        return "Do not over-retouch or plasticize skin."
+    return f"Do not {value.rstrip('.')}."
+
+
+def build_provider_prompt(
+    plan: EditPlan, processing_plan: Optional[ProcessingPlan] = None
+) -> str:
     """Render an EditPlan as explicit English instructions for an image-edit model."""
 
-    changes = _structured_change_lines(plan)
+    changes = _structured_change_lines(plan, processing_plan)
     preserve = contextual_preservation_rules(plan)
     forbidden = contextual_forbidden_rules(plan)
     continuity = list(plan.continuity_requirements)
@@ -127,7 +180,7 @@ def build_provider_prompt(plan: EditPlan) -> str:
 
     sections.extend(("", "DO NOT CHANGE"))
     sections.extend(f"- {value}" for value in forbidden)
-    sections.extend(f"- Do not {value}." for value in plan.scene.negative)
+    sections.extend(f"- {_negative_rule(value)}" for value in plan.scene.negative)
 
     if continuity:
         sections.extend(("", "CONTINUITY FROM THE PARENT VERSION"))

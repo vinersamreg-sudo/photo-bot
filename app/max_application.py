@@ -11,6 +11,7 @@ from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
 from app.domain import (
+    AssetUnavailableError,
     CooldownError,
     DailyBudgetError,
     DeliveryError,
@@ -20,6 +21,7 @@ from app.domain import (
     InvalidInputError,
     IntentAmbiguityError,
     PolicyRejectedError,
+    SegmentationFailedError,
     SourceReplacementError,
 )
 from app.gallery import GalleryService, GalleryVersion
@@ -144,6 +146,22 @@ class MaxApplication:
         return True
 
     def _show_demo_error(self, event: MaxIncomingEvent, exc: DemoError) -> None:
+        if isinstance(exc, AssetUnavailableError):
+            self.transport.send_message(
+                event.user_id,
+                "Подходящего лицензированного фона пока нет.\n\n"
+                "Выберите другой готовый фон или напишите: «создай AI-фон …».",
+                (Button("✨ Идеи", "ideas"),),
+            )
+            return
+        if isinstance(exc, SegmentationFailedError):
+            self.transport.send_message(
+                event.user_id,
+                "Это фото пока сложно аккуратно отделить от фона.\n\n"
+                "Попробуйте другое фото или попросите создать AI-фон.",
+                (),
+            )
+            return
         if isinstance(exc, SourceReplacementError):
             self.transport.send_message(
                 event.user_id,

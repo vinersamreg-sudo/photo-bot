@@ -1,5 +1,12 @@
 # Project Bible
 
+> Дополнение 16.07.2026: Pixora использует typed hybrid-processing architecture.
+> Real backgrounds должны идти через licensed local composite, enhancement — через
+> local Pillow, а generative provider применяется только к подходящим modes.
+> Composite/segmentation/AI finishing остаются выключенными до checklist из
+> `REAL_BACKGROUND_PIPELINE.md`. Новые `PROCESSING_MODES_*`,
+> `SEGMENTATION_EVALUATION.md` и `BACKGROUND_ASSET_POLICY.md` являются частью wiki.
+
 Публичный бренд продукта утверждён: **Pixora**. Техническое имя репозитория и backend остаётся `photo-bot`; продуктовая стратегия продажи понравившегося результата не меняется.
 
 Актуально на 15 июля 2026 года. Это главный источник истины проекта; при конфликте других документов сначала обновляется решение здесь.

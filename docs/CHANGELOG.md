@@ -111,3 +111,14 @@
 ## До миграции
 
 Минимальный production-каркас работал на shared hosting REG.RU. OpenAI API с его исходящего IP возвращал региональный `403 unsupported_country_region_territory`, что стало причиной миграции без использования обходных сетевых средств.
+
+## 16.07.2026 — hybrid processing foundation
+
+- пять typed modes и deterministic router;
+- license-aware catalog и fail-closed asset verification;
+- local Pillow enhancement/composite без external image calls;
+- optional rembg CPU с pinned model checksum, auto-download запрещён;
+- migration v5 сохраняет mode/provider/pipeline/mask/asset lineage;
+- corrections/repeat наследуют parent plan; failures не создают version и quota;
+- 131 tests, license audit и offline benchmark; OpenAI image requests: 0;
+- production flags закрыты до assets/model/VPS/visual gates.

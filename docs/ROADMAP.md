@@ -41,3 +41,14 @@ Before/after slider, экспорт и расширенный визуальны
 ## Следующий контрольный шаг — live MAX smoke
 
 Владелец подтверждает/создаёт тестового бота, безопасно добавляет `MAX_BOT_TOKEN` в GitHub Environment и сообщает username бота. После `max-check` временно запускается single-instance polling для одного синтетического сценария. Не более двух OpenAI edits, без оплаты, personal photo и original delivery. Затем polling останавливается; production включается только после Webhook/domain/TLS решения.
+
+## Hybrid processing gates
+
+Завершено: typed modes/router, migration v5, local enhancement/composite, asset
+license/checksum policy, mode prompts, lineage, quota-safe failures, cleanup, 131
+tests и offline synthetic benchmark без OpenAI.
+
+Далее нужны legally approved backgrounds, license/model records, rembg CPU/RSS
+benchmark на VPS и отдельная owner-only visual validation. До этого
+`REAL_BACKGROUND_COMPOSITE_ENABLED=false`, `SEGMENTATION_BACKEND=disabled`, AI
+finishing и silent fallback выключены.

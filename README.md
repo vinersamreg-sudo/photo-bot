@@ -104,3 +104,20 @@ Systemd hardening template находится в `ops/photo-bot.service`, но �
 ## Документация
 
 Главный источник истины — [docs/PROJECT_BIBLE.md](docs/PROJECT_BIBLE.md). Текущее состояние, архитектура, процесс поставки и решения описаны в остальных файлах каталога `docs/`.
+
+### Hybrid processing
+
+Pixora routes each request into a typed mode instead of using a generative provider
+for every task. See [`PROCESSING_MODES_AUDIT.md`](docs/PROCESSING_MODES_AUDIT.md),
+[`PROCESSING_MODES_ARCHITECTURE.md`](docs/PROCESSING_MODES_ARCHITECTURE.md),
+[`SEGMENTATION_EVALUATION.md`](docs/SEGMENTATION_EVALUATION.md),
+[`BACKGROUND_ASSET_POLICY.md`](docs/BACKGROUND_ASSET_POLICY.md) and
+[`REAL_BACKGROUND_PIPELINE.md`](docs/REAL_BACKGROUND_PIPELINE.md).
+
+```powershell
+python scripts/check_asset_licenses.py
+python scripts/benchmark_processing.py --iterations 3 --size 1024
+```
+
+Real-background mode stays disabled until licensed assets, pinned weights, VPS
+resource measurements and owner-only visual QA are complete.
