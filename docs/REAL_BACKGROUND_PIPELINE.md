@@ -36,6 +36,11 @@ Offline Windows, procedural 1024×1024, 3 итерации, fixed mask:
 или latency. VPS deploy повторяет тот же offline benchmark; rembg остаётся disabled
 до отдельного resource/visual gate.
 
+Production VPS dry benchmark того же procedural fixture: composite ≈132 ms,
+enhancement ≈102 ms, external calls 0. Deploy также требует нулевое количество
+stale `pixora-mask-*`/`pixora-composite-*` объектов старше часа. Native ONNX/RSS
+по-прежнему не измерены, поэтому segmentation gate остаётся закрыт.
+
 ## Enable checklist
 
 - [ ] хотя бы один legally approved active asset;

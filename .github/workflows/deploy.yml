@@ -359,7 +359,9 @@ jobs:
             "$ROOT"/venv/bin/python -m scripts.check_runtime_secrets
             "$ROOT"/venv/bin/python - <<'PY'
           import json
+          import os
           import sqlite3
+          import time
           from app.config import load_settings
 
           settings = load_settings()
@@ -373,6 +375,23 @@ jobs:
               connection.close()
           assert quick_check == "ok"
           assert migration_v5
+          stale_processing_orphans = 0
+          cutoff = time.time() - 3600
+          for path in settings.temp_dir.iterdir():
+              if not path.name.startswith(("pixora-mask-", "pixora-composite-")):
+                  continue
+              if path.is_symlink() or path.stat().st_mtime > cutoff:
+                  continue
+              stale_processing_orphans += 1
+          assert stale_processing_orphans == 0
+          memory_total_mb = 0
+          try:
+              for line in open("/proc/meminfo", encoding="utf-8"):
+                  if line.startswith("MemTotal:"):
+                      memory_total_mb = int(line.split()[1]) // 1024
+                      break
+          except OSError:
+              pass
           print("runtime_audit=" + json.dumps({
               "model": settings.openai_image_model,
               "endpoint": "/v1/images/edits",
@@ -393,6 +412,9 @@ jobs:
               "real_background_composite_enabled": settings.real_background_composite_enabled,
               "segmentation_backend": settings.segmentation_backend,
               "local_ai_finishing_enabled": settings.local_ai_finishing_enabled,
+              "cpu_count": os.cpu_count(),
+              "memory_total_mb": memory_total_mb,
+              "stale_processing_orphans": stale_processing_orphans,
               "sqlite_quick_check": quick_check,
               "migration_v5": migration_v5,
           }, sort_keys=True))

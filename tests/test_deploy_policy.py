@@ -55,6 +55,8 @@ class DeployPolicyTests(TestCase):
         self.assertIn("scripts/benchmark_processing.py", self.workflow)
         self.assertIn("WHERE version=5", self.workflow)
         self.assertIn('"migration_v5": migration_v5', self.workflow)
+        self.assertIn('"stale_processing_orphans": stale_processing_orphans', self.workflow)
+        self.assertIn("assert stale_processing_orphans == 0", self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
         health_position = self.workflow.rindex('"$ROOT"/scripts/healthcheck.sh')
