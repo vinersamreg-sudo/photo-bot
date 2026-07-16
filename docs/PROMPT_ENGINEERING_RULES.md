@@ -8,6 +8,8 @@
 4. A correction describes the delta from the selected parent image.
 5. Preserve successful parent edits unless the current correction targets them.
 6. Never expose the technical prompt in ordinary MAX UX.
+7. Never append raw Russian text to a provider prompt; provider prompts must be English ASCII.
+8. Provider prompts are rendered from typed scene fields, not from historical text columns.
 
 ## Context defaults for people
 
@@ -32,14 +34,15 @@ Phrases such as «фон всё равно размыт», «убери разм
 
 The prompt distinguishes new changes from inherited constraints. For Correction, inherited changes are described as already established in the parent result. For Repeat, the complete effective intent is rendered because Repeat starts from the same input branch as its parent.
 
-## Clarification
+## Contradictions without an extra screen
 
-Do not ask for confirmation before ordinary demo generations. Ask one question with two choices only when deterministic rules find a direct contradiction, currently:
+Do not ask for confirmation or repeat the prompt. Direct contradictions are resolved
+conservatively by explicit-negation precedence:
 
-- replace background and preserve background in the same request;
-- increase and remove background blur in the same request.
+- replace + preserve background becomes preserve background;
+- a complaint about blur wins over a colliding request to add blur.
 
-Short dissatisfaction such as «не так» is not by itself treated as a contradiction; the user remains in the correction flow.
+Short dissatisfaction such as «не так» is not by itself treated as a new scene.
 
 ## Safety and observability
 

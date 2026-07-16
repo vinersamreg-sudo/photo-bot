@@ -40,35 +40,26 @@ class MaxAdapterTests(TestCase):
         menu = main_menu()
         self.assertEqual(
             [button.text for button in menu.buttons],
-            [
-                "💬 Своя идея",
-                "📸 Сменить фон",
-                "👔 Фото для работы",
-                "✨ Улучшить качество",
-                "🧥 Одежда и образ",
-                "🪄 Восстановить старое фото",
-                "🎭 Готовые фотосессии",
-                "📂 Мои работы",
-                "⚙️ Настройки",
-            ],
+            ["Подробнее"],
         )
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
-        self.assertGreaterEqual(len(scenario_catalog().buttons), 9)
+        self.assertGreaterEqual(len(scenario_catalog().buttons), 12)
         self.assertEqual(len(SCENARIO_CATEGORIES), 12)
-        self.assertEqual([button.text for button in legal_view().buttons], ["Продолжить", "Подробнее →"])
-        self.assertEqual(len(legal_details_view().buttons), 2)
+        self.assertNotIn("Продолжить", [button.text for button in legal_view().buttons])
+        self.assertEqual(len(legal_details_view().buttons), 5)
         self.assertEqual(len(photoshoot_catalog().buttons), 4)
-        self.assertEqual(len(settings_view().buttons), 3)
+        self.assertEqual(len(settings_view().buttons), 5)
         self.assertEqual(
             [button.text for button in studio_menu_contract().buttons],
             ["📂 Мои работы", "⭐ Избранное", "Последние", "Коллекции", "🗑 Корзина"],
         )
-        self.assertEqual(WELCOME_TEXT, "✨ Pixora\n\nЧто хотите сделать?")
+        self.assertIn("Просто отправьте фотографию", WELCOME_TEXT)
+        self.assertIn("соглашаетесь с обработкой фотографии", WELCOME_TEXT)
         self.assertEqual(result_actions(4).text, "Это демо с водяным знаком.")
         self.assertNotIn("4", result_actions(4).text)
         self.assertIn("Бесплатные варианты закончились", result_actions(0).text)
         self.assertEqual(result_actions(4).buttons[0].text, "⬇ Получить оригинал")
-        self.assertEqual(len(gallery_item_actions()), 9)
+        self.assertEqual(len(gallery_item_actions()), 10)
         self.assertIn("👍 Получилось", [button.text for button in gallery_item_actions()])
         self.assertIn("👎 Не то", [button.text for button in gallery_item_actions()])
         self.assertEqual(len(version_history_actions()), 4)
@@ -97,7 +88,7 @@ class MaxAdapterTests(TestCase):
             normalized = view.text.lower()
             for term in forbidden:
                 self.assertNotIn(term, normalized)
-            self.assertLessEqual(len(view.text), 180)
+            self.assertLessEqual(len(view.text), 300)
 
     def test_consent_is_required_and_only_preview_is_delivered(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -137,3 +128,36 @@ class MaxAdapterTests(TestCase):
             root = service.storage.session_root(session.user_id, session.session_id)
             adapter.delete(session.session_id)
             self.assertTrue(root.exists())
+
+    def test_implicit_consent_is_recorded_only_after_valid_photo_is_stored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base / name).mkdir()
+            settings = Settings("", "fake-image-edit-v1", "test", base)
+            database = Database(settings.database_path)
+            service = build_demo_service(settings, provider_name="fake")
+            adapter = MaxDemoAdapter(service, database, Transport())
+            invalid = base / "invalid.bin"
+            invalid.write_text("not an image", encoding="utf-8")
+            with self.assertRaises(InvalidInputError):
+                adapter.start_demo_with_implicit_consent("implicit-user", invalid)
+            with database.read() as connection:
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM legal_consents").fetchone()[0],
+                    0,
+                )
+
+            source = base / "source.png"
+            Image.new("RGB", (320, 240), "white").save(source)
+            session = adapter.start_demo_with_implicit_consent("implicit-user", source)
+            self.assertTrue(session.source_path.is_file())
+            with database.read() as connection:
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM legal_consents").fetchone()[0],
+                    1,
+                )
+                self.assertGreater(
+                    connection.execute("SELECT COUNT(*) FROM max_legal_acceptances").fetchone()[0],
+                    0,
+                )

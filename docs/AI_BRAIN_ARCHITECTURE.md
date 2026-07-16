@@ -17,7 +17,7 @@ Russian user text
 
 `GalleryVersion` is still created only after successful preview delivery.
 
-## EditPlan v1
+## EditPlan v2
 
 `app/edit_intent.py` owns the serializable `EditPlan` dataclass. It contains:
 
@@ -31,11 +31,17 @@ Russian user text
 - correction target version;
 - parser confidence/version and JSON schema version.
 
+Schema v2 also carries a provider-neutral `scene` object. Identity, face and skin
+policy, background operation/setting/sharpness, lighting, camera framing, outfit,
+pose, added/removed objects and negative constraints are typed fields rather than
+a concatenated prompt. Older v1 JSON remains readable and receives conservative
+defaults; no SQLite schema change is required.
+
 The exact user phrase is persisted in `prompt`/`correction_prompt` and `edit_plan_json`. It is not written to aggregate telemetry. `provider_prompt` is a separate column and never replaces the original phrase.
 
 ## Deterministic parsing
 
-The v1 parser uses normalized Russian stems, phrase rules, synonyms and explicit negation handling. Negative instructions are evaluated before positive keyword effects. Supported high-value categories include background replacement/preservation/sharpness, clothing, pose, hair, identity/skin preservation, restoration, quality, add/remove object and correction complaints.
+The v2 parser uses normalized Russian stems, phrase rules, synonyms and explicit negation handling. Negative instructions are evaluated before positive keyword effects. Supported high-value categories include background replacement/preservation/sharpness, lighting, camera framing, clothing, pose, hair, identity/skin preservation, restoration, quality, add/remove object and correction complaints.
 
 No paid LLM parser is enabled. A future parser must be feature-flagged, must not receive a photo by default and must be evaluated against the deterministic regression corpus before activation.
 
@@ -48,11 +54,18 @@ No paid LLM parser is enabled. A future parser must be feature-flagged, must not
 - `parent_version_id` describes history; `source_version_id` separately records which version supplied the actual image bytes.
 - A missing/expired parent original fails before provider work and before an attempt is inserted.
 
-For corrections, prior changes move into inherited constraints and continuity. The prompt tells the provider to preserve what is already visible instead of recreating every previous edit.
+For corrections, only non-empty semantic fields replace parent fields. For example,
+`lighting=sunset` changes lighting while retaining the structured mountain background
+and hiking outfit. Prior text fields remain only for compatibility/audit; they are
+not used as the provider instruction source.
 
 ## Prompt builder
 
-`app/prompt_builder.py` renders English technical sections: main changes, preserve, do-not-change, continuity, background/subject rules, realism and quality. Contextual defaults protect identity, face, skin, hair, pose, clothing, anatomy and background unless the corresponding region is explicitly targeted.
+`app/prompt_builder.py` renders English technical sections from `scene`: main changes, preserve, do-not-change, continuity, background/subject rules, realism and quality. Contextual defaults protect identity, face, skin, hair, pose, clothing, anatomy and background unless the corresponding region is explicitly targeted.
+
+Raw Russian user text is never appended to a provider prompt, including `custom`
+requests. The provider boundary rejects every non-ASCII prompt before an API call.
+This makes OpenAI/Flux/Imagen adapters consumers of one normalized English contract.
 
 The technical prompt redacts credential-like values, local paths and long internal identifiers. Normal users never receive it. `python -m app.main ai-inspect --attempt-id ...` provides an administrative, identity-free inspection view.
 
@@ -77,4 +90,9 @@ The paid original is currently the already generated private original, not a sec
 
 ## Known limitations
 
-Rule-based intent parsing does not understand every Russian formulation. Image models can still change identity, composition or materials despite instructions, and sharpness cannot be guaranteed if the parent pixels lack detail. Complex prompts can take up to about two minutes according to OpenAI. The system asks one clarification only for a detected high-confidence contradiction such as simultaneous replace/preserve background.
+Rule-based intent parsing does not understand every Russian formulation. Unknown
+custom phrasing therefore falls back to a conservative structured edit instead of
+leaking Russian to the provider. Image models can still change identity, composition
+or materials despite instructions, and sharpness cannot be guaranteed if the parent
+pixels lack detail. Direct contradictions are resolved conservatively in favor of
+an explicit negation; the main flow has no clarification screen.

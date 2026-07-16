@@ -1,12 +1,14 @@
 # Current State
 
-## AI Brain — 16.07.2026
+## Pixora direct flow + AI Brain 2.0 — 16.07.2026
 
-Реализован детерминированный слой интерпретации русских запросов: типизированный `EditPlan`, отрицания, накопление correction intent, отдельный English technical prompt и SQLite migration v4. Correction теперь использует private original выбранной успешной версии; Repeat сохраняет effective intent и input branch. В attempts/versions раздельно хранятся точный пользовательский текст, JSON plan, provider prompt, parent/source version и версии parser/builder.
+Основной MAX-путь сокращён до `/start → фото → текст → обработка`: нет главного меню, выбора «Своя идея», отдельной кнопки согласия или повторного подтверждения prompt. На стартовом экране только инструкция загрузить фото и «Подробнее». Согласие и актуальные версии обязательных документов фиксируются после фактической валидации и сохранения первой фотографии. Для возвращающегося пользователя допустимый сохранённый source возобновляется без бессмысленного запроса другого фото. Любой следующий текст после результата автоматически становится correction текущей версии — кнопка «Исправить» необязательна. Готовые сценарии находятся в необязательном каталоге «✨ Идеи».
+
+AI Brain schema v2 хранит provider-neutral `scene`: identity/face/skin, background operation/setting/sharpness, lighting, camera, outfit, pose, objects и negative constraints. Correction обновляет только затронутые поля; Repeat копирует тот же scene и branch. Provider prompt строится только из структуры, всегда на English ASCII. Русский `source_user_text` остаётся в audit/history, но provider boundary отклоняет его прямую передачу до API.
 
 Provider quality больше не зашит как `low`: production contract использует `IMAGE_EDIT_QUALITY=medium`, `IMAGE_EDIT_SIZE=1024x1024`, `IMAGE_EDIT_INPUT_FIDELITY=auto` (для `gpt-image-2` параметр не отправляется), PNG output, timeout 300 секунд и максимум 2 SDK retry. Сравнительные платные image requests ещё не выполнялись; live owner-only сценарий должен быть согласован после deploy.
 
-Добавлены необязательные 👍/👎, агрегаты intent/correction/duration/version/provider status и admin-safe `ai-inspect`. 107 тестов подтверждают rocky-background regression, lineage, Repeat, delivery boundary, legacy migration и отсутствие provider вызова при противоречии.
+Добавлены необязательные 👍/👎, агрегаты intent/correction/duration/version/provider status и admin-safe `ai-inspect`. 117 тестов подтверждают direct upload, implicit consent после persistence, conversational corrections, optional scenarios, English-only provider boundary, structured scene merge, rocky-background regression, lineage, Repeat, delivery boundary и legacy JSON/migration compatibility.
 
 ## MAX owner-only transport smoke — 15.07.2026
 
@@ -48,7 +50,7 @@ Owner-only application gate реализован fail-closed: handlers треб�
 - реализован масштабируемый кириллический watermark «ОБРАЗЕЦ», preview до 1024 px, JPEG quality 82;
 - добавлены OpenAI/fake image-edit providers, CLI `demo-edit`, административный `demo-stats` и cost/latency/error telemetry;
 - подготовлен idempotent `unlock_original`: pending intent не раскрывает original, paid status открывает конкретный файл;
-- реализован транспорт-независимый MAX adapter с legal gate, меню, каталогом, correction/repeat/delete/unlock actions.
+- реализован транспорт-независимый MAX adapter с implicit upload consent, direct flow, отдельным каталогом идей и correction/repeat/delete/unlock actions.
 - production smoke 15.07.2026 через CLI и реальный `gpt-image-2 images.edit` на синтетическом портрете получил HTTP 200 примерно за 33 секунды; создан 1024×1024 preview 134 KB с читаемым кириллическим watermark, original 1.59 MB пользователю не раскрыт, квота уменьшилась ровно с 5 до 4;
 - после smoke production idle-процесс перезапущен на актуальном коде, log secret scan чистый.
 
@@ -58,7 +60,7 @@ Owner-only application gate реализован fail-closed: handlers треб�
 - нормализация `bot_started`, `message_created`, `message_callback` и стабильные event keys из `mid`/`callback_id`;
 - SQLite migration v3: 12 состояний диалога, versioned legal acceptances, processed events, durable marker и transitions audit;
 - восстановление `processing` после restart в `confirmation` без расхода quota;
-- `/start`, legal gate, главное меню, «Своя идея», upload, prompt confirmation до OpenAI, processing status и preview-only delivery;
+- `/start` сразу открывает upload, валидное фото автоматически фиксирует согласие, следующий текст без confirmation запускает processing и preview-only delivery;
 - correction/repeat той же GalleryItem, unlock placeholder, последние 10 работ, version navigation, favorite/current best;
 - delete confirmation и немедленный физический purge файлов/путей;
 - single-instance polling lock; `run` больше не поддерживает бессмысленный idle loop;

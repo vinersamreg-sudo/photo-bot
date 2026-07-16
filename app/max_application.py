@@ -32,10 +32,11 @@ from app.max_adapter import (
     gallery_item_actions,
     legal_details_view,
     legal_view,
-    main_menu,
     photoshoot_catalog,
     result_actions,
+    scenario_catalog,
     settings_view,
+    upload_view,
     version_history_actions,
 )
 from app.max_conversation import MaxConversationStore, MaxDialog
@@ -45,12 +46,12 @@ from app.max_transport import MaxIncomingEvent, MaxTransportError
 LOGGER = logging.getLogger(__name__)
 
 PHOTO_ACCEPTED_TEXT = (
-    "Фото получено ✅\n\n"
-    "Что изменить?"
+    "✅ Фото загружено.\n\n"
+    "Что хотите изменить?"
 )
 PHOTO_REUSED_TEXT = (
-    "Фото уже загружено ✅\n\n"
-    "Что изменить?"
+    "✅ Фото уже загружено.\n\n"
+    "Что хотите изменить?"
 )
 PROCESSING_TEXT = (
     "⏳ Обрабатываю фотографию…\n\n"
@@ -123,8 +124,8 @@ class MaxApplication:
             self._reset_dialog_to_main(event.user_id, event.event_key)
             self.transport.send_message(
                 event.user_id,
-                "Сессия завершилась.\n\nВыберите действие и загрузите фото снова.",
-                main_menu().buttons,
+                "Сессия завершилась.\n\nОтправьте фотографию снова.",
+                upload_view().buttons,
             )
             self.store.finish_event(event.event_key, True)
             return True
@@ -146,10 +147,11 @@ class MaxApplication:
         if isinstance(exc, SourceReplacementError):
             self.transport.send_message(
                 event.user_id,
-                "Бесплатное демо уже связано с первой фотографией.\n\nПродолжите в «Моих работах».",
+                "Бесплатное демо уже связано с первой фотографией.\n\n"
+                "Продолжите с ней или откройте «Мои работы».",
                 (
+                    Button("Продолжить с фото", "custom"),
                     Button("📂 Мои работы", "studio:works"),
-                    Button("← В меню", "menu"),
                 ),
             )
             return
@@ -212,6 +214,12 @@ class MaxApplication:
         dialog = self.store.get_or_create(event.user_id, event.chat_id)
         text = (event.text or "").strip()
         if event.event_type == "bot_started" or text.lower() == "/start":
+            if event.image_url:
+                self._reset_dialog_to_main(event.user_id, event.event_key)
+                self._receive_source(
+                    event, self.store.get(event.user_id) or dialog
+                )
+                return
             self._start(event, dialog)
             return
         if event.event_type == "message_callback":
@@ -221,46 +229,55 @@ class MaxApplication:
             return
         if event.event_type != "message_created":
             return
-        if not self.store.legal_is_current(event.user_id):
-            self._show_legal(event.user_id, dialog, event.event_key)
-            return
         if event.image_url:
-            self._receive_source(
-                event,
-                dialog,
-                choose_scenario=dialog.state != "waiting_for_source",
-            )
+            self._receive_source(event, dialog)
             return
         if dialog.state == "waiting_for_source":
             self._receive_source(event, dialog)
         elif dialog.state in {"waiting_for_prompt", "waiting_for_correction"}:
             self._receive_prompt(event, dialog)
+        elif dialog.state == "result_ready" and text:
+            correction_dialog = self.store.transition(
+                event.user_id, "waiting_for_correction", event_key=event.event_key,
+                pending_prompt=None, pending_action="correction",
+            )
+            self._receive_prompt(event, correction_dialog)
         else:
             self._show_main(event.user_id, dialog, event.event_key)
 
     def _start(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
-        if not self.store.legal_is_current(event.user_id):
-            self._show_legal(event.user_id, dialog, event.event_key)
-            return
+        if self.store.legal_is_current(event.user_id):
+            stored = self.adapter.resume_demo(event.user_id)
+            if stored is not None:
+                with self.database.read() as connection:
+                    item_id = connection.execute(
+                        "SELECT gallery_item_id FROM demo_sessions WHERE id=?",
+                        (stored.session_id,),
+                    ).fetchone()[0]
+                self.store.transition(
+                    event.user_id, "waiting_for_prompt", event_key=event.event_key,
+                    force=True, user_id=stored.user_id, session_id=stored.session_id,
+                    selected_scenario_id=None, pending_prompt=None,
+                    pending_action="initial", current_gallery_item_id=item_id,
+                    current_version_id=None, status_message_id=None,
+                )
+                self.transport.send_message(event.user_id, PHOTO_REUSED_TEXT)
+                return
         self._show_main(event.user_id, dialog, event.event_key)
 
     def _send_view(self, user_id: str, view: View) -> str:
         return self.transport.send_message(user_id, view.text, view.buttons)
 
     def _show_legal(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
-        self.store.transition(
-            user_id, "legal_required", event_key=event_key, force=True,
-            pending_prompt=None, pending_action=None,
-        )
         self._send_view(user_id, legal_view())
 
     def _show_main(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
         self._reset_dialog_to_main(user_id, event_key)
-        self._send_view(user_id, main_menu())
+        self._send_view(user_id, upload_view())
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
         self.store.transition(
-            user_id, "main_menu", event_key=event_key, force=True,
+            user_id, "waiting_for_source", event_key=event_key, force=True,
             selected_scenario_id=None,
             session_id=None,
             pending_prompt=None,
@@ -273,6 +290,9 @@ class MaxApplication:
 
     def _callback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         action = event.callback_payload or ""
+        if action in {"start:details", "legal:details"}:
+            self._send_view(event.user_id, legal_details_view())
+            return
         if action == "legal:offer":
             self.transport.send_message(
                 event.user_id,
@@ -287,11 +307,8 @@ class MaxApplication:
                 (Button("← Назад", "settings"),),
             )
             return
-        if action == "legal:details":
-            self._send_view(event.user_id, legal_details_view())
-            return
         if action == "legal:back":
-            self._send_view(event.user_id, legal_view())
+            self._show_main(event.user_id, dialog, event.event_key)
             return
         if action == "legal:accept_all":
             self.store.accept_required_documents(event.user_id)
@@ -303,23 +320,16 @@ class MaxApplication:
             self._show_main(event.user_id, dialog, event.event_key)
             return
         if action == "legal:show":
-            view = settings_view() if self.store.legal_is_current(event.user_id) else legal_view()
-            self._send_view(event.user_id, view)
+            self._send_view(event.user_id, settings_view())
             return
         if action == "menu":
-            if self.store.legal_is_current(event.user_id):
-                self._show_main(event.user_id, dialog, event.event_key)
-            else:
-                self._show_legal(event.user_id, dialog, event.event_key)
+            self._show_main(event.user_id, dialog, event.event_key)
             return
         if action == "settings":
-            if self.store.legal_is_current(event.user_id):
-                self._send_view(event.user_id, settings_view())
-            else:
-                self._show_legal(event.user_id, dialog, event.event_key)
+            self._send_view(event.user_id, settings_view())
             return
-        if not self.store.legal_is_current(event.user_id):
-            self._show_legal(event.user_id, dialog, event.event_key)
+        if action == "catalog:ideas":
+            self._send_view(event.user_id, scenario_catalog())
             return
         if action == "custom" or action.startswith("scenario:"):
             scenario = action.split(":", 1)[1] if action.startswith("scenario:") else None
@@ -409,7 +419,7 @@ class MaxApplication:
         ) else None
         user_id = dialog.user_id
         item_id = dialog.current_gallery_item_id
-        if session_id is None:
+        if session_id is None and self.store.legal_is_current(event.user_id):
             stored = self.adapter.resume_demo(event.user_id)
             if stored is not None:
                 session_id = stored.session_id
@@ -420,9 +430,22 @@ class MaxApplication:
                         (stored.session_id,),
                     ).fetchone()[0]
         reusable_source = session_id is not None
+        if reusable_source and scenario_id:
+            updated = self.store.transition(
+                event.user_id, "confirmation", event_key=event.event_key, force=True,
+                user_id=user_id,
+                selected_scenario_id=scenario_id,
+                pending_prompt="Применить выбранный сценарий",
+                pending_action="initial",
+                session_id=session_id,
+                current_gallery_item_id=item_id,
+                current_version_id=None,
+            )
+            self._generate(event, updated, correction=False)
+            return
         target = "waiting_for_prompt" if reusable_source else "waiting_for_source"
         self.store.transition(
-            event.user_id, target, event_key=event.event_key,
+            event.user_id, target, event_key=event.event_key, force=True,
             user_id=user_id,
             selected_scenario_id=scenario_id, pending_prompt=None,
             pending_action="initial",
@@ -442,8 +465,6 @@ class MaxApplication:
         self,
         event: MaxIncomingEvent,
         dialog: MaxDialog,
-        *,
-        choose_scenario: bool = False,
     ) -> None:
         if not event.image_url:
             self.transport.send_message(event.user_id, "Пришлите фотографию 📷")
@@ -455,33 +476,32 @@ class MaxApplication:
                 destination,
                 self.settings.max_source_file_size_mb * 1024 * 1024,
             )
-            session = self.adapter.start_demo(event.user_id, destination)
+            session = self.adapter.start_demo_with_implicit_consent(
+                event.user_id, destination
+            )
         finally:
             destination.unlink(missing_ok=True)
         with self.database.read() as connection:
             item_id = connection.execute(
                 "SELECT gallery_item_id FROM demo_sessions WHERE id=?", (session.session_id,)
             ).fetchone()[0]
-        if choose_scenario:
-            self.store.transition(
-                event.user_id, "main_menu", event_key=event.event_key, force=True,
+        if dialog.selected_scenario_id:
+            updated = self.store.transition(
+                event.user_id, "confirmation", event_key=event.event_key, force=True,
                 user_id=session.user_id,
                 session_id=session.session_id,
-                selected_scenario_id=None,
+                selected_scenario_id=dialog.selected_scenario_id,
                 current_gallery_item_id=item_id,
                 current_version_id=None,
-                pending_prompt=None,
-                pending_action=None,
+                pending_prompt="Применить выбранный сценарий",
+                pending_action="initial",
                 status_message_id=None,
             )
-            self.transport.send_message(
-                event.user_id,
-                "Фото получено ✅\n\nЧто хотите сделать?",
-                main_menu().buttons,
-            )
+            self._generate(event, updated, correction=False)
         else:
             self.store.transition(
                 event.user_id, "waiting_for_prompt", event_key=event.event_key,
+                force=True,
                 user_id=session.user_id, session_id=session.session_id,
                 current_gallery_item_id=item_id, current_version_id=None,
                 pending_action="initial",

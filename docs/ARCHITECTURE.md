@@ -2,7 +2,7 @@
 
 ## AI Brain boundary
 
-`MAX text → EditPlan parser → parent-intent merge → technical prompt builder → ImageProvider`.
+`MAX text → EditPlan v2 parser → structured scene merge → English technical prompt builder → ImageProvider`.
 
 Initial/scenario работает от immutable source; Correction — от private original выбранной успешной версии; Repeat — от того же input branch с тем же effective intent. `parent_version_id` и `source_version_id` имеют разные смыслы и сохраняются отдельно. Полное описание: [AI_BRAIN_ARCHITECTURE.md](AI_BRAIN_ARCHITECTURE.md). Правила prompt: [PROMPT_ENGINEERING_RULES.md](PROMPT_ENGINEERING_RULES.md).
 
@@ -39,7 +39,11 @@ CI запускает unit-тесты, healthcheck, `pip check` и secret scan. 
 
 ## Demo workflow
 
-`legal consent → source signature/size validation → user/session transaction → quota/budget/concurrency guard → idempotent attempt → OpenAI images.edit → private original → reduced watermark preview → delivery → single transactional quota increment`.
+`/start upload view → source signature/size validation + persistence → implicit consent record → user text → structured EditPlan → quota/budget/concurrency guard → idempotent attempt → ImageProvider → private original → reduced watermark preview → delivery → single transactional quota increment`.
+
+The main MAX flow has no scenario menu and no prompt-confirmation message. Ready
+scenarios are an optional catalog. Existing legal tables and versioned documents are
+preserved; upload-based consent is recorded only after a valid source exists.
 
 При network/provider/timeout/storage/policy/delivery failure попытка получает отдельный статус, но `successful_generations` не меняется. После перезапуска незавершённые `pending/processing` переводятся в `failed_technical`.
 

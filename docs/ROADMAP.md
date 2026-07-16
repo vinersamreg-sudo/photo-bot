@@ -2,7 +2,7 @@
 
 ## AI Brain
 
-Выполнено: deterministic Russian intent parser, typed EditPlan, technical prompt builder, cumulative corrections, parent-original lineage, Repeat semantics, v4 migration, feedback и regression suite. Следующий шаг — один owner-only синтетический сценарий максимум из трёх image requests и сравнение наблюдаемого качества/latency с фактическим provider usage. До первых пользователей нужно накопить минимум 20 размеченных feedback cases и проверить долю исправлений, которые сохраняют identity/background continuity.
+Выполнено: direct MAX flow, deterministic Russian intent parser, typed EditPlan v2 scene, English-only provider contract, field-level corrections, parent-original lineage, Repeat semantics, legacy compatibility, feedback и regression suite. Следующий шаг — один owner-only синтетический сценарий максимум из трёх image requests и сравнение наблюдаемого качества/latency с фактическим provider usage. До первых пользователей нужно накопить минимум 20 размеченных feedback cases и проверить долю исправлений, которые сохраняют identity/background continuity.
 
 ## Сайт Pixora — код готов, публикация ожидает инфраструктуру
 

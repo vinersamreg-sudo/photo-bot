@@ -53,7 +53,7 @@ class OpenAIImageProviderTests(TestCase):
             source.write_bytes(output.getvalue())
             images = Images(base64.b64encode(output.getvalue()).decode("ascii"))
             provider = OpenAIImageProvider(SimpleNamespace(images=images), "gpt-image-2")
-            result = provider.edit(source, "Сделай светлый фон")
+            result = provider.edit(source, "Replace the background with a light studio.")
             self.assertEqual(result.image_bytes, output.getvalue())
             self.assertEqual(result.request_id, "req_test")
             self.assertEqual(result.usage["image_tokens"], 196)
@@ -62,6 +62,16 @@ class OpenAIImageProviderTests(TestCase):
             self.assertEqual(images.kwargs["size"], "1024x1024")
             self.assertEqual(images.kwargs["output_format"], "png")
             self.assertNotIn("input_fidelity", images.kwargs)
+
+    def test_rejects_non_normalized_provider_prompt_before_api_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            Image.new("RGB", (32, 32), "white").save(source)
+            images = Images("")
+            provider = OpenAIImageProvider(SimpleNamespace(images=images), "gpt-image-2")
+            with self.assertRaises(ValueError):
+                provider.edit(source, "Замени фон")
+            self.assertIsNone(images.kwargs)
 
     def test_input_fidelity_is_omitted_for_image_two_and_configurable_for_legacy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

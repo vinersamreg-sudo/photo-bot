@@ -12,9 +12,20 @@ from app.domain import DemoGenerationResult, DemoSessionInfo, InvalidInputError
 from app.scenarios import SCENARIOS
 
 
-WELCOME_TEXT = "✨ Pixora\n\nЧто хотите сделать?"
+WELCOME_TEXT = (
+    "✨ Pixora\n\n"
+    "Изменяем фотографии с помощью ИИ.\n\n"
+    "Просто отправьте фотографию.\n\n"
+    "После загрузки напишите своими словами, что хотите изменить.\n\n"
+    "Продолжая использование сервиса, вы соглашаетесь с обработкой "
+    "фотографии и условиями использования."
+)
 
-LEGAL_TEXT = "✨ Pixora\n\nПродолжая, вы принимаете условия использования."
+LEGAL_TEXT = (
+    "Фото передаётся внешнему AI-провайдеру для обработки. "
+    "Загружая фотографию, вы подтверждаете право на её использование "
+    "и принимаете условия сервиса."
+)
 
 
 @dataclass(frozen=True)
@@ -33,41 +44,34 @@ class MaxTransport(Protocol):
     def send_image(self, platform_user_id: str, image: Path, caption: str, buttons: Sequence[Button]) -> bool: ...
 
 
-def main_menu() -> View:
+def upload_view() -> View:
     return View(
         WELCOME_TEXT,
-        (
-            Button("💬 Своя идея", "custom"),
-            Button("📸 Сменить фон", "scenario:light-background"),
-            Button("👔 Фото для работы", "scenario:resume"),
-            Button("✨ Улучшить качество", "scenario:enhance"),
-            Button("🧥 Одежда и образ", "scenario:business-look"),
-            Button("🪄 Восстановить старое фото", "scenario:restore"),
-            Button("🎭 Готовые фотосессии", "catalog:photoshoot"),
-            Button("📂 Мои работы", "studio:works"),
-            Button("⚙️ Настройки", "settings"),
-        ),
+        (Button("Подробнее", "start:details"),),
     )
+
+
+def main_menu() -> View:
+    """Compatibility alias for older callers; this is no longer a menu."""
+
+    return upload_view()
 
 
 def legal_view() -> View:
     return View(
         LEGAL_TEXT,
         (
-            Button("Продолжить", "legal:accept_all"),
-            Button("Подробнее →", "legal:details"),
+            Button("Условия", "legal:offer"),
+            Button("Приватность", "legal:privacy"),
+            Button("✨ Идеи", "catalog:ideas"),
+            Button("📂 Мои работы", "studio:works"),
+            Button("← Назад", "menu"),
         ),
     )
 
 
 def legal_details_view() -> View:
-    return View(
-        "Фото обрабатывается с помощью внешнего AI-сервиса. Загружая фото, вы подтверждаете право на его использование.",
-        (
-            Button("Продолжить", "legal:accept_all"),
-            Button("← Назад", "legal:back"),
-        ),
-    )
+    return legal_view()
 
 
 def settings_view() -> View:
@@ -76,6 +80,8 @@ def settings_view() -> View:
         (
             Button("Условия", "legal:offer"),
             Button("Приватность", "legal:privacy"),
+            Button("✨ Идеи", "catalog:ideas"),
+            Button("📂 Мои работы", "studio:works"),
             Button("← Назад", "menu"),
         ),
     )
@@ -99,7 +105,7 @@ def scenario_catalog() -> View:
         for scenario in sorted(SCENARIOS, key=lambda value: value.sort_order)
         if scenario.active
     ) + (Button("← Назад", "menu"),)
-    return View("Выберите образ.", buttons)
+    return View("✨ Идеи\n\nВыберите готовый сценарий.", buttons)
 
 
 def studio_menu_contract() -> View:
@@ -127,6 +133,7 @@ def result_actions(remaining: int) -> View:
             Button("👍 Получилось", "result:feedback:positive"),
             Button("👎 Не то", "result:feedback:negative"),
             Button("📂 Мои работы", "studio:works"),
+            Button("✨ Идеи", "catalog:ideas"),
             Button("🗑 Удалить", "result:delete"),
         )
     else:
@@ -137,6 +144,7 @@ def result_actions(remaining: int) -> View:
         buttons = (
             Button("⬇ Получить оригинал", "result:unlock"),
             Button("📂 Мои работы", "studio:works"),
+            Button("✨ Идеи", "catalog:ideas"),
             Button("🗑 Удалить", "result:delete"),
         )
     return View(text, buttons)
@@ -163,6 +171,7 @@ def gallery_item_actions() -> tuple[Button, ...]:
         Button("История версий", "work:history"),
         Button("🗑 Удалить", "result:delete"),
         Button("📂 К работам", "studio:works"),
+        Button("✨ Идеи", "catalog:ideas"),
     )
 
 
@@ -229,6 +238,47 @@ class MaxDemoAdapter:
     def start_demo(self, platform_user_id: str, source: Path) -> DemoSessionInfo:
         self._require_consent(platform_user_id)
         return self.service.start_session(self.platform, platform_user_id, source)
+
+    def start_demo_with_implicit_consent(
+        self, platform_user_id: str, source: Path
+    ) -> DemoSessionInfo:
+        """Persist and validate the photo before recording upload-based consent."""
+
+        session = self.service.start_session(self.platform, platform_user_id, source)
+        accepted_at = iso(utc_now())
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO legal_consents(
+                       platform,platform_user_id,offer_accepted,personal_data_accepted,
+                       image_rights_confirmed,external_ai_acknowledged,
+                       appearance_change_acknowledged,accepted_at
+                   ) VALUES(?,?,?,?,?,?,?,?)
+                   ON CONFLICT(platform,platform_user_id) DO UPDATE SET
+                       offer_accepted=excluded.offer_accepted,
+                       personal_data_accepted=excluded.personal_data_accepted,
+                       image_rights_confirmed=excluded.image_rights_confirmed,
+                       external_ai_acknowledged=excluded.external_ai_acknowledged,
+                       appearance_change_acknowledged=excluded.appearance_change_acknowledged,
+                       accepted_at=excluded.accepted_at""",
+                (self.platform, platform_user_id, 1, 1, 1, 1, 1, accepted_at),
+            )
+            documents = connection.execute(
+                """SELECT document_type,version FROM max_legal_documents
+                   WHERE required=1 AND active=1"""
+            ).fetchall()
+            for document in documents:
+                connection.execute(
+                    """INSERT OR IGNORE INTO max_legal_acceptances(
+                           platform_user_id,document_type,document_version,accepted_at
+                       ) VALUES(?,?,?,?)""",
+                    (
+                        platform_user_id,
+                        document["document_type"],
+                        document["version"],
+                        accepted_at,
+                    ),
+                )
+        return session
 
     def resume_demo(self, platform_user_id: str) -> DemoSessionInfo | None:
         self._require_consent(platform_user_id)

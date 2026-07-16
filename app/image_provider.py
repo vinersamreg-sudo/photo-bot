@@ -20,6 +20,11 @@ class ImageProvider(Protocol):
     def edit(self, source_path: Path, prompt: str) -> ProviderResult: ...
 
 
+def _validate_provider_prompt(prompt: str) -> None:
+    if not prompt.strip() or not prompt.isascii():
+        raise ValueError("Image providers accept normalized English ASCII prompts only")
+
+
 class OpenAIImageProvider:
     name = "openai"
 
@@ -40,6 +45,7 @@ class OpenAIImageProvider:
         self.output_format = output_format
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
+        _validate_provider_prompt(prompt)
         try:
             with source_path.open("rb") as source:
                 request: dict[str, Any] = dict(
@@ -99,6 +105,7 @@ class FakeImageProvider:
         self.calls = 0
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
+        _validate_provider_prompt(prompt)
         self.calls += 1
         if self.fail:
             raise self.fail

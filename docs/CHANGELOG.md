@@ -1,5 +1,18 @@
 # Changelog
 
+## 16.07.2026 — Direct photo flow and AI Brain 2.0
+
+- основной MAX flow сокращён до `/start → photo → text → result`;
+- отдельный legal/Continue экран, главное меню, «Своя идея» и prompt confirmation удалены из основного пути;
+- implicit consent и legal document versions записываются только после валидного сохранения source;
+- возвращающийся пользователь продолжает с допустимым сохранённым фото без повторной загрузки;
+- готовые сценарии перенесены в отдельный каталог «✨ Идеи» и могут запускаться без дополнительного prompt;
+- следующий текст после результата автоматически становится correction текущей версии;
+- EditPlan schema v2 получила provider-neutral scene fields для background/lighting/camera/outfit/pose/objects/negative;
+- Correction меняет только затронутые scene fields, Repeat сохраняет scene и branch;
+- raw Russian text исключён из provider prompt, а provider boundary блокирует non-ASCII до API;
+- SQLite schema, Storage, Gallery, quota, payments, watermark, security и delivery boundary не менялись.
+
 ## 16.07.2026 — Structured AI Brain
 
 - добавлены `app/edit_intent.py` и `app/prompt_builder.py`;

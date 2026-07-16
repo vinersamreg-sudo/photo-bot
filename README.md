@@ -4,7 +4,7 @@
 
 ## AI Brain
 
-Pixora не передаёт correction как голую строку. `app/edit_intent.py` строит сериализуемый EditPlan с изменениями, запретами и continuity; `app/prompt_builder.py` создаёт технический prompt. Correction редактирует private original выбранной успешной версии, Repeat сохраняет тот же intent и input branch. Подробности: [аудит до изменений](docs/AI_BRAIN_AUDIT.md), [архитектура](docs/AI_BRAIN_ARCHITECTURE.md), [правила prompt](docs/PROMPT_ENGINEERING_RULES.md).
+Pixora не передаёт correction как голую строку. `app/edit_intent.py` строит сериализуемый EditPlan v2 с provider-neutral scene fields; `app/prompt_builder.py` создаёт только English/ASCII technical prompt. Correction редактирует private original выбранной успешной версии и меняет только затронутые поля, Repeat сохраняет тот же intent и input branch. Raw Russian text никогда не передаётся ImageProvider. Подробности: [аудит до изменений](docs/AI_BRAIN_AUDIT.md), [архитектура](docs/AI_BRAIN_ARCHITECTURE.md), [правила prompt](docs/PROMPT_ENGINEERING_RULES.md).
 
 Безопасный административный просмотр intent/provider prompt:
 
@@ -71,7 +71,7 @@ Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `T
 
 ## MAX closed-test transport
 
-Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы owner allowlist, закрытый ответ для остальных, `/start`, versioned legal gate, меню, upload, prompt confirmation, processing, watermarked preview, correction/repeat, «Мои работы», favorite и физическое удаление.
+Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы owner allowlist, закрытый ответ для остальных и прямой UX `/start → фото → текст → результат`. Загрузка валидного source автоматически фиксирует согласие; отдельного Continue и prompt confirmation нет. Следующий текст после результата автоматически продолжает работу как correction. «✨ Идеи» — необязательный каталог. Processing, watermarked preview, correction/repeat, «Мои работы», favorite и физическое удаление сохранены.
 
 ```powershell
 python -m app.main max-check

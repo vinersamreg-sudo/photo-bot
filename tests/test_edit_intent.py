@@ -76,6 +76,8 @@ class EditIntentTests(TestCase):
         self.assertIn("hiking clothing", inherited)
         self.assertIn("pose", inherited)
         self.assertTrue(any("background" in value.lower() for value in third.continuity_requirements))
+        self.assertEqual(third.scene.background.setting, "realistic rocky mountains")
+        self.assertEqual(third.scene.background.operation, "sharpen")
 
     def test_repeat_preserves_effective_intent(self) -> None:
         plan = merge_edit_plans(
@@ -120,13 +122,12 @@ class EditIntentTests(TestCase):
         inspected = safe_prompt_inspection(plan, prompt)
         self.assertNotIn("source_user_text", inspected)
 
-    def test_true_background_contradiction_requires_clarification(self) -> None:
+    def test_true_background_contradiction_resolves_to_safe_preservation(self) -> None:
         plan = parse_edit_intent("Поменяй фон, но фон не меняй")
-        self.assertIn(
-            "replace_background_conflicts_with_preserve_background",
-            plan.unresolved_ambiguities,
-        )
-        self.assertLess(plan.confidence, 0.5)
+        self.assertEqual(plan.unresolved_ambiguities, ())
+        self.assertNotEqual(plan.primary_action, "replace_background")
+        self.assertEqual(plan.scene.background.operation, "preserve")
+        self.assertIn("replace background", plan.scene.negative)
 
     def test_explicit_clarification_resolves_background_conflict(self) -> None:
         plan = parse_edit_intent(
@@ -151,4 +152,53 @@ class EditIntentTests(TestCase):
         plan = parse_edit_intent("Поменяй только одежду")
         restored = EditPlan.from_json(plan.to_json())
         self.assertEqual(restored, plan)
-        self.assertEqual(restored.parser_version, "rules-ru-v1")
+        self.assertEqual(restored.parser_version, "rules-ru-v2")
+        self.assertEqual(restored.schema_version, 2)
+
+    def test_structured_scene_accumulates_field_updates(self) -> None:
+        first = parse_edit_intent("Замени фон на Альпы")
+        second = merge_edit_plans(
+            first, parse_edit_intent("Добавь куртку", mode="correction")
+        )
+        third = merge_edit_plans(
+            second, parse_edit_intent("Сделай закат", mode="correction")
+        )
+        self.assertEqual(third.scene.background.setting, "realistic alpine mountains")
+        self.assertEqual(third.scene.outfit.style, "realistic jacket")
+        self.assertEqual(third.scene.lighting.style, "realistic warm sunset light")
+
+    def test_provider_prompt_is_always_english_ascii_and_omits_raw_russian(self) -> None:
+        plan = parse_edit_intent("Удалить девушку и добавить солнце")
+        prompt = build_provider_prompt(plan)
+        self.assertTrue(prompt.isascii())
+        self.assertNotIn("девуш", prompt.lower())
+        self.assertIn("Remove the woman", prompt)
+        self.assertIn("Add a realistic sun", prompt)
+
+    def test_direct_flow_examples_map_to_structured_scene(self) -> None:
+        cases = {
+            "Сделай светлый фон": ("background", "clean light modern photo studio"),
+            "Сделай деловое фото": ("camera", "professional portrait"),
+            "Удалить девушку": ("remove", "woman"),
+            "Добавь солнце": ("add", "sun"),
+            "Сделай закат": ("lighting", "realistic warm sunset light"),
+        }
+        for phrase, (field, expected) in cases.items():
+            with self.subTest(phrase=phrase):
+                scene = parse_edit_intent(phrase).scene
+                actual = {
+                    "background": scene.background.setting,
+                    "camera": scene.camera.framing,
+                    "remove": scene.objects.remove[0] if scene.objects.remove else None,
+                    "add": scene.objects.add[0] if scene.objects.add else None,
+                    "lighting": scene.lighting.style,
+                }[field]
+                self.assertEqual(actual, expected)
+
+    def test_legacy_v1_json_remains_readable_with_scene_defaults(self) -> None:
+        payload = parse_edit_intent("Фон на скалы").to_dict()
+        payload.pop("scene")
+        payload["schema_version"] = 1
+        restored = EditPlan.from_dict(payload)
+        self.assertEqual(restored.schema_version, 1)
+        self.assertEqual(restored.scene.background.operation, "unchanged")

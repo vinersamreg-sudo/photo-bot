@@ -9,6 +9,7 @@ from PIL import Image
 from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
+from app.edit_intent import EditPlan
 from app.image_provider import FakeImageProvider
 from app.max_application import (
     MaxApplication,
@@ -154,17 +155,15 @@ class MaxApplicationTests(TestCase):
 
     def onboard_to_prompt(self) -> None:
         self.app.handle(self.event("bot_started"))
-        self.assertEqual(self.store.get("u1").state, "legal_required")
-        self.callback("legal:accept_all")
-        menu = self.transport.messages[-1]
-        self.assertEqual(menu[2][0].text, "💬 Своя идея")
-        self.assertEqual(len(menu[2]), 9)
-        self.callback("custom")
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        menu = self.transport.messages[-1]
+        self.assertIn("Просто отправьте фотографию", menu[1])
+        self.assertEqual([button.text for button in menu[2]], ["Подробнее"])
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/source")
         )
         self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertTrue(self.store.legal_is_current("u1"))
 
     def generate_first(self) -> None:
         self.onboard_to_prompt()
@@ -174,27 +173,21 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(any("Я понял задачу" in message[1] for message in self.transport.messages))
         self.assertFalse(any("Бесплатных вариантов доступно" in message[1] for message in self.transport.messages))
 
-    def test_start_legal_details_upload_and_invalid_file(self) -> None:
+    def test_start_direct_upload_details_and_implicit_consent(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
-        self.assertEqual(self.store.get("u1").state, "legal_required")
-        self.assertEqual(self.transport.messages[-1][1], "✨ Pixora\n\nПродолжая, вы принимаете условия использования.")
-        self.callback("menu")
-        self.assertEqual(self.store.get("u1").state, "legal_required")
-        self.callback("settings")
-        self.assertEqual(self.store.get("u1").state, "legal_required")
-        self.callback("legal:details")
-        self.assertIn("внешнего AI-сервиса", self.transport.messages[-1][1])
-        self.callback("legal:back")
-        self.callback("legal:accept_all")
-        self.assertEqual(self.transport.messages[-1][1], "✨ Pixora\n\nЧто хотите сделать?")
-        self.callback("settings")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertIn("Просто отправьте фотографию", self.transport.messages[-1][1])
+        self.assertEqual(len(self.transport.messages[-1][2]), 1)
+        self.callback("start:details")
+        self.assertIn("внешнему AI-провайдеру", self.transport.messages[-1][1])
+        self.assertNotIn("Продолжить", [button.text for button in self.transport.messages[-1][2]])
         self.callback("legal:offer")
         self.assertIn("Условия использования", self.transport.messages[-1][1])
-        self.callback("settings")
+        self.callback("start:details")
         self.callback("legal:privacy")
         self.assertIn("Приватность", self.transport.messages[-1][1])
         self.callback("menu")
-        self.callback("custom")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
 
         invalid = self.base / "invalid.bin"
         invalid.write_text("not image", encoding="utf-8")
@@ -202,7 +195,7 @@ class MaxApplicationTests(TestCase):
         accepted_after_persistence = []
 
         def verify_photo_is_persisted_before_acceptance(text):
-            if text.startswith("Фото получено"):
+            if text.startswith("✅ Фото загружено"):
                 with self.database.read() as connection:
                     row = connection.execute(
                         "SELECT source_file_path FROM demo_sessions"
@@ -218,6 +211,8 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         self.assertEqual(self.provider.calls, 0)
         self.assertEqual(accepted_after_persistence, [])
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM legal_consents").fetchone()[0], 0)
 
         self.transport.source = self.source
         self.app.handle(
@@ -225,8 +220,34 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(accepted_after_persistence, [True])
         self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
+        self.assertTrue(self.store.legal_is_current("u1"))
 
-    def test_start_clears_dialog_binding_then_resumes_the_stored_source(self) -> None:
+    def test_ready_scenario_is_optional_and_runs_without_prompt_confirmation(self) -> None:
+        self.app.handle(self.event("bot_started"))
+        self.callback("start:details")
+        self.callback("catalog:ideas")
+        self.callback("scenario:documents")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/documents")
+        )
+        self.assertEqual(self.provider.calls, 1)
+        self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertTrue(self.store.legal_is_current("u1"))
+        self.assertFalse(any("Я понял задачу" in row[1] for row in self.transport.messages))
+
+    def test_start_message_can_include_the_first_photo(self) -> None:
+        self.app.handle(
+            self.event(
+                "message_created", text="/start",
+                image_url="https://iu.oneme.ru/first-photo",
+            )
+        )
+        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
+        self.assertTrue(self.store.legal_is_current("u1"))
+
+    def test_start_resumes_stored_source_without_asking_for_another_photo(self) -> None:
         self.onboard_to_prompt()
         before_restart = self.store.get("u1")
         self.assertIsNotNone(before_restart.session_id)
@@ -235,15 +256,10 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(len(self.transport.messages), message_count + 1)
         restarted = self.store.get("u1")
-        self.assertEqual(restarted.state, "main_menu")
-        self.assertIsNone(restarted.session_id)
-        self.assertIsNone(restarted.current_gallery_item_id)
+        self.assertEqual(restarted.state, "waiting_for_prompt")
+        self.assertEqual(restarted.session_id, before_restart.session_id)
+        self.assertIsNotNone(restarted.current_gallery_item_id)
         self.assertIsNone(restarted.current_version_id)
-
-        self.callback("custom")
-        resumed = self.store.get("u1")
-        self.assertEqual(resumed.state, "waiting_for_prompt")
-        self.assertEqual(resumed.session_id, before_restart.session_id)
         self.assertEqual(self.provider.calls, 0)
         self.assertEqual(self.transport.messages[-1][1], PHOTO_REUSED_TEXT)
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
@@ -256,21 +272,21 @@ class MaxApplicationTests(TestCase):
             ).fetchone()[0])
         self.app.handle(self.event("message_created", text="/start"))
         source.unlink()
-
-        self.callback("custom")
+        self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
-        self.assertEqual(self.transport.messages[-1][1], "Пришлите фотографию 📷")
+        self.assertIn("Просто отправьте фотографию", self.transport.messages[-1][1])
         self.assertEqual(self.provider.calls, 0)
 
     def test_photoshoot_catalog_and_source_replacement_have_product_copy(self) -> None:
         self.generate_first()
         calls_before = self.provider.calls
         self.app.handle(self.event("message_created", text="/start"))
-        self.callback("catalog:photoshoot")
-        self.assertEqual(self.transport.messages[-1][1], "🎭 Готовые фотосессии\n\nВыберите образ.")
+        self.callback("catalog:ideas")
+        self.assertIn("готовый сценарий", self.transport.messages[-1][1].lower())
+        self.clock.advance(2)
         self.callback("scenario:cafe")
-        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
-        self.assertEqual(self.transport.messages[-1][1], PHOTO_REUSED_TEXT)
+        self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertEqual(self.provider.calls, calls_before + 1)
 
         other = self.base / "other.png"
         Image.new("RGB", (320, 240), "#aa7755").save(other)
@@ -280,21 +296,20 @@ class MaxApplicationTests(TestCase):
         )
         message = self.transport.messages[-1]
         self.assertIn("Бесплатное демо уже связано с первой фотографией", message[1])
-        self.assertEqual(message[2][0].text, "📂 Мои работы")
-        self.assertEqual(self.provider.calls, calls_before)
+        self.assertEqual(message[2][1].text, "📂 Мои работы")
+        self.assertEqual(self.provider.calls, calls_before + 1)
 
     def test_image_outside_waiting_for_source_is_saved_and_not_silently_ignored(self) -> None:
         self.app.handle(self.event("bot_started"))
-        self.callback("legal:accept_all")
-        self.assertEqual(self.store.get("u1").state, "main_menu")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
 
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/preloaded")
         )
         preloaded = self.store.get("u1")
-        self.assertEqual(preloaded.state, "main_menu")
+        self.assertEqual(preloaded.state, "waiting_for_prompt")
         self.assertIsNotNone(preloaded.session_id)
-        self.assertIn("Фото получено", self.transport.messages[-1][1])
+        self.assertIn("Фото загружено", self.transport.messages[-1][1])
         with self.database.read() as connection:
             source = Path(connection.execute(
                 "SELECT source_file_path FROM demo_sessions WHERE id=?",
@@ -302,8 +317,7 @@ class MaxApplicationTests(TestCase):
             ).fetchone()[0])
         self.assertTrue(source.is_file())
 
-        self.callback("custom")
-        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertTrue(self.store.legal_is_current("u1"))
 
     def test_expired_source_never_reaches_processing_and_same_reupload_recovers(self) -> None:
         self.onboard_to_prompt()
@@ -311,7 +325,7 @@ class MaxApplicationTests(TestCase):
 
         self.app.handle(self.event("message_created", text="Замени фон"))
         expired = self.store.get("u1")
-        self.assertEqual(expired.state, "main_menu")
+        self.assertEqual(expired.state, "waiting_for_source")
         self.assertIsNone(expired.session_id)
         self.assertEqual(self.provider.calls, 0)
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
@@ -322,7 +336,9 @@ class MaxApplicationTests(TestCase):
                 "expired",
             )
 
-        self.callback("custom")
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/source-again")
+        )
         refreshed = self.store.get("u1")
         self.assertEqual(refreshed.state, "waiting_for_prompt")
         self.assertIsNotNone(refreshed.session_id)
@@ -358,23 +374,40 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
-    def test_true_intent_conflict_asks_once_before_provider(self) -> None:
+    def test_true_intent_conflict_is_resolved_without_an_extra_question(self) -> None:
         self.onboard_to_prompt()
         self.app.handle(
             self.event("message_created", text="Поменяй фон, но фон не меняй")
         )
-        self.assertEqual(self.provider.calls, 0)
-        self.assertEqual(self.store.get("u1").state, "confirmation")
-        self.assertEqual(
-            self.transport.messages[-1][1],
-            "Оставить текущий фон и только улучшить его?",
-        )
-        self.assertEqual(len(self.transport.messages[-1][2]), 2)
-        self.assertFalse(any(row[1] == PROCESSING_TEXT for row in self.transport.messages))
-
-        self.callback("clarify:preserve-background")
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertFalse(any("Оставить текущий фон" in row[1] for row in self.transport.messages))
+
+    def test_text_after_result_continues_as_field_level_correction(self) -> None:
+        self.onboard_to_prompt()
+        phrases = (
+            "Замени фон на Альпы",
+            "Добавь куртку",
+            "Сделай закат",
+        )
+        for index, phrase in enumerate(phrases):
+            if index:
+                self.clock.advance(2)
+            self.app.handle(self.event("message_created", text=phrase))
+            self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertEqual(self.provider.calls, 3)
+        with self.database.read() as connection:
+            rows = connection.execute(
+                """SELECT id,parent_version_id,edit_plan_json
+                   FROM gallery_versions ORDER BY version_number"""
+            ).fetchall()
+        plans = [EditPlan.from_json(row["edit_plan_json"]) for row in rows]
+        self.assertEqual(plans[-1].scene.background.setting, "realistic alpine mountains")
+        self.assertEqual(plans[-1].scene.outfit.style, "realistic jacket")
+        self.assertEqual(plans[-1].scene.lighting.style, "realistic warm sunset light")
+        self.assertEqual(rows[1]["parent_version_id"], rows[0]["id"])
+        self.assertEqual(rows[2]["parent_version_id"], rows[1]["id"])
+        self.assertFalse(any("Что исправить?" in row[1] for row in self.transport.messages))
 
     def test_result_feedback_is_optional_and_technical_only(self) -> None:
         self.generate_first()

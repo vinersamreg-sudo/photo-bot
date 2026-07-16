@@ -8,7 +8,7 @@ from typing import Iterable
 from app.edit_intent import EditPlan
 
 
-PROMPT_BUILDER_VERSION = "technical-en-v1"
+PROMPT_BUILDER_VERSION = "technical-en-v2"
 
 
 def _unique(values: Iterable[str]) -> tuple[str, ...]:
@@ -58,12 +58,52 @@ def contextual_forbidden_rules(plan: EditPlan) -> tuple[str, ...]:
     return _unique(rules)
 
 
+def _structured_change_lines(plan: EditPlan) -> tuple[str, ...]:
+    """Translate provider-neutral scene fields into English model instructions."""
+
+    scene = plan.scene
+    lines: list[str] = []
+    background = scene.background
+    if background.operation == "replace":
+        lines.append(f"Replace the background with {background.setting or 'the requested setting'}.")
+    elif background.operation == "preserve":
+        lines.append("Preserve the exact current background.")
+    elif background.operation == "restore_previous":
+        lines.append("Restore the background visible in the previous successful version.")
+    elif background.operation == "sharpen":
+        lines.append("Keep the current background and make it sharp, detailed and clearly readable.")
+    elif background.operation == "blur":
+        lines.append("Apply natural background blur while keeping the subject sharp.")
+    if background.sharpness == "sharp" and background.operation != "sharpen":
+        lines.append("Render the background sharp and detailed without shallow depth of field.")
+
+    if scene.lighting.style:
+        lines.append(f"Use {scene.lighting.style}.")
+    if scene.camera.framing:
+        lines.append(f"Use {scene.camera.framing} framing.")
+    if scene.outfit.operation == "replace":
+        lines.append(f"Replace the outfit with {scene.outfit.style or 'the requested clothing'}.")
+    if scene.pose.operation == "change":
+        lines.append(f"Change the pose to {scene.pose.description or 'a natural requested pose'}.")
+    lines.extend(f"Add a realistic {value}." for value in scene.objects.add)
+    lines.extend(
+        f"Remove the {value} and reconstruct the occluded area naturally."
+        for value in scene.objects.remove
+    )
+
+    if plan.primary_action == "restore_photo":
+        lines.append("Restore damage, scratches, fading and lost detail without inventing a different photograph.")
+    elif plan.primary_action == "improve_quality":
+        lines.append("Improve natural sharpness, lighting and detail without redesigning the photograph.")
+    elif plan.primary_action == "custom" and not lines:
+        lines.append("Apply a conservative photorealistic edit within the structured constraints.")
+    return _unique(lines)
+
+
 def build_provider_prompt(plan: EditPlan) -> str:
     """Render an EditPlan as explicit English instructions for an image-edit model."""
 
-    changes = list(plan.requested_changes)
-    if plan.mode in {"initial_edit", "scenario", "repeat"}:
-        changes = [*plan.inherited_constraints, *changes]
+    changes = _structured_change_lines(plan)
     preserve = contextual_preservation_rules(plan)
     forbidden = contextual_forbidden_rules(plan)
     continuity = list(plan.continuity_requirements)
@@ -87,6 +127,7 @@ def build_provider_prompt(plan: EditPlan) -> str:
 
     sections.extend(("", "DO NOT CHANGE"))
     sections.extend(f"- {value}" for value in forbidden)
+    sections.extend(f"- Do not {value}." for value in plan.scene.negative)
 
     if continuity:
         sections.extend(("", "CONTINUITY FROM THE PARENT VERSION"))
@@ -114,11 +155,10 @@ def build_provider_prompt(plan: EditPlan) -> str:
         "- Produce clean high-detail photographic texture without artificial sharpening artifacts.",
     ))
 
-    safe_source = _safe_user_text(plan.source_user_text)
-    if plan.primary_action == "custom" and safe_source:
-        sections.extend(("", "SANITIZED USER REQUEST", f"- {safe_source}"))
-
-    return "\n".join(sections).strip()
+    prompt = "\n".join(sections).strip()
+    if not prompt.isascii():
+        raise ValueError("Provider prompt must contain English ASCII instructions only")
+    return prompt
 
 
 def safe_prompt_inspection(plan: EditPlan, provider_prompt: str) -> dict[str, object]:
