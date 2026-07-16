@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,6 +39,29 @@ def collect_demo_stats(database: Database) -> dict[str, Any]:
         blocked = connection.execute(
             "SELECT COUNT(*) FROM users WHERE status='blocked' OR blocked_until>datetime('now')"
         ).fetchone()[0]
+        rows = connection.execute(
+            "SELECT status,correction,duration_ms,edit_plan_json FROM generation_attempts"
+        ).fetchall()
+        feedback = dict(connection.execute(
+            "SELECT sentiment,COUNT(*) FROM version_feedback GROUP BY sentiment"
+        ).fetchall())
+        version_count = connection.execute(
+            "SELECT COUNT(*) FROM gallery_versions"
+        ).fetchone()[0]
+    intent_categories: Counter[str] = Counter()
+    provider_statuses: Counter[str] = Counter()
+    durations: list[int] = []
+    correction_count = 0
+    for row in rows:
+        provider_statuses[row["status"]] += 1
+        correction_count += int(bool(row["correction"]))
+        if row["duration_ms"] is not None:
+            durations.append(int(row["duration_ms"]))
+        try:
+            category = json.loads(row["edit_plan_json"] or "{}").get("primary_action")
+        except (json.JSONDecodeError, AttributeError):
+            category = None
+        intent_categories[str(category or "legacy_unknown")] += 1
     return {
         "users": users,
         "demo_sessions_started": sessions,
@@ -48,4 +73,15 @@ def collect_demo_stats(database: Database) -> dict[str, Any]:
         "technical_errors": technical,
         "delivery_failures": delivery,
         "blocked_users": blocked,
+        "intent_categories": dict(intent_categories),
+        "correction_attempts": correction_count,
+        "feedback": {
+            "positive": int(feedback.get("positive", 0)),
+            "negative": int(feedback.get("negative", 0)),
+        },
+        "average_generation_duration_ms": (
+            round(sum(durations) / len(durations), 1) if durations else None
+        ),
+        "gallery_versions": version_count,
+        "provider_statuses": dict(provider_statuses),
     }

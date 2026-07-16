@@ -124,6 +124,8 @@ def result_actions(remaining: int) -> View:
             Button("✨ Исправить", "result:correct"),
             Button("🎲 Другой вариант", "result:repeat"),
             Button("⭐ В избранное", "result:favorite"),
+            Button("👍 Получилось", "result:feedback:positive"),
+            Button("👎 Не то", "result:feedback:negative"),
             Button("📂 Мои работы", "studio:works"),
             Button("🗑 Удалить", "result:delete"),
         )
@@ -156,6 +158,8 @@ def gallery_item_actions() -> tuple[Button, ...]:
         Button("✨ Исправить", "result:correct"),
         Button("🎲 Другой вариант", "result:repeat"),
         Button("⭐ В избранное", "result:favorite"),
+        Button("👍 Получилось", "result:feedback:positive"),
+        Button("👎 Не то", "result:feedback:negative"),
         Button("История версий", "work:history"),
         Button("🗑 Удалить", "result:delete"),
         Button("📂 К работам", "studio:works"),
@@ -238,6 +242,7 @@ class MaxDemoAdapter:
         event_id: str,
         scenario_id: str | None = None,
         correction: bool = False,
+        repeat: bool = False,
         parent_version_id: str | None = None,
         delivery_override: DeliverPreview | None = None,
     ) -> DemoGenerationResult:
@@ -256,6 +261,7 @@ class MaxDemoAdapter:
             event_id,
             scenario_id=scenario_id,
             correction=correction,
+            repeat=repeat,
             delivery_override=delivery_override or deliver,
             parent_version_id=parent_version_id,
         )

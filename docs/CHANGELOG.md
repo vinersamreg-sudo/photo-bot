@@ -1,5 +1,16 @@
 # Changelog
 
+## 16.07.2026 — Structured AI Brain
+
+- добавлены `app/edit_intent.py` и `app/prompt_builder.py`;
+- correction image input переключён с исходного source на original выбранной успешной версии;
+- repeat сохраняет effective intent и исходный input branch;
+- migration v4 хранит EditPlan/provider prompt/source version и backfill legacy;
+- provider quality/size/fidelity/output/retries вынесены в конфигурацию, demo default повышен с low до medium;
+- добавлены необязательные 👍/👎 и технические агрегаты без пользовательского free text;
+- добавлен admin-safe `ai-inspect`;
+- добавлены regression tests на скалы, blur, отрицания, multiple corrections, lineage и delivery boundary.
+
 ## 2026-07-15 — owner-only application gate
 
 - добавлен обязательный `MAX_OWNER_USER_IDS` allowlist перед включением handlers;

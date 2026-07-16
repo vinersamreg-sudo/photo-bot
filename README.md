@@ -2,6 +2,18 @@
 
 Официальный бренд продукта — **Pixora**. Отдельный статический лендинг находится в [`site/`](site/README.md); он не импортирует backend и имеет собственный CI/deploy boundary.
 
+## AI Brain
+
+Pixora не передаёт correction как голую строку. `app/edit_intent.py` строит сериализуемый EditPlan с изменениями, запретами и continuity; `app/prompt_builder.py` создаёт технический prompt. Correction редактирует private original выбранной успешной версии, Repeat сохраняет тот же intent и input branch. Подробности: [аудит до изменений](docs/AI_BRAIN_AUDIT.md), [архитектура](docs/AI_BRAIN_ARCHITECTURE.md), [правила prompt](docs/PROMPT_ENGINEERING_RULES.md).
+
+Безопасный административный просмотр intent/provider prompt:
+
+```bash
+python -m app.main ai-inspect --attempt-id <opaque-attempt-id>
+```
+
+Команда не выводит platform user ID, файловые пути, ключи или исходный пользовательский free text.
+
 Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. Реальный модерированный MAX-бот поддерживает закрытый owner-only режим: handlers включаются только при непустом `MAX_OWNER_USER_IDS`; остальные получают сообщение о закрытом тестировании без создания сессии и OpenAI-вызова. Без owner secret deploy принудительно сохраняет `MAX_POLL_OBSERVE_ONLY=true`.
 
 ## MAX production smoke

@@ -1,5 +1,9 @@
 # Roadmap
 
+## AI Brain
+
+Выполнено: deterministic Russian intent parser, typed EditPlan, technical prompt builder, cumulative corrections, parent-original lineage, Repeat semantics, v4 migration, feedback и regression suite. Следующий шаг — один owner-only синтетический сценарий максимум из трёх image requests и сравнение наблюдаемого качества/latency с фактическим provider usage. До первых пользователей нужно накопить минимум 20 размеченных feedback cases и проверить долю исправлений, которые сохраняют identity/background continuity.
+
 ## Сайт Pixora — код готов, публикация ожидает инфраструктуру
 
 Статический лендинг, SEO, legal placeholders, CI, Lighthouse и atomic release workflow готовы. До публикации нужны DNS/TLS/Nginx ownership, реальный MAX deep link, подтверждённая почта и юридически утверждённые документы. Следующее развитие перечислено в `site/docs/FUTURE_ROADMAP.md`.

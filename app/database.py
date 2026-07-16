@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS generation_attempts (
     correction INTEGER NOT NULL DEFAULT 0,
     usage_json TEXT,
     result_unlocked INTEGER NOT NULL DEFAULT 0,
+    edit_plan_json TEXT,
+    provider_prompt TEXT,
+    source_version_id TEXT,
+    prompt_builder_version TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_user_started ON generation_attempts(user_id, started_at);
@@ -166,6 +170,10 @@ CREATE TABLE IF NOT EXISTS gallery_versions (
     rating INTEGER,
     favorite INTEGER NOT NULL DEFAULT 0,
     unlock_status TEXT NOT NULL DEFAULT 'demo',
+    edit_plan_json TEXT,
+    provider_prompt TEXT,
+    source_version_id TEXT,
+    prompt_builder_version TEXT,
     UNIQUE(gallery_item_id, version_number)
 );
 CREATE INDEX IF NOT EXISTS idx_versions_item_number ON gallery_versions(gallery_item_id, version_number DESC);
@@ -193,6 +201,17 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     recent_scenarios_json TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS version_feedback (
+    version_id TEXT NOT NULL REFERENCES gallery_versions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sentiment TEXT NOT NULL CHECK(sentiment IN ('positive','negative')),
+    reason_category TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(version_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_user_updated
+ON version_feedback(user_id, updated_at DESC);
 """
 
 
@@ -294,6 +313,10 @@ class Database:
                 ("parent_version_id", "TEXT"),
                 ("correction_prompt", "TEXT"),
                 ("effective_prompt", "TEXT"),
+                ("edit_plan_json", "TEXT"),
+                ("provider_prompt", "TEXT"),
+                ("source_version_id", "TEXT"),
+                ("prompt_builder_version", "TEXT"),
             ):
                 if name not in existing:
                     connection.execute(
@@ -307,6 +330,19 @@ class Database:
                     "ALTER TABLE demo_sessions ADD COLUMN gallery_item_id TEXT"
                 )
             connection.executescript(GALLERY_SCHEMA)
+            version_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(gallery_versions)")
+            }
+            for name, declaration in (
+                ("edit_plan_json", "TEXT"),
+                ("provider_prompt", "TEXT"),
+                ("source_version_id", "TEXT"),
+                ("prompt_builder_version", "TEXT"),
+            ):
+                if name not in version_columns:
+                    connection.execute(
+                        f"ALTER TABLE gallery_versions ADD COLUMN {name} {declaration}"
+                    )
             migration = connection.execute(
                 "SELECT 1 FROM schema_migrations WHERE version=2"
             ).fetchone()
@@ -337,6 +373,15 @@ class Database:
                 connection.execute(
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(3,?,?)",
                     ("max_dialog_state_and_legal_versions", now),
+                )
+            brain_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=4"
+            ).fetchone()
+            if brain_migration is None:
+                self._backfill_edit_plans(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(4,?,?)",
+                    ("structured_edit_plan_and_feedback", datetime.now(timezone.utc).isoformat()),
                 )
             connection.execute(
                 """UPDATE max_dialogs SET state='confirmation',status_message_id=NULL,
@@ -457,6 +502,46 @@ class Database:
             connection.execute(
                 "UPDATE demo_sessions SET gallery_item_id=? WHERE id=?",
                 (item_id, session["id"]),
+            )
+
+    @staticmethod
+    def _backfill_edit_plans(connection: sqlite3.Connection) -> None:
+        """Make legacy rows readable without changing their historical behavior."""
+
+        from app.edit_intent import EditPlan
+
+        attempts = connection.execute(
+            "SELECT * FROM generation_attempts WHERE edit_plan_json IS NULL"
+        ).fetchall()
+        for row in attempts:
+            plan = EditPlan.from_legacy(
+                row["prompt"],
+                correction=bool(row["correction"]),
+                correction_target_version_id=row["parent_version_id"],
+            )
+            connection.execute(
+                """UPDATE generation_attempts
+                   SET edit_plan_json=?,provider_prompt=COALESCE(provider_prompt,effective_prompt,prompt),
+                       prompt_builder_version=COALESCE(prompt_builder_version,'legacy-concatenation')
+                   WHERE id=?""",
+                (plan.to_json(), row["id"]),
+            )
+
+        versions = connection.execute(
+            "SELECT * FROM gallery_versions WHERE edit_plan_json IS NULL"
+        ).fetchall()
+        for row in versions:
+            plan = EditPlan.from_legacy(
+                row["correction_prompt"] or row["prompt"],
+                correction=bool(row["correction_prompt"]),
+                correction_target_version_id=row["parent_version_id"],
+            )
+            connection.execute(
+                """UPDATE gallery_versions
+                   SET edit_plan_json=?,provider_prompt=COALESCE(provider_prompt,effective_prompt,prompt),
+                       prompt_builder_version=COALESCE(prompt_builder_version,'legacy-concatenation')
+                   WHERE id=?""",
+                (plan.to_json(), row["id"]),
             )
 
     @contextmanager

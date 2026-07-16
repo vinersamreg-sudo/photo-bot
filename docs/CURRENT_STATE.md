@@ -1,5 +1,13 @@
 # Current State
 
+## AI Brain — 16.07.2026
+
+Реализован детерминированный слой интерпретации русских запросов: типизированный `EditPlan`, отрицания, накопление correction intent, отдельный English technical prompt и SQLite migration v4. Correction теперь использует private original выбранной успешной версии; Repeat сохраняет effective intent и input branch. В attempts/versions раздельно хранятся точный пользовательский текст, JSON plan, provider prompt, parent/source version и версии parser/builder.
+
+Provider quality больше не зашит как `low`: production contract использует `IMAGE_EDIT_QUALITY=medium`, `IMAGE_EDIT_SIZE=1024x1024`, `IMAGE_EDIT_INPUT_FIDELITY=auto` (для `gpt-image-2` параметр не отправляется), PNG output, timeout 300 секунд и максимум 2 SDK retry. Сравнительные платные image requests ещё не выполнялись; live owner-only сценарий должен быть согласован после deploy.
+
+Добавлены необязательные 👍/👎, агрегаты intent/correction/duration/version/provider status и admin-safe `ai-inspect`. 107 тестов подтверждают rocky-background regression, lineage, Repeat, delivery boundary, legacy migration и отсутствие provider вызова при противоречии.
+
 ## MAX owner-only transport smoke — 15.07.2026
 
 Бот `Pixora обработка фото ИИ` создан владельцем и прошёл модерацию. `MAX_BOT_TOKEN` хранится в GitHub Environment `production` и доставляется в production `.env` только через stdin. Для текущего инфраструктурного этапа используется Long Polling в режиме `MAX_POLL_OBSERVE_ONLY=true`: соединение и marker живые, но пользовательские handlers, ответы, callback-обработка и OpenAI image generation отключены. Runtime управляется только `photo-bot.service` под `photoapp`; health требует свежую успешную связь с MAX, SQLite, MainPID и single-instance lock.

@@ -23,17 +23,26 @@ class ImageProvider(Protocol):
 class OpenAIImageProvider:
     name = "openai"
 
-    def __init__(self, client: Any, model: str, quality: str = "low") -> None:
+    def __init__(
+        self,
+        client: Any,
+        model: str,
+        quality: str = "medium",
+        size: str = "1024x1024",
+        input_fidelity: str = "auto",
+        output_format: str = "png",
+    ) -> None:
         self.client = client
         self.model = model
         self.quality = quality
-        self.size = "1024x1024"
-        self.output_format = "png"
+        self.size = size
+        self.input_fidelity = input_fidelity
+        self.output_format = output_format
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
         try:
             with source_path.open("rb") as source:
-                response = self.client.images.edit(
+                request: dict[str, Any] = dict(
                     model=self.model,
                     image=source,
                     prompt=prompt,
@@ -41,6 +50,18 @@ class OpenAIImageProvider:
                     size=self.size,
                     output_format=self.output_format,
                 )
+                # GPT Image 2 always uses high input fidelity and rejects attempts
+                # to override it. Older compatible models may accept low/high.
+                if not self.model.startswith("gpt-image-2") and self.input_fidelity != "auto":
+                    request["input_fidelity"] = self.input_fidelity
+                raw_api = getattr(self.client.images, "with_raw_response", None)
+                if raw_api is not None:
+                    raw_response = raw_api.edit(**request)
+                    response = raw_response.parse()
+                    retries = int(getattr(raw_response, "retries_taken", 0) or 0)
+                else:
+                    response = self.client.images.edit(**request)
+                    retries = 0
         except BadRequestError as exc:
             if getattr(exc, "code", None) == "moderation_blocked":
                 raise PolicyRejectedError("The image request was rejected by provider policy") from exc
@@ -59,7 +80,7 @@ class OpenAIImageProvider:
             image_bytes=base64.b64decode(encoded),
             request_id=getattr(response, "_request_id", None),
             usage=usage,
-            retries=0,
+            retries=retries,
         )
 
 

@@ -18,10 +18,12 @@ from app.domain import (
     DemoExpiredError,
     DemoLimitError,
     InvalidInputError,
+    IntentAmbiguityError,
     PolicyRejectedError,
     SourceReplacementError,
 )
 from app.gallery import GalleryService, GalleryVersion
+from app.edit_intent import parse_edit_intent
 from app.max_adapter import (
     Button,
     MaxDemoAdapter,
@@ -150,6 +152,9 @@ class MaxApplication:
                     Button("← В меню", "menu"),
                 ),
             )
+            return
+        if isinstance(exc, IntentAmbiguityError):
+            self._show_intent_ambiguity(event.user_id, exc)
             return
         if isinstance(exc, DemoLimitError):
             self.transport.send_message(
@@ -342,6 +347,34 @@ class MaxApplication:
             self._generate(event, dialog, correction=False, repeat=True)
         elif action == "result:favorite":
             self._favorite(event.user_id, dialog)
+        elif action == "result:feedback:positive":
+            self._record_feedback(event.user_id, dialog, "positive")
+        elif action == "result:feedback:negative":
+            self._record_feedback(event.user_id, dialog, "negative")
+        elif action == "clarify:preserve-background":
+            prompt = (
+                (dialog.pending_prompt or "")
+                + ". Итоговое решение: сохранить текущий фон и только улучшить его."
+            )
+            updated = self.store.transition(
+                event.user_id, "confirmation", event_key=event.event_key, force=True,
+                pending_prompt=prompt,
+            )
+            self._generate(
+                event, updated, correction=updated.pending_action == "correction"
+            )
+        elif action == "clarify:replace-background":
+            prompt = (
+                (dialog.pending_prompt or "")
+                + ". Итоговое решение: заменить текущий фон."
+            )
+            updated = self.store.transition(
+                event.user_id, "confirmation", event_key=event.event_key, force=True,
+                pending_prompt=prompt,
+            )
+            self._generate(
+                event, updated, correction=updated.pending_action == "correction"
+            )
         elif action == "studio:works":
             self._show_works(event, dialog)
         elif action.startswith("works:open:"):
@@ -497,11 +530,60 @@ class MaxApplication:
         if not dialog.session_id or not self._session_is_usable(dialog.session_id):
             raise DemoExpiredError("The current source image is no longer available")
         mode = "correction" if dialog.state == "waiting_for_correction" else "initial"
+        preflight = parse_edit_intent(
+            prompt,
+            mode="correction" if mode == "correction" else (
+                "scenario" if dialog.selected_scenario_id else "initial_edit"
+            ),
+            scenario_id=dialog.selected_scenario_id,
+            correction_target_version_id=(
+                dialog.current_version_id if mode == "correction" else None
+            ),
+        )
         updated = self.store.transition(
             event.user_id, "confirmation", event_key=event.event_key,
             pending_prompt=prompt, pending_action=mode,
         )
+        if preflight.unresolved_ambiguities:
+            self._show_intent_ambiguity(
+                event.user_id,
+                IntentAmbiguityError(preflight.unresolved_ambiguities),
+            )
+            return
         self._generate(event, updated, correction=mode == "correction")
+
+    def _show_intent_ambiguity(
+        self, platform_user_id: str, _exc: IntentAmbiguityError
+    ) -> None:
+        self.transport.send_message(
+            platform_user_id,
+            "Оставить текущий фон и только улучшить его?",
+            (
+                Button("Да, только улучшить", "clarify:preserve-background"),
+                Button("Нет, заменить фон", "clarify:replace-background"),
+            ),
+        )
+
+    def _record_feedback(
+        self, platform_user_id: str, dialog: MaxDialog, sentiment: str
+    ) -> None:
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No current version for feedback")
+        self.gallery.record_feedback(
+            dialog.user_id, dialog.current_version_id, sentiment
+        )
+        if sentiment == "positive":
+            self.transport.send_message(platform_user_id, "Спасибо за оценку 👍")
+        else:
+            self.transport.send_message(
+                platform_user_id,
+                "Что сделать дальше?",
+                (
+                    Button("✨ Исправить", "result:correct"),
+                    Button("🎲 Другой вариант", "result:repeat"),
+                    Button("Начать заново", "menu"),
+                ),
+            )
 
     def _generate(
         self,
@@ -547,6 +629,7 @@ class MaxApplication:
                 event.event_key,
                 scenario_id=dialog.selected_scenario_id,
                 correction=correction,
+                repeat=repeat,
                 parent_version_id=dialog.current_version_id if (correction or repeat) else None,
                 delivery_override=deliver,
             )

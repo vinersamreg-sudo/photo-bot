@@ -25,7 +25,10 @@ def build_demo_service(
         provider = OpenAIImageProvider(
             client or create_openai_client(settings),
             settings.openai_image_model,
-            quality="low",
+            quality=settings.image_edit_quality,
+            size=settings.image_edit_size,
+            input_fidelity=settings.image_edit_input_fidelity,
+            output_format=settings.image_edit_output_format,
         )
     else:
         raise ValueError("provider must be 'openai' or 'fake'")

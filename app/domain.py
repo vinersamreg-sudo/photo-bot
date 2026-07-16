@@ -50,6 +50,14 @@ class InvalidInputError(DemoError):
     pass
 
 
+class IntentAmbiguityError(InvalidInputError):
+    """Raised before provider work when deterministic rules find a contradiction."""
+
+    def __init__(self, ambiguities: tuple[str, ...]) -> None:
+        super().__init__("The edit request contains contradictory instructions")
+        self.ambiguities = ambiguities
+
+
 class PolicyRejectedError(DemoError):
     pass
 

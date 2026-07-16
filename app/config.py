@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
@@ -21,6 +22,11 @@ class Settings:
     openai_image_model: str
     app_env: str
     base_dir: Path
+    image_edit_quality: str = "medium"
+    image_edit_size: str = "1024x1024"
+    image_edit_input_fidelity: str = "auto"
+    image_edit_output_format: str = "png"
+    openai_max_retries: int = 2
     demo_max_successful_generations: int = 5
     demo_session_ttl_minutes: int = 60
     demo_watermark_text: str = "ОБРАЗЕЦ"
@@ -103,6 +109,14 @@ def _positive_float(values: Mapping[str, str], name: str, default: float) -> flo
     return value
 
 
+def _nonnegative_int(values: Mapping[str, str], name: str, default: int) -> int:
+    raw = values.get(name, "").strip()
+    value = int(raw) if raw else default
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
 def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
     raw = values.get(name, "").strip().lower()
     if not raw:
@@ -133,6 +147,23 @@ def load_settings(
     if output_format not in {"JPEG", "WEBP"}:
         raise ValueError("DEMO_OUTPUT_FORMAT must be JPEG or WEBP")
 
+    image_edit_quality = values.get("IMAGE_EDIT_QUALITY", "medium").strip().lower() or "medium"
+    if image_edit_quality not in {"low", "medium", "high", "auto"}:
+        raise ValueError("IMAGE_EDIT_QUALITY must be low, medium, high or auto")
+    image_edit_size = values.get("IMAGE_EDIT_SIZE", "1024x1024").strip().lower() or "1024x1024"
+    if image_edit_size != "auto" and not re.fullmatch(r"[1-9]\d{2,3}x[1-9]\d{2,3}", image_edit_size):
+        raise ValueError("IMAGE_EDIT_SIZE must be auto or WIDTHxHEIGHT")
+    image_edit_input_fidelity = (
+        values.get("IMAGE_EDIT_INPUT_FIDELITY", "auto").strip().lower() or "auto"
+    )
+    if image_edit_input_fidelity not in {"auto", "low", "high"}:
+        raise ValueError("IMAGE_EDIT_INPUT_FIDELITY must be auto, low or high")
+    image_edit_output_format = (
+        values.get("IMAGE_EDIT_OUTPUT_FORMAT", "png").strip().lower() or "png"
+    )
+    if image_edit_output_format not in {"png", "jpeg", "webp"}:
+        raise ValueError("IMAGE_EDIT_OUTPUT_FORMAT must be png, jpeg or webp")
+
     max_transport_mode = values.get("MAX_TRANSPORT_MODE", "disabled").strip().lower() or "disabled"
     if max_transport_mode not in {"disabled", "polling", "webhook"}:
         raise ValueError("MAX_TRANSPORT_MODE must be disabled, polling or webhook")
@@ -158,6 +189,11 @@ def load_settings(
         openai_image_model=values.get("OPENAI_IMAGE_MODEL", "").strip(),
         app_env=values.get("APP_ENV", "production").strip() or "production",
         base_dir=base_dir.resolve(),
+        image_edit_quality=image_edit_quality,
+        image_edit_size=image_edit_size,
+        image_edit_input_fidelity=image_edit_input_fidelity,
+        image_edit_output_format=image_edit_output_format,
+        openai_max_retries=_nonnegative_int(values, "OPENAI_MAX_RETRIES", 2),
         demo_max_successful_generations=_positive_int(values, "DEMO_MAX_SUCCESSFUL_GENERATIONS", 5),
         demo_session_ttl_minutes=_positive_int(values, "DEMO_SESSION_TTL_MINUTES", 60),
         demo_watermark_text=values.get("DEMO_WATERMARK_TEXT", "ОБРАЗЕЦ").strip() or "ОБРАЗЕЦ",

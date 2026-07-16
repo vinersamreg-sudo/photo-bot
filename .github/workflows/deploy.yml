@@ -208,6 +208,11 @@ jobs:
             grep -q '^BASE_DIR=' "$ROOT/.env" || printf '%s\n' 'BASE_DIR=/opt/photo-bot' >> "$ROOT/.env"
             ensure_env() { grep -q "^$1=" "$ROOT/.env" || printf '%s=%s\n' "$1" "$2" >> "$ROOT/.env"; }
             ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5
+            ensure_env IMAGE_EDIT_QUALITY medium
+            ensure_env IMAGE_EDIT_SIZE 1024x1024
+            ensure_env IMAGE_EDIT_INPUT_FIDELITY auto
+            ensure_env IMAGE_EDIT_OUTPUT_FORMAT png
+            ensure_env OPENAI_MAX_RETRIES 2
             ensure_env DEMO_SESSION_TTL_MINUTES 60
             ensure_env DEMO_WATERMARK_TEXT ОБРАЗЕЦ
             ensure_env DEMO_MAX_DIMENSION 1024
@@ -340,8 +345,46 @@ jobs:
               echo "MAX runtime not started (mode=$MODE)"
             fi
             "$ROOT"/venv/bin/python -m scripts.check_runtime_secrets
+            "$ROOT"/venv/bin/python - <<'PY'
+            import json
+            import sqlite3
+            from app.config import load_settings
+
+            settings = load_settings()
+            connection = sqlite3.connect(settings.database_path)
+            try:
+                quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+                migration_v4 = bool(connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version=4"
+                ).fetchone())
+            finally:
+                connection.close()
+            assert quick_check == "ok"
+            assert migration_v4
+            print("runtime_audit=" + json.dumps({
+                "model": settings.openai_image_model,
+                "endpoint": "/v1/images/edits",
+                "quality": settings.image_edit_quality,
+                "size": settings.image_edit_size,
+                "input_fidelity_config": settings.image_edit_input_fidelity,
+                "input_fidelity_sent": (
+                    not settings.openai_image_model.startswith("gpt-image-2")
+                    and settings.image_edit_input_fidelity != "auto"
+                ),
+                "output_format": settings.image_edit_output_format,
+                "timeout_seconds": settings.generation_timeout_seconds,
+                "max_retries": settings.openai_max_retries,
+                "transport": settings.max_transport_mode,
+                "observe_only": settings.max_poll_observe_only,
+                "owner_allowlist_configured": bool(settings.max_owner_user_ids),
+                "sqlite_quick_check": quick_check,
+                "migration_v4": migration_v4,
+            }, sort_keys=True))
+            PY
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
+            test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"
+            printf 'deployed_commit=%s\n' "$DEPLOY_SHA"
           REMOTE
       - name: Reset owner dialog to a clean main-menu state
         if: >-

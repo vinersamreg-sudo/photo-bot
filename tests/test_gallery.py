@@ -82,7 +82,7 @@ class GalleryTests(TestCase):
         self.assertEqual(continued[0].id, item.id)
         self.assertIsNone(continued[1])
 
-    def test_demo_attempts_become_versions_and_correction_keeps_source(self) -> None:
+    def test_demo_attempts_become_versions_and_correction_uses_parent_original(self) -> None:
         service = DemoService(
             self.settings,
             self.database,
@@ -112,20 +112,31 @@ class GalleryTests(TestCase):
         versions = service.gallery.list_versions(session.user_id, item_id)
         self.assertEqual(len(versions), 2)
         self.assertEqual(versions[1].parent_version_id, versions[0].id)
-        self.assertEqual(versions[0].source_path, versions[1].source_path)
-        self.assertIn("Исправление: Сделай лицо естественнее", versions[1].effective_prompt)
+        with self.database.read() as connection:
+            first_original = Path(connection.execute(
+                "SELECT original_path FROM gallery_versions WHERE id=?", (versions[0].id,)
+            ).fetchone()[0])
+        self.assertEqual(versions[1].source_path, first_original)
+        self.assertEqual(versions[1].source_version_id, versions[0].id)
+        self.assertIn("Сделай лицо естественнее", versions[1].effective_prompt)
+        self.assertEqual(versions[1].edit_plan.mode, "correction")
         self.clock.advance(2)
         service.generate(
             session.session_id,
             "Новый случайный вариант",
             "version-3",
+            repeat=True,
             parent_version_id=versions[1].id,
         )
         versions = service.gallery.list_versions(session.user_id, item_id)
         self.assertEqual(len(versions), 3)
         self.assertEqual(versions[2].parent_version_id, versions[1].id)
-        self.assertEqual(versions[2].effective_prompt, versions[1].effective_prompt)
-        self.assertEqual(versions[2].source_path, versions[0].source_path)
+        self.assertEqual(versions[2].edit_plan.mode, "repeat")
+        self.assertEqual(
+            versions[2].edit_plan.requested_changes,
+            versions[1].edit_plan.requested_changes,
+        )
+        self.assertEqual(versions[2].source_path, versions[1].source_path)
         service.gallery.rate_version(session.user_id, versions[1].id, 5)
         service.gallery.set_version_favorite(session.user_id, versions[0].id, True)
         service.gallery.set_current_best(session.user_id, item_id, versions[0].id)
@@ -212,7 +223,12 @@ class GalleryTests(TestCase):
             item = check.execute("SELECT * FROM gallery_items").fetchone()
             version = check.execute("SELECT * FROM gallery_versions").fetchone()
             gallery = check.execute("SELECT * FROM galleries").fetchone()
+            brain_migration = check.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=4"
+            ).fetchone()
         self.assertEqual(item["generation_count"], 1)
         self.assertEqual(item["gallery_id"], gallery["id"])
         self.assertEqual(version["attempt_id"], "legacy-attempt")
         self.assertEqual(item["current_best_version_id"], version["id"])
+        self.assertIsNotNone(brain_migration)
+        self.assertTrue(version["edit_plan_json"])

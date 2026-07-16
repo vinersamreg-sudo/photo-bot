@@ -68,7 +68,9 @@ class MaxAdapterTests(TestCase):
         self.assertNotIn("4", result_actions(4).text)
         self.assertIn("Бесплатные варианты закончились", result_actions(0).text)
         self.assertEqual(result_actions(4).buttons[0].text, "⬇ Получить оригинал")
-        self.assertEqual(len(gallery_item_actions()), 7)
+        self.assertEqual(len(gallery_item_actions()), 9)
+        self.assertIn("👍 Получилось", [button.text for button in gallery_item_actions()])
+        self.assertIn("👎 Не то", [button.text for button in gallery_item_actions()])
         self.assertEqual(len(version_history_actions()), 4)
 
     def test_user_screens_are_short_and_hide_internal_vocabulary(self) -> None:

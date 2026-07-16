@@ -30,6 +30,8 @@ from app.image_service import build_demo_service
 from app.stats import collect_demo_stats
 from app.gallery import GalleryService
 from app.storage import PrivateStorage
+from app.edit_intent import EditPlan
+from app.prompt_builder import safe_prompt_inspection
 
 
 LOGGER = logging.getLogger(__name__)
@@ -349,6 +351,41 @@ def run_gallery_cleanup(settings: Settings, execute: bool) -> int:
     return 0
 
 
+def run_ai_inspect(settings: Settings, attempt_id: str) -> int:
+    """Print provider intent without platform identity, paths or credentials."""
+
+    database = Database(settings.database_path)
+    with database.read() as connection:
+        row = connection.execute(
+            "SELECT * FROM generation_attempts WHERE id=?", (attempt_id,)
+        ).fetchone()
+    if row is None:
+        LOGGER.error("Generation attempt was not found")
+        return 2
+    plan = (
+        EditPlan.from_json(row["edit_plan_json"])
+        if row["edit_plan_json"]
+        else EditPlan.from_legacy(
+            row["correction_prompt"] or row["prompt"],
+            correction=bool(row["correction"]),
+            correction_target_version_id=row["parent_version_id"],
+        )
+    )
+    view = safe_prompt_inspection(
+        plan, row["provider_prompt"] or row["effective_prompt"] or row["prompt"]
+    )
+    view.update({
+        "provider": row["provider"],
+        "model": row["model"],
+        "requested_quality": row["requested_quality"],
+        "requested_size": row["requested_size"],
+        "uses_parent_image": bool(row["source_version_id"]),
+        "status": row["status"],
+    })
+    print(json.dumps(view, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-bot")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -363,6 +400,8 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--scenario")
     demo.add_argument("--event-id")
     demo.add_argument("--provider", choices=("openai", "fake"), default="openai")
+    inspect = subparsers.add_parser("ai-inspect")
+    inspect.add_argument("--attempt-id", required=True)
     return parser
 
 
@@ -382,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_demo_stats(settings)
     if args.command == "gallery-cleanup":
         return run_gallery_cleanup(settings, args.execute)
+    if args.command == "ai-inspect":
+        return run_ai_inspect(settings, args.attempt_id)
     return run_process(settings)
 
 

@@ -55,7 +55,7 @@ def create_openai_client(settings: Settings) -> OpenAI:
     return OpenAI(
         api_key=settings.openai_api_key,
         timeout=settings.generation_timeout_seconds,
-        max_retries=2,
+        max_retries=settings.openai_max_retries,
     )
 
 

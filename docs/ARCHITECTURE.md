@@ -1,5 +1,11 @@
 # Architecture
 
+## AI Brain boundary
+
+`MAX text → EditPlan parser → parent-intent merge → technical prompt builder → ImageProvider`.
+
+Initial/scenario работает от immutable source; Correction — от private original выбранной успешной версии; Repeat — от того же input branch с тем же effective intent. `parent_version_id` и `source_version_id` имеют разные смыслы и сохраняются отдельно. Полное описание: [AI_BRAIN_ARCHITECTURE.md](AI_BRAIN_ARCHITECTURE.md). Правила prompt: [PROMPT_ENGINEERING_RULES.md](PROMPT_ENGINEERING_RULES.md).
+
 ## Owner-only transport topology
 
 `MAX Long Polling → MaxApiClient → owner gate → MaxApplication → Demo/Gallery`.

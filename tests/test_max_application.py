@@ -358,6 +358,36 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
+    def test_true_intent_conflict_asks_once_before_provider(self) -> None:
+        self.onboard_to_prompt()
+        self.app.handle(
+            self.event("message_created", text="Поменяй фон, но фон не меняй")
+        )
+        self.assertEqual(self.provider.calls, 0)
+        self.assertEqual(self.store.get("u1").state, "confirmation")
+        self.assertEqual(
+            self.transport.messages[-1][1],
+            "Оставить текущий фон и только улучшить его?",
+        )
+        self.assertEqual(len(self.transport.messages[-1][2]), 2)
+        self.assertFalse(any(row[1] == PROCESSING_TEXT for row in self.transport.messages))
+
+        self.callback("clarify:preserve-background")
+        self.assertEqual(self.provider.calls, 1)
+        self.assertEqual(self.store.get("u1").state, "result_ready")
+
+    def test_result_feedback_is_optional_and_technical_only(self) -> None:
+        self.generate_first()
+        self.callback("result:feedback:positive")
+        self.assertEqual(self.transport.messages[-1][1], "Спасибо за оценку 👍")
+        self.callback("result:feedback:negative")
+        self.assertEqual(self.transport.messages[-1][1], "Что сделать дальше?")
+        self.assertEqual(len(self.transport.messages[-1][2]), 3)
+        with self.database.read() as connection:
+            row = connection.execute("SELECT * FROM version_feedback").fetchone()
+        self.assertEqual(row["sentiment"], "negative")
+        self.assertIsNone(row["reason_category"])
+
     def test_correction_repeat_gallery_navigation_favorite_and_physical_delete(self) -> None:
         self.generate_first()
         first = self.store.get("u1").current_version_id

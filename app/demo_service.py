@@ -23,12 +23,15 @@ from app.domain import (
     DemoLimitError,
     DemoSessionInfo,
     InvalidInputError,
+    IntentAmbiguityError,
     PaymentRequiredError,
     PolicyRejectedError,
     SourceReplacementError,
 )
+from app.edit_intent import EditPlan, merge_edit_plans, parse_edit_intent, repeat_edit_plan
 from app.image_provider import ImageProvider
 from app.gallery import GalleryService
+from app.prompt_builder import PROMPT_BUILDER_VERSION, build_provider_prompt
 from app.scenarios import get_scenario
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
@@ -231,6 +234,7 @@ class DemoService:
         idempotency_key: str,
         scenario_id: Optional[str] = None,
         correction: bool = False,
+        repeat: bool = False,
         delivery_override: Optional[DeliverPreview] = None,
         parent_version_id: Optional[str] = None,
     ) -> DemoGenerationResult:
@@ -240,9 +244,6 @@ class DemoService:
         scenario = get_scenario(scenario_id)
         if scenario_id and scenario is None:
             raise InvalidInputError("Unknown or inactive scenario")
-        base_provider_prompt = (
-            scenario.prompt_template.format(instruction=clean_prompt) if scenario else clean_prompt
-        )
         now = self.clock()
         attempt_id = uuid4().hex
 
@@ -276,13 +277,68 @@ class DemoService:
                 raise DemoExpiredError("Demo session has expired")
             if session["successful_generations"] >= session["max_generations"]:
                 raise DemoLimitError("Demo successful-generation limit is exhausted")
-            provider_prompt, parent_version_id, correction_prompt = self.gallery.compose_prompt(
-                connection,
-                session["gallery_item_id"],
-                base_provider_prompt if not correction else clean_prompt,
-                parent_version_id,
-                correction,
-            )
+            parent = None
+            if parent_version_id:
+                parent = connection.execute(
+                    """SELECT * FROM gallery_versions
+                       WHERE id=? AND gallery_item_id=? AND status='succeeded'""",
+                    (parent_version_id, session["gallery_item_id"]),
+                ).fetchone()
+                if parent is None:
+                    raise InvalidInputError(
+                        "The selected parent version is missing or was not successful"
+                    )
+            elif correction or repeat:
+                parent = connection.execute(
+                    """SELECT * FROM gallery_versions
+                       WHERE gallery_item_id=? AND status='succeeded'
+                       ORDER BY version_number DESC LIMIT 1""",
+                    (session["gallery_item_id"],),
+                ).fetchone()
+                if parent is None:
+                    raise InvalidInputError("Correction or repeat requires a successful version")
+                parent_version_id = parent["id"]
+
+            if parent is None:
+                edit_plan = parse_edit_intent(
+                    clean_prompt,
+                    mode="scenario" if scenario else "initial_edit",
+                    scenario_id=scenario_id,
+                )
+                source_path = Path(session["source_file_path"])
+                source_version_id = None
+            else:
+                parent_plan = (
+                    EditPlan.from_json(parent["edit_plan_json"])
+                    if parent["edit_plan_json"]
+                    else EditPlan.from_legacy(
+                        parent["correction_prompt"] or parent["prompt"],
+                        correction=bool(parent["correction_prompt"]),
+                        correction_target_version_id=parent["parent_version_id"],
+                    )
+                )
+                if correction:
+                    correction_plan = parse_edit_intent(
+                        clean_prompt,
+                        mode="correction",
+                        correction_target_version_id=parent["id"],
+                    )
+                    edit_plan = merge_edit_plans(parent_plan, correction_plan)
+                    if not parent["original_path"]:
+                        raise InvalidInputError("The selected parent original is unavailable")
+                    source_path = Path(parent["original_path"])
+                    source_version_id = parent["id"]
+                else:
+                    edit_plan = repeat_edit_plan(parent_plan)
+                    source_path = Path(parent["source_path"])
+                    source_version_id = parent["source_version_id"]
+            if edit_plan.unresolved_ambiguities:
+                raise IntentAmbiguityError(edit_plan.unresolved_ambiguities)
+            if not source_path.is_file():
+                raise InvalidInputError("The selected edit source file is unavailable")
+            provider_prompt = build_provider_prompt(edit_plan)
+            correction_prompt = clean_prompt if correction else None
+            effective_user_prompt = edit_plan.effective_user_text
             user = connection.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
             if user["blocked_until"] and now < datetime.fromisoformat(user["blocked_until"]):
                 raise CooldownError("User is temporarily blocked")
@@ -328,8 +384,9 @@ class DemoService:
                        id,idempotency_key,session_id,user_id,prompt,scenario_id,status,started_at,
                        provider,model,source_path,input_size_bytes,requested_size,
                        requested_quality,output_format,correction,parent_version_id,
-                       correction_prompt,effective_prompt,created_at
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       correction_prompt,effective_prompt,edit_plan_json,provider_prompt,
+                       source_version_id,prompt_builder_version,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     attempt_id,
                     idempotency_key,
@@ -341,20 +398,23 @@ class DemoService:
                     iso(now),
                     self.provider.name,
                     self.provider.model,
-                    session["source_file_path"],
-                    Path(session["source_file_path"]).stat().st_size,
+                    str(source_path),
+                    source_path.stat().st_size,
                     getattr(self.provider, "size", None),
                     getattr(self.provider, "quality", None),
                     getattr(self.provider, "output_format", None),
                     int(correction),
                     parent_version_id,
                     correction_prompt,
+                    effective_user_prompt,
+                    edit_plan.to_json(),
                     provider_prompt,
+                    source_version_id,
+                    PROMPT_BUILDER_VERSION,
                     iso(now),
                 ),
             )
             user_id = session["user_id"]
-            source_path = Path(session["source_file_path"])
             gallery_item_id = session["gallery_item_id"]
 
         started = time.monotonic()
@@ -437,6 +497,10 @@ class DemoService:
                 "model": self.provider.model,
                 "requested_size": getattr(self.provider, "size", None),
                 "requested_quality": getattr(self.provider, "quality", None),
+                "intent_category": edit_plan.primary_action,
+                "edit_mode": edit_plan.mode,
+                "parser_version": edit_plan.parser_version,
+                "prompt_builder_version": PROMPT_BUILDER_VERSION,
                 "estimated_cost_rub": estimated_cost,
                 "original_file": original_path.name,
                 "preview_file": preview_path.name,

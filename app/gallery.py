@@ -13,6 +13,7 @@ from uuid import uuid4
 from app.config import Settings
 from app.database import Database
 from app.domain import InvalidInputError
+from app.edit_intent import EditPlan
 from app.storage import PrivateStorage
 
 
@@ -55,6 +56,10 @@ class GalleryVersion:
     favorite: bool
     unlock_status: str
     status: str
+    edit_plan: EditPlan
+    provider_prompt: str
+    source_version_id: Optional[str]
+    prompt_builder_version: str
 
 
 class GalleryService:
@@ -81,6 +86,15 @@ class GalleryService:
 
     @staticmethod
     def _version(row: sqlite3.Row) -> GalleryVersion:
+        plan = (
+            EditPlan.from_json(row["edit_plan_json"])
+            if row["edit_plan_json"]
+            else EditPlan.from_legacy(
+                row["correction_prompt"] or row["prompt"],
+                correction=bool(row["correction_prompt"]),
+                correction_target_version_id=row["parent_version_id"],
+            )
+        )
         return GalleryVersion(
             row["id"], row["gallery_item_id"], row["version_number"],
             row["parent_version_id"], Path(row["source_path"]),
@@ -90,6 +104,8 @@ class GalleryService:
             else None,
             row["prompt"], row["correction_prompt"], row["effective_prompt"],
             bool(row["favorite"]), row["unlock_status"], row["status"],
+            plan, row["provider_prompt"] or row["effective_prompt"],
+            row["source_version_id"], row["prompt_builder_version"] or "legacy-concatenation",
         )
 
     def create_item(
@@ -217,8 +233,9 @@ class GalleryService:
                    id,gallery_item_id,attempt_id,version_number,parent_version_id,source_path,
                    prompt,correction_prompt,effective_prompt,provider,model,
                    preview_watermarked_path,original_path,created_at,processing_time_ms,
-                   estimated_cost,status,unlock_status
-               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   estimated_cost,status,unlock_status,edit_plan_json,provider_prompt,
+                   source_version_id,prompt_builder_version
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id, gallery_item_id, attempt_id, number,
                 attempt["parent_version_id"], attempt["source_path"], attempt["prompt"],
@@ -226,6 +243,8 @@ class GalleryService:
                 attempt["provider"], attempt["model"], attempt["demo_result_path"],
                 attempt["original_result_path"], attempt["completed_at"] or attempt["created_at"],
                 attempt["duration_ms"], attempt["estimated_cost"], attempt["status"], unlock,
+                attempt["edit_plan_json"], attempt["provider_prompt"],
+                attempt["source_version_id"], attempt["prompt_builder_version"],
             ),
         )
         connection.execute(
@@ -239,6 +258,29 @@ class GalleryService:
             ),
         )
         return version_id
+
+    def record_feedback(
+        self,
+        user_id: str,
+        version_id: str,
+        sentiment: str,
+        reason_category: Optional[str] = None,
+    ) -> None:
+        if sentiment not in {"positive", "negative"}:
+            raise InvalidInputError("Unknown feedback sentiment")
+        now = _iso(self.clock())
+        with self.database.transaction() as connection:
+            self._require_version(connection, user_id, version_id)
+            connection.execute(
+                """INSERT INTO version_feedback(
+                       version_id,user_id,sentiment,reason_category,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?)
+                   ON CONFLICT(version_id,user_id) DO UPDATE SET
+                       sentiment=excluded.sentiment,
+                       reason_category=excluded.reason_category,
+                       updated_at=excluded.updated_at""",
+                (version_id, user_id, sentiment, reason_category, now, now),
+            )
 
     def list_versions(self, user_id: str, item_id: str) -> list[GalleryVersion]:
         with self.database.read() as connection:
