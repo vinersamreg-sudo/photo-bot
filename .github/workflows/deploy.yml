@@ -351,6 +351,8 @@ jobs:
             venv/bin/python - <<'PY'
           from app.config import load_settings
           from app.database import Database
+          from pathlib import Path
+          from PIL import Image, ImageChops
 
           settings = load_settings()
           print(f"observe_only={str(settings.max_poll_observe_only).lower()}")
@@ -385,10 +387,110 @@ jobs:
                       f"session_status={row['status']} successful={row['successful_generations']} "
                       f"maximum={row['max_generations']}"
                   )
+              failed = connection.execute(
+                  """SELECT a.id,a.user_id,a.session_id,s.source_file_path,s.gallery_item_id
+                     FROM generation_attempts a
+                     JOIN demo_sessions s ON s.id=a.session_id
+                     WHERE a.status='delivery_failed'
+                     ORDER BY a.created_at DESC LIMIT 1"""
+              ).fetchone()
+              if failed:
+                  root = Path(failed["source_file_path"]).parent.parent
+                  original = root / "originals" / f"{failed['id']}.png"
+                  preview = root / "previews" / f"{failed['id']}.jpg"
+                  print(f"failed_original_exists={str(original.is_file()).lower()}")
+                  print(f"failed_preview_exists={str(preview.is_file()).lower()}")
+                  if original.is_file():
+                      print(f"failed_original_bytes={original.stat().st_size}")
+                  if preview.is_file():
+                      print(f"failed_preview_bytes={preview.stat().st_size}")
+                  if original.is_file() and preview.is_file():
+                      with Image.open(original) as opened_original, Image.open(preview) as opened_preview:
+                          original_rgb = opened_original.convert("RGB")
+                          preview_rgb = opened_preview.convert("RGB")
+                          original_rgb.thumbnail(preview_rgb.size)
+                          print(
+                              "failed_preview_differs_from_original="
+                              + str(ImageChops.difference(original_rgb, preview_rgb).getbbox() is not None).lower()
+                          )
+                  item_count = connection.execute(
+                      "SELECT COUNT(*) FROM gallery_items WHERE id=?",
+                      (failed["gallery_item_id"],),
+                  ).fetchone()[0]
+                  version_count = connection.execute(
+                      "SELECT COUNT(*) FROM gallery_versions WHERE attempt_id=?",
+                      (failed["id"],),
+                  ).fetchone()[0]
+                  print(f"failed_gallery_item_exists={str(item_count == 1).lower()}")
+                  print(f"failed_gallery_version_exists={str(version_count == 1).lower()}")
               state = connection.execute(
                   "SELECT updated_at FROM max_transport_state WHERE name='poll_last_success'"
               ).fetchone()
               print(f"poll_last_success={state['updated_at'] if state else 'missing'}")
+          PY
+            venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          from app.config import load_settings
+          from app.database import Database
+          from app.max_transport import MaxApiClient
+
+          settings = load_settings()
+          with Database(settings.database_path).read() as connection:
+              failed = connection.execute(
+                  """SELECT a.id,s.source_file_path
+                     FROM generation_attempts a
+                     JOIN demo_sessions s ON s.id=a.session_id
+                     WHERE a.status='delivery_failed'
+                     ORDER BY a.created_at DESC LIMIT 1"""
+              ).fetchone()
+          if failed:
+              preview = Path(failed["source_file_path"]).parent.parent / "previews" / f"{failed['id']}.jpg"
+              client = MaxApiClient(
+                  settings.max_bot_token,
+                  settings.max_api_base_url,
+                  timeout_seconds=30,
+                  ca_bundle=settings.max_ca_bundle_path,
+                  media_host_suffixes=settings.max_media_host_suffixes,
+              )
+              try:
+                  upload = client._request("POST", "/uploads", params={"type": "image"})
+                  url = upload["url"]
+                  client._validate_media_url(url)
+                  with preview.open("rb") as content:
+                      response = client.media_client.post(
+                          url,
+                          files={"data": (preview.name, content, "application/octet-stream")},
+                      )
+                  payload = response.json()
+
+                  def redact(value, key=""):
+                      if isinstance(value, dict):
+                          return {name: redact(item, name) for name, item in value.items()}
+                      if isinstance(value, list):
+                          return [redact(item, key) for item in value]
+                      if key.lower() in {"token", "url"} or isinstance(value, str):
+                          return "[REDACTED]"
+                      return value
+
+                  old_token = payload.get("token") or upload.get("token")
+                  photos = payload.get("photos")
+                  photo_token = None
+                  if isinstance(photos, dict):
+                      for photo in photos.values():
+                          if isinstance(photo, dict) and photo.get("token"):
+                              photo_token = photo["token"]
+                              break
+                  parsed = urlparse(url)
+                  print(f"rca_upload_endpoint={parsed.scheme}://{parsed.netloc}{parsed.path}")
+                  print(f"rca_upload_http_status={response.status_code}")
+                  print("rca_upload_response=" + json.dumps(redact(payload), sort_keys=True))
+                  print(f"rca_old_parser_found_token={str(bool(old_token)).lower()}")
+                  print(f"rca_fixed_parser_found_token={str(bool(old_token or photo_token)).lower()}")
+              finally:
+                  client.close()
           PY
             venv/bin/python - <<'PY'
           import re
