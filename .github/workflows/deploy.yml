@@ -346,41 +346,41 @@ jobs:
             fi
             "$ROOT"/venv/bin/python -m scripts.check_runtime_secrets
             "$ROOT"/venv/bin/python - <<'PY'
-            import json
-            import sqlite3
-            from app.config import load_settings
+          import json
+          import sqlite3
+          from app.config import load_settings
 
-            settings = load_settings()
-            connection = sqlite3.connect(settings.database_path)
-            try:
-                quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
-                migration_v4 = bool(connection.execute(
-                    "SELECT 1 FROM schema_migrations WHERE version=4"
-                ).fetchone())
-            finally:
-                connection.close()
-            assert quick_check == "ok"
-            assert migration_v4
-            print("runtime_audit=" + json.dumps({
-                "model": settings.openai_image_model,
-                "endpoint": "/v1/images/edits",
-                "quality": settings.image_edit_quality,
-                "size": settings.image_edit_size,
-                "input_fidelity_config": settings.image_edit_input_fidelity,
-                "input_fidelity_sent": (
-                    not settings.openai_image_model.startswith("gpt-image-2")
-                    and settings.image_edit_input_fidelity != "auto"
-                ),
-                "output_format": settings.image_edit_output_format,
-                "timeout_seconds": settings.generation_timeout_seconds,
-                "max_retries": settings.openai_max_retries,
-                "transport": settings.max_transport_mode,
-                "observe_only": settings.max_poll_observe_only,
-                "owner_allowlist_configured": bool(settings.max_owner_user_ids),
-                "sqlite_quick_check": quick_check,
-                "migration_v4": migration_v4,
-            }, sort_keys=True))
-            PY
+          settings = load_settings()
+          connection = sqlite3.connect(settings.database_path)
+          try:
+              quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+              migration_v4 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=4"
+              ).fetchone())
+          finally:
+              connection.close()
+          assert quick_check == "ok"
+          assert migration_v4
+          print("runtime_audit=" + json.dumps({
+              "model": settings.openai_image_model,
+              "endpoint": "/v1/images/edits",
+              "quality": settings.image_edit_quality,
+              "size": settings.image_edit_size,
+              "input_fidelity_config": settings.image_edit_input_fidelity,
+              "input_fidelity_sent": (
+                  not settings.openai_image_model.startswith("gpt-image-2")
+                  and settings.image_edit_input_fidelity != "auto"
+              ),
+              "output_format": settings.image_edit_output_format,
+              "timeout_seconds": settings.generation_timeout_seconds,
+              "max_retries": settings.openai_max_retries,
+              "transport": settings.max_transport_mode,
+              "observe_only": settings.max_poll_observe_only,
+              "owner_allowlist_configured": bool(settings.max_owner_user_ids),
+              "sqlite_quick_check": quick_check,
+              "migration_v4": migration_v4,
+          }, sort_keys=True))
+          PY
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
             test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"

@@ -52,6 +52,25 @@ class DeployPolicyTests(TestCase):
         self.assertGreater(marker_position, health_position)
         self.assertGreater(marker_position, openai_position)
 
+    def test_runtime_audit_python_heredoc_terminates_at_remote_column(self) -> None:
+        lines = self.workflow.splitlines()
+        start = next(
+            index
+            for index, line in enumerate(lines)
+            if "venv/bin/python - <<'PY'" in line
+        )
+        py_end = next(
+            index for index in range(start + 1, len(lines)) if lines[index].strip() == "PY"
+        )
+        remote_end = next(
+            index
+            for index in range(py_end + 1, len(lines))
+            if lines[index].strip() == "REMOTE"
+        )
+        leading = lambda value: len(value) - len(value.lstrip())
+        self.assertEqual(leading(lines[py_end]), leading(lines[remote_end]))
+        self.assertEqual(leading(lines[start + 1]), leading(lines[remote_end]))
+
     def test_creates_but_does_not_overwrite_production_env(self) -> None:
         self.assertIn('if [ ! -f "$ROOT/.env" ]', self.workflow)
         self.assertIn('install -m 600 /dev/null "$ROOT/.env"', self.workflow)
