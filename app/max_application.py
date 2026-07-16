@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Protocol, Sequence
 
 from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
-from app.domain import DemoError, InvalidInputError
+from app.domain import DemoError, DemoExpiredError, InvalidInputError
 from app.gallery import GalleryService, GalleryVersion
 from app.max_adapter import (
     Button,
@@ -100,6 +101,16 @@ class MaxApplication:
         except MaxTransportError:
             self.store.finish_event(event.event_key, False)
             raise
+        except DemoExpiredError:
+            LOGGER.info("MAX demo session expired (event_type=%s)", event.event_type)
+            self._reset_dialog_to_main(event.user_id, event.event_key)
+            self.transport.send_message(
+                event.user_id,
+                "Срок предыдущей фотосессии истёк. Выберите задачу и загрузите фотографию заново.",
+                main_menu().buttons,
+            )
+            self.store.finish_event(event.event_key, True)
+            return True
         except DemoError as exc:
             LOGGER.info(
                 "MAX domain request rejected (event_type=%s,error_type=%s)",
@@ -134,6 +145,13 @@ class MaxApplication:
         if not self.store.legal_is_current(event.user_id):
             self._show_legal(event.user_id, dialog, event.event_key)
             return
+        if event.image_url:
+            self._receive_source(
+                event,
+                dialog,
+                choose_scenario=dialog.state != "waiting_for_source",
+            )
+            return
         if dialog.state == "waiting_for_source":
             self._receive_source(event, dialog)
         elif dialog.state in {"waiting_for_prompt", "waiting_for_correction"}:
@@ -158,12 +176,22 @@ class MaxApplication:
         self._send_view(user_id, legal_view())
 
     def _show_main(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
-        self.store.transition(
-            user_id, "main_menu", event_key=event_key, force=True,
-            pending_prompt=None, pending_action=None, status_message_id=None,
-        )
+        self._reset_dialog_to_main(user_id, event_key)
         self.transport.send_message(user_id, WELCOME_TEXT)
         self._send_view(user_id, main_menu())
+
+    def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
+        self.store.transition(
+            user_id, "main_menu", event_key=event_key, force=True,
+            selected_scenario_id=None,
+            session_id=None,
+            pending_prompt=None,
+            pending_action=None,
+            current_gallery_item_id=None,
+            current_version_id=None,
+            gallery_cursor=0,
+            status_message_id=None,
+        )
 
     def _callback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         action = event.callback_payload or ""
@@ -252,11 +280,19 @@ class MaxApplication:
     def _begin_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, scenario_id: Optional[str]
     ) -> None:
-        target = "waiting_for_prompt" if dialog.session_id else "waiting_for_source"
+        reusable_source = bool(
+            dialog.session_id and self._session_is_usable(dialog.session_id)
+        )
+        target = "waiting_for_prompt" if reusable_source else "waiting_for_source"
         self.store.transition(
             event.user_id, target, event_key=event.event_key,
             selected_scenario_id=scenario_id, pending_prompt=None,
             pending_action="initial",
+            session_id=dialog.session_id if reusable_source else None,
+            current_gallery_item_id=(
+                dialog.current_gallery_item_id if reusable_source else None
+            ),
+            current_version_id=None,
         )
         if target == "waiting_for_source":
             self.transport.send_message(
@@ -266,7 +302,13 @@ class MaxApplication:
         else:
             self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
 
-    def _receive_source(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+    def _receive_source(
+        self,
+        event: MaxIncomingEvent,
+        dialog: MaxDialog,
+        *,
+        choose_scenario: bool = False,
+    ) -> None:
         if not event.image_url:
             self.transport.send_message(event.user_id, "Нужно отправить одно изображение.")
             return
@@ -284,13 +326,53 @@ class MaxApplication:
             item_id = connection.execute(
                 "SELECT gallery_item_id FROM demo_sessions WHERE id=?", (session.session_id,)
             ).fetchone()[0]
-        self.store.transition(
-            event.user_id, "waiting_for_prompt", event_key=event.event_key,
-            user_id=session.user_id, session_id=session.session_id,
-            current_gallery_item_id=item_id, current_version_id=None,
-            pending_action="initial",
-        )
-        self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
+        if choose_scenario:
+            self.store.transition(
+                event.user_id, "main_menu", event_key=event.event_key, force=True,
+                user_id=session.user_id,
+                session_id=session.session_id,
+                selected_scenario_id=None,
+                current_gallery_item_id=item_id,
+                current_version_id=None,
+                pending_prompt=None,
+                pending_action=None,
+                status_message_id=None,
+            )
+            self.transport.send_message(
+                event.user_id,
+                "Фото принято. Теперь выберите, что хотите с ним сделать.",
+            )
+            self._send_view(event.user_id, main_menu())
+        else:
+            self.store.transition(
+                event.user_id, "waiting_for_prompt", event_key=event.event_key,
+                user_id=session.user_id, session_id=session.session_id,
+                current_gallery_item_id=item_id, current_version_id=None,
+                pending_action="initial",
+            )
+            self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
+
+    def _session_is_usable(self, session_id: str) -> bool:
+        with self.database.read() as connection:
+            row = connection.execute(
+                "SELECT source_file_path,status,expires_at FROM demo_sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+        if row is None or row["status"] != "active" or not row["source_file_path"]:
+            return False
+        try:
+            expires_at = datetime.fromisoformat(row["expires_at"])
+        except (TypeError, ValueError):
+            return False
+        if self.demo.clock() >= expires_at:
+            with self.database.transaction() as connection:
+                connection.execute(
+                    """UPDATE demo_sessions SET status='expired',updated_at=?
+                       WHERE id=? AND status='active'""",
+                    (self.demo.clock().isoformat(), session_id),
+                )
+            return False
+        return Path(row["source_file_path"]).is_file()
 
     def _remaining(self, session_id: str) -> int:
         with self.database.read() as connection:
@@ -309,6 +391,8 @@ class MaxApplication:
             return
         if len(prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is too long")
+        if not dialog.session_id or not self._session_is_usable(dialog.session_id):
+            raise DemoExpiredError("The current source image is no longer available")
         mode = "correction" if dialog.state == "waiting_for_correction" else "initial"
         updated = self.store.transition(
             event.user_id, "confirmation", event_key=event.event_key,
@@ -328,8 +412,8 @@ class MaxApplication:
         repeat: bool = False,
     ) -> None:
         dialog = self.store.get(event.user_id) or dialog
-        if not dialog.session_id:
-            raise InvalidInputError("Demo session is missing")
+        if not dialog.session_id or not self._session_is_usable(dialog.session_id):
+            raise DemoExpiredError("The current source image is no longer available")
         if repeat and not dialog.current_version_id:
             raise InvalidInputError("Repeat requires an existing version")
         prompt = dialog.pending_prompt or ("Другой вариант" if repeat else "")

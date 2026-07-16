@@ -105,7 +105,36 @@ class DemoService:
                             "Бесплатная демонстрация действует для одной исходной фотографии. "
                             "Для обработки нового фото потребуется платная операция или новый пакет"
                         )
-                    return self._session_info(existing)
+                    if (
+                        existing["status"] in {"completed", "deleted"}
+                        or existing["successful_generations"] >= existing["max_generations"]
+                    ):
+                        raise DemoLimitError("The free demo has already been completed")
+
+                    # A dialog may outlive the short active-session TTL. Re-uploading
+                    # the same source is an explicit user action, so safely refresh the
+                    # existing session without granting a new quota or allowing a
+                    # different source image.
+                    stored_source, stored_digest, _stored_size = self.storage.create_session(
+                        user_id, existing["id"], source
+                    )
+                    expires = now + timedelta(minutes=self.settings.demo_session_ttl_minutes)
+                    connection.execute(
+                        """UPDATE demo_sessions
+                           SET source_file_path=?,source_sha256=?,status='active',expires_at=?,updated_at=?
+                           WHERE id=?""",
+                        (
+                            str(stored_source),
+                            stored_digest,
+                            iso(expires),
+                            iso(now),
+                            existing["id"],
+                        ),
+                    )
+                    refreshed = connection.execute(
+                        "SELECT * FROM demo_sessions WHERE id=?", (existing["id"],)
+                    ).fetchone()
+                    return self._session_info(refreshed)
                 if user["demo_used"]:
                     raise DemoLimitError("The free demo has already been used")
 

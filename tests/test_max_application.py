@@ -10,7 +10,13 @@ from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
 from app.image_provider import FakeImageProvider
-from app.max_application import MaxApplication, OWNER_ONLY_TEXT, UNLOCK_PLACEHOLDER
+from app.max_application import (
+    MaxApplication,
+    OWNER_ONLY_TEXT,
+    PHOTO_ACCEPTED_TEXT,
+    PROCESSING_TEXT,
+    UNLOCK_PLACEHOLDER,
+)
 from app.max_conversation import MaxConversationStore
 from app.max_transport import MaxIncomingEvent, MaxTransportError
 from app.storage import PrivateStorage
@@ -37,11 +43,14 @@ class FakeMaxTransport:
         self.callbacks = []
         self.image_delivery = True
         self.fail_next_message = False
+        self.on_send_message = None
 
     def send_message(self, user_id, text, buttons=(), **kwargs):
         if self.fail_next_message:
             self.fail_next_message = False
             raise MaxTransportError("fake send failure")
+        if self.on_send_message:
+            self.on_send_message(text)
         message_id = f"sent-{len(self.messages) + 1}"
         self.messages.append((user_id, text, tuple(buttons), kwargs, message_id))
         return message_id
@@ -180,20 +189,108 @@ class MaxApplicationTests(TestCase):
         invalid = self.base / "invalid.bin"
         invalid.write_text("not image", encoding="utf-8")
         self.transport.source = invalid
+        accepted_after_persistence = []
+
+        def verify_photo_is_persisted_before_acceptance(text):
+            if text.startswith("Фото принято"):
+                with self.database.read() as connection:
+                    row = connection.execute(
+                        "SELECT source_file_path FROM demo_sessions"
+                    ).fetchone()
+                accepted_after_persistence.append(
+                    bool(row and Path(row["source_file_path"]).is_file())
+                )
+
+        self.transport.on_send_message = verify_photo_is_persisted_before_acceptance
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/invalid")
         )
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         self.assertEqual(self.provider.calls, 0)
+        self.assertEqual(accepted_after_persistence, [])
 
         self.transport.source = self.source
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/source")
         )
+        self.assertEqual(accepted_after_persistence, [True])
+        self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
         self.app.handle(self.event("message_created", text="Измени фон"))
         self.callback("prompt:cancel")
         self.assertEqual(self.provider.calls, 0)
         self.assertEqual(self.store.get("u1").state, "main_menu")
+
+    def test_start_clears_stale_session_and_custom_requires_a_new_source(self) -> None:
+        self.onboard_to_prompt()
+        before_restart = self.store.get("u1")
+        self.assertIsNotNone(before_restart.session_id)
+
+        self.app.handle(self.event("message_created", text="/start"))
+        restarted = self.store.get("u1")
+        self.assertEqual(restarted.state, "main_menu")
+        self.assertIsNone(restarted.session_id)
+        self.assertIsNone(restarted.current_gallery_item_id)
+        self.assertIsNone(restarted.current_version_id)
+
+        self.callback("custom")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.app.handle(self.event("message_created", text="Замени фон"))
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.provider.calls, 0)
+        self.assertEqual(self.transport.messages[-1][1], "Нужно отправить одно изображение.")
+        self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
+
+    def test_image_outside_waiting_for_source_is_saved_and_not_silently_ignored(self) -> None:
+        self.app.handle(self.event("bot_started"))
+        self.callback("legal:accept_all")
+        self.assertEqual(self.store.get("u1").state, "main_menu")
+
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/preloaded")
+        )
+        preloaded = self.store.get("u1")
+        self.assertEqual(preloaded.state, "main_menu")
+        self.assertIsNotNone(preloaded.session_id)
+        self.assertIn("Фото принято", self.transport.messages[-2][1])
+        with self.database.read() as connection:
+            source = Path(connection.execute(
+                "SELECT source_file_path FROM demo_sessions WHERE id=?",
+                (preloaded.session_id,),
+            ).fetchone()[0])
+        self.assertTrue(source.is_file())
+
+        self.callback("custom")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+
+    def test_expired_source_never_reaches_processing_and_same_reupload_recovers(self) -> None:
+        self.onboard_to_prompt()
+        self.app.handle(self.event("message_created", text="Замени фон"))
+        self.clock.advance(self.settings.demo_session_ttl_minutes * 60 + 1)
+
+        self.callback("prompt:start")
+        expired = self.store.get("u1")
+        self.assertEqual(expired.state, "main_menu")
+        self.assertIsNone(expired.session_id)
+        self.assertEqual(self.provider.calls, 0)
+        self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
+        self.assertIn("Срок предыдущей фотосессии истёк", self.transport.messages[-1][1])
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT status FROM demo_sessions").fetchone()[0],
+                "expired",
+            )
+
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/reupload")
+        )
+        refreshed = self.store.get("u1")
+        self.assertEqual(refreshed.state, "main_menu")
+        self.assertIsNotNone(refreshed.session_id)
+        self.callback("custom")
+        self.app.handle(self.event("message_created", text="Замени фон"))
+        self.callback("prompt:start")
+        self.assertEqual(self.provider.calls, 1)
+        self.assertEqual(self.store.get("u1").state, "result_ready")
 
     def test_processing_preview_original_guard_duplicate_and_unlock_placeholder(self) -> None:
         self.generate_first()

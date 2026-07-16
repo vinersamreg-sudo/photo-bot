@@ -107,6 +107,14 @@ class DeployPolicyTests(TestCase):
             2,
         )
 
+    def test_manual_deploy_can_reset_owner_dialog_without_logging_identifiers(self) -> None:
+        self.assertIn("reset_owner_dialog:", self.workflow)
+        self.assertIn("Reset owner dialog to a clean main-menu state", self.workflow)
+        self.assertIn("inputs.reset_owner_dialog == true", self.workflow)
+        self.assertIn('event_key="ops:owner-dialog-reset"', self.workflow)
+        self.assertIn("owner_dialogs_reset=", self.workflow)
+        self.assertNotIn("print(owner_id)", self.workflow)
+
     def test_deploy_uses_one_systemd_service_without_background_watchdogs(self) -> None:
         self.assertIn("install -o root -g root -m 644", self.workflow)
         self.assertIn("systemctl enable photo-bot.service", self.workflow)

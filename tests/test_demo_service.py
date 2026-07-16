@@ -98,6 +98,27 @@ class DemoServiceTests(TestCase):
         with self.assertRaises(SourceReplacementError):
             service.start_session("max", "user-1", other)
 
+    def test_same_source_reupload_reactivates_expired_session_without_new_quota(self) -> None:
+        settings = replace(self.settings, demo_session_ttl_minutes=1)
+        service = self.service(settings=settings)
+        first = service.start_session("max", "resume-user", self.source)
+        self.clock.advance(61)
+        with self.assertRaises(DemoExpiredError):
+            service.generate(first.session_id, "Светлый фон", "expired-attempt")
+
+        resumed = service.start_session("max", "resume-user", self.source)
+        self.assertEqual(resumed.session_id, first.session_id)
+        self.assertEqual(resumed.successful_generations, 0)
+        self.assertEqual(resumed.max_generations, first.max_generations)
+        with service.database.read() as connection:
+            row = connection.execute(
+                "SELECT status,expires_at,source_file_path FROM demo_sessions WHERE id=?",
+                (first.session_id,),
+            ).fetchone()
+        self.assertEqual(row["status"], "active")
+        self.assertGreater(datetime.fromisoformat(row["expires_at"]), self.clock())
+        self.assertTrue(Path(row["source_file_path"]).is_file())
+
     def test_five_successes_only_and_successful_delivery_debits_once(self) -> None:
         service = self.service()
         session = service.start_session("max", "user-2", self.source)

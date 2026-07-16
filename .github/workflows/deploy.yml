@@ -10,6 +10,11 @@ on:
         required: false
         type: boolean
         default: false
+      reset_owner_dialog:
+        description: Reset allowlisted owner dialog bindings after deployment
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -337,4 +342,47 @@ jobs:
             "$ROOT"/venv/bin/python -m scripts.check_runtime_secrets
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
+          REMOTE
+      - name: Reset owner dialog to a clean main-menu state
+        if: >-
+          env.DEPLOY_CONFIGURED == 'true' && github.event_name == 'workflow_dispatch' &&
+          inputs.reset_owner_dialog == true
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            cd /opt/photo-bot
+            venv/bin/python - <<'PY'
+          from app.config import load_settings
+          from app.database import Database
+          from app.max_conversation import MaxConversationStore
+
+          settings = load_settings()
+          store = MaxConversationStore(Database(settings.database_path))
+          reset_count = 0
+          for owner_id in settings.max_owner_user_ids:
+              if store.get(owner_id) is None:
+                  continue
+              store.transition(
+                  owner_id,
+                  "main_menu",
+                  event_key="ops:owner-dialog-reset",
+                  force=True,
+                  selected_scenario_id=None,
+                  session_id=None,
+                  pending_prompt=None,
+                  pending_action=None,
+                  current_gallery_item_id=None,
+                  current_version_id=None,
+                  gallery_cursor=0,
+                  status_message_id=None,
+              )
+              reset_count += 1
+          if reset_count == 0:
+              raise SystemExit("No allowlisted owner dialog was available to reset")
+          print(f"owner_dialogs_reset={reset_count}")
+          PY
           REMOTE
