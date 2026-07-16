@@ -14,6 +14,7 @@ from app.max_application import (
     MaxApplication,
     OWNER_ONLY_TEXT,
     PHOTO_ACCEPTED_TEXT,
+    PHOTO_REUSED_TEXT,
     PROCESSING_TEXT,
     UNLOCK_PLACEHOLDER,
 )
@@ -225,7 +226,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(accepted_after_persistence, [True])
         self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
 
-    def test_start_clears_stale_session_and_custom_requires_a_new_source(self) -> None:
+    def test_start_clears_dialog_binding_then_resumes_the_stored_source(self) -> None:
         self.onboard_to_prompt()
         before_restart = self.store.get("u1")
         self.assertIsNotNone(before_restart.session_id)
@@ -240,12 +241,26 @@ class MaxApplicationTests(TestCase):
         self.assertIsNone(restarted.current_version_id)
 
         self.callback("custom")
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
-        self.app.handle(self.event("message_created", text="Замени фон"))
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        resumed = self.store.get("u1")
+        self.assertEqual(resumed.state, "waiting_for_prompt")
+        self.assertEqual(resumed.session_id, before_restart.session_id)
         self.assertEqual(self.provider.calls, 0)
-        self.assertEqual(self.transport.messages[-1][1], "Пришлите фотографию 📷")
+        self.assertEqual(self.transport.messages[-1][1], PHOTO_REUSED_TEXT)
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
+
+    def test_custom_requires_upload_when_the_stored_source_is_missing(self) -> None:
+        self.onboard_to_prompt()
+        with self.database.read() as connection:
+            source = Path(connection.execute(
+                "SELECT source_file_path FROM demo_sessions"
+            ).fetchone()[0])
+        self.app.handle(self.event("message_created", text="/start"))
+        source.unlink()
+
+        self.callback("custom")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.transport.messages[-1][1], "Пришлите фотографию 📷")
+        self.assertEqual(self.provider.calls, 0)
 
     def test_photoshoot_catalog_and_source_replacement_have_product_copy(self) -> None:
         self.generate_first()
@@ -254,7 +269,8 @@ class MaxApplicationTests(TestCase):
         self.callback("catalog:photoshoot")
         self.assertEqual(self.transport.messages[-1][1], "🎭 Готовые фотосессии\n\nВыберите образ.")
         self.callback("scenario:cafe")
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertEqual(self.transport.messages[-1][1], PHOTO_REUSED_TEXT)
 
         other = self.base / "other.png"
         Image.new("RGB", (320, 240), "#aa7755").save(other)
@@ -306,13 +322,10 @@ class MaxApplicationTests(TestCase):
                 "expired",
             )
 
-        self.app.handle(
-            self.event("message_created", image_url="https://iu.oneme.ru/reupload")
-        )
-        refreshed = self.store.get("u1")
-        self.assertEqual(refreshed.state, "main_menu")
-        self.assertIsNotNone(refreshed.session_id)
         self.callback("custom")
+        refreshed = self.store.get("u1")
+        self.assertEqual(refreshed.state, "waiting_for_prompt")
+        self.assertIsNotNone(refreshed.session_id)
         self.app.handle(self.event("message_created", text="Замени фон"))
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.store.get("u1").state, "result_ready")

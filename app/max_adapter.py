@@ -226,6 +226,10 @@ class MaxDemoAdapter:
         self._require_consent(platform_user_id)
         return self.service.start_session(self.platform, platform_user_id, source)
 
+    def resume_demo(self, platform_user_id: str) -> DemoSessionInfo | None:
+        self._require_consent(platform_user_id)
+        return self.service.resume_session(self.platform, platform_user_id)
+
     def generate(
         self,
         platform_user_id: str,

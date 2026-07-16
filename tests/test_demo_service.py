@@ -119,6 +119,27 @@ class DemoServiceTests(TestCase):
         self.assertGreater(datetime.fromisoformat(row["expires_at"]), self.clock())
         self.assertTrue(Path(row["source_file_path"]).is_file())
 
+    def test_resume_uses_stored_source_without_upload_or_new_quota(self) -> None:
+        settings = replace(self.settings, demo_session_ttl_minutes=1)
+        service = self.service(settings=settings)
+        first = service.start_session("max", "stored-user", self.source)
+        self.clock.advance(61)
+
+        resumed = service.resume_session("max", "stored-user")
+        self.assertIsNotNone(resumed)
+        self.assertEqual(resumed.session_id, first.session_id)
+        self.assertEqual(resumed.source_path, first.source_path)
+        self.assertEqual(resumed.successful_generations, 0)
+        self.assertEqual(resumed.max_generations, first.max_generations)
+        with service.database.read() as connection:
+            row = connection.execute(
+                "SELECT status,expires_at FROM demo_sessions WHERE id=?",
+                (first.session_id,),
+            ).fetchone()
+        self.assertEqual(row["status"], "active")
+        self.assertGreater(datetime.fromisoformat(row["expires_at"]), self.clock())
+        self.assertIsNone(service.resume_session("max", "unknown-user"))
+
     def test_five_successes_only_and_successful_delivery_debits_once(self) -> None:
         service = self.service()
         session = service.start_session("max", "user-2", self.source)

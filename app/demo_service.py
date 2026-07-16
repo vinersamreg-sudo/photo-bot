@@ -173,6 +173,46 @@ class DemoService:
             row = connection.execute("SELECT * FROM demo_sessions WHERE id=?", (session_id,)).fetchone()
             return self._session_info(row)
 
+    def resume_session(
+        self, platform: str, platform_user_id: str
+    ) -> Optional[DemoSessionInfo]:
+        """Resume the stored demo source without replacing it or granting new quota."""
+
+        if not platform.strip() or not platform_user_id.strip():
+            raise InvalidInputError("Platform identity is required")
+        now = self.clock()
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                """SELECT s.* FROM demo_sessions s
+                   JOIN users u ON u.id=s.user_id
+                   WHERE u.platform=? AND u.platform_user_id=?""",
+                (platform, platform_user_id),
+            ).fetchone()
+            if row is None:
+                return None
+            if (
+                row["status"] in {"completed", "deleted"}
+                or row["successful_generations"] >= row["max_generations"]
+            ):
+                raise DemoLimitError("The free demo has already been completed")
+            if row["status"] not in {"active", "expired"}:
+                return None
+            source_path = Path(row["source_file_path"])
+            if not source_path.is_file():
+                return None
+
+            expires = now + timedelta(minutes=self.settings.demo_session_ttl_minutes)
+            connection.execute(
+                """UPDATE demo_sessions
+                   SET status='active',expires_at=?,updated_at=?
+                   WHERE id=?""",
+                (iso(expires), iso(now), row["id"]),
+            )
+            refreshed = connection.execute(
+                "SELECT * FROM demo_sessions WHERE id=?", (row["id"],)
+            ).fetchone()
+            return self._session_info(refreshed)
+
     @staticmethod
     def _session_info(row: sqlite3.Row) -> DemoSessionInfo:
         return DemoSessionInfo(

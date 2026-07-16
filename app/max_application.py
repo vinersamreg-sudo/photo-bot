@@ -46,6 +46,10 @@ PHOTO_ACCEPTED_TEXT = (
     "Фото получено ✅\n\n"
     "Что изменить?"
 )
+PHOTO_REUSED_TEXT = (
+    "Фото уже загружено ✅\n\n"
+    "Что изменить?"
+)
 PROCESSING_TEXT = (
     "⏳ Обрабатываю фотографию…\n\n"
     "Обычно это занимает около минуты."
@@ -367,18 +371,30 @@ class MaxApplication:
     def _begin_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, scenario_id: Optional[str]
     ) -> None:
-        reusable_source = bool(
+        session_id = dialog.session_id if (
             dialog.session_id and self._session_is_usable(dialog.session_id)
-        )
+        ) else None
+        user_id = dialog.user_id
+        item_id = dialog.current_gallery_item_id
+        if session_id is None:
+            stored = self.adapter.resume_demo(event.user_id)
+            if stored is not None:
+                session_id = stored.session_id
+                user_id = stored.user_id
+                with self.database.read() as connection:
+                    item_id = connection.execute(
+                        "SELECT gallery_item_id FROM demo_sessions WHERE id=?",
+                        (stored.session_id,),
+                    ).fetchone()[0]
+        reusable_source = session_id is not None
         target = "waiting_for_prompt" if reusable_source else "waiting_for_source"
         self.store.transition(
             event.user_id, target, event_key=event.event_key,
+            user_id=user_id,
             selected_scenario_id=scenario_id, pending_prompt=None,
             pending_action="initial",
-            session_id=dialog.session_id if reusable_source else None,
-            current_gallery_item_id=(
-                dialog.current_gallery_item_id if reusable_source else None
-            ),
+            session_id=session_id,
+            current_gallery_item_id=item_id if reusable_source else None,
             current_version_id=None,
         )
         if target == "waiting_for_source":
@@ -387,7 +403,7 @@ class MaxApplication:
                 "Пришлите фотографию 📷",
             )
         else:
-            self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
+            self.transport.send_message(event.user_id, PHOTO_REUSED_TEXT)
 
     def _receive_source(
         self,
