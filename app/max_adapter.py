@@ -12,19 +12,9 @@ from app.domain import DemoGenerationResult, DemoSessionInfo, InvalidInputError
 from app.scenarios import SCENARIOS
 
 
-WELCOME_TEXT = (
-    "ИИ-редактор фото\n\n"
-    "Попробуйте обработку бесплатно.\n\n"
-    "Загрузите одну фотографию и получите до пяти вариантов с водяным знаком «ОБРАЗЕЦ».\n\n"
-    "Если результат понравится, позже сможете получить оригинал без водяного знака.\n\n"
-    "Бесплатная демонстрация действует для одной исходной фотографии."
-)
+WELCOME_TEXT = "✨ Pixora\n\nЧто хотите сделать?"
 
-LEGAL_TEXT = (
-    "Перед загрузкой подтвердите оферту и согласие на обработку персональных данных. "
-    "Также подтвердите права на изображение. Для обработки используется внешний AI-провайдер; "
-    "результат может изменить внешность и детали."
-)
+LEGAL_TEXT = "✨ Pixora\n\nПродолжая, вы принимаете условия использования."
 
 
 @dataclass(frozen=True)
@@ -45,17 +35,17 @@ class MaxTransport(Protocol):
 
 def main_menu() -> View:
     return View(
-        "Что хотите сделать с фотографией?",
+        WELCOME_TEXT,
         (
             Button("💬 Своя идея", "custom"),
-            Button("👔 Фото для работы и резюме", "scenario:resume"),
-            Button("🌆 Сменить фон", "scenario:light-background"),
-            Button("👕 Одежда и образ", "scenario:business-look"),
-            Button("🕰 Восстановить старое фото", "scenario:restore"),
+            Button("📸 Сменить фон", "scenario:light-background"),
+            Button("👔 Фото для работы", "scenario:resume"),
             Button("✨ Улучшить качество", "scenario:enhance"),
-            Button("📸 Готовые фотосессии", "catalog:photoshoot"),
-            Button("📁 Мои работы", "studio:works"),
-            Button("ℹ️ Правила и приватность", "legal:show"),
+            Button("🧥 Одежда и образ", "scenario:business-look"),
+            Button("🪄 Восстановить старое фото", "scenario:restore"),
+            Button("🎭 Готовые фотосессии", "catalog:photoshoot"),
+            Button("📂 Мои работы", "studio:works"),
+            Button("⚙️ Настройки", "settings"),
         ),
     )
 
@@ -64,9 +54,41 @@ def legal_view() -> View:
     return View(
         LEGAL_TEXT,
         (
-            Button("📄 Оферта", "legal:offer"),
-            Button("🔐 Обработка данных", "legal:privacy"),
-            Button("☑️ Принимаю обязательные документы", "legal:accept_all"),
+            Button("Продолжить", "legal:accept_all"),
+            Button("Подробнее →", "legal:details"),
+        ),
+    )
+
+
+def legal_details_view() -> View:
+    return View(
+        "Фото обрабатывается с помощью внешнего AI-сервиса. Загружая фото, вы подтверждаете право на его использование.",
+        (
+            Button("Продолжить", "legal:accept_all"),
+            Button("← Назад", "legal:back"),
+        ),
+    )
+
+
+def settings_view() -> View:
+    return View(
+        "⚙️ Настройки\n\nУсловия использования и приватность.",
+        (
+            Button("Условия", "legal:offer"),
+            Button("Приватность", "legal:privacy"),
+            Button("← Назад", "menu"),
+        ),
+    )
+
+
+def photoshoot_catalog() -> View:
+    return View(
+        "🎭 Готовые фотосессии\n\nВыберите образ.",
+        (
+            Button("В уютном кафе", "scenario:cafe"),
+            Button("На пляже", "scenario:beach"),
+            Button("С питомцем", "scenario:cat"),
+            Button("← Назад", "menu"),
         ),
     )
 
@@ -76,19 +98,19 @@ def scenario_catalog() -> View:
         Button(f"{scenario.emoji} {scenario.title}", f"scenario:{scenario.id}")
         for scenario in sorted(SCENARIOS, key=lambda value: value.sort_order)
         if scenario.active
-    ) + (Button("🏠 Главное меню", "menu"),)
-    return View("Выберите готовый сценарий:", buttons)
+    ) + (Button("← Назад", "menu"),)
+    return View("Выберите образ.", buttons)
 
 
 def studio_menu_contract() -> View:
     """Future navigation contract; no MAX routing is attached yet."""
     return View(
-        "Ваша личная AI-фотостудия",
+        "📂 Мои работы",
         (
-            Button("📁 Мои работы", "studio:works"),
+            Button("📂 Мои работы", "studio:works"),
             Button("⭐ Избранное", "studio:favorites"),
-            Button("🕒 Последние", "studio:recent"),
-            Button("📂 Коллекции", "studio:collections"),
+            Button("Последние", "studio:recent"),
+            Button("Коллекции", "studio:collections"),
             Button("🗑 Корзина", "studio:trash"),
         ),
     )
@@ -96,68 +118,56 @@ def studio_menu_contract() -> View:
 
 def result_actions(remaining: int) -> View:
     if remaining > 0:
-        text = (
-            "Это демо-результат с водяным знаком.\n\n"
-            f"Бесплатных правок осталось: {remaining}.\n\nЧто сделать дальше?"
+        text = "Это демо с водяным знаком."
+        buttons = (
+            Button("⬇ Получить оригинал", "result:unlock"),
+            Button("✨ Исправить", "result:correct"),
+            Button("🎲 Другой вариант", "result:repeat"),
+            Button("⭐ В избранное", "result:favorite"),
+            Button("📂 Мои работы", "studio:works"),
+            Button("🗑 Удалить", "result:delete"),
         )
     else:
         text = (
-            "Бесплатная демонстрация завершена.\n\n"
-            "Вы уже увидели, как сервис обрабатывает вашу фотографию.\n\n"
-            "Получить оригинал без водяного знака или продолжить правки можно после оплаты."
+            "Бесплатные варианты закончились.\n\n"
+            "Получите оригинал или продолжите после оплаты."
         )
-    return View(
-        text,
-        (
-            Button("✅ Получить оригинал", "result:unlock"),
-            Button("✏️ Исправить", "result:correct"),
-            Button("🔄 Другой вариант", "result:repeat"),
-            Button("⭐ В избранное", "result:favorite"),
-            Button("📁 Мои работы", "studio:works"),
+        buttons = (
+            Button("⬇ Получить оригинал", "result:unlock"),
+            Button("📂 Мои работы", "studio:works"),
             Button("🗑 Удалить", "result:delete"),
-            Button("🏠 Главное меню", "menu"),
-        ),
-    )
-
-
-def confirmation_view(prompt: str, remaining: int) -> View:
-    safe_prompt = " ".join(prompt.split())[:500]
-    return View(
-        "Я понял задачу так:\n\n"
-        f"{safe_prompt}\n\n"
-        "Будет использована ваша текущая фотография.\n"
-        "Результат придёт с водяным знаком «ОБРАЗЕЦ».\n"
-        f"Бесплатных вариантов доступно: {remaining}.\n\n"
-        "Начать обработку?",
-        (
-            Button("✅ Начать", "prompt:start"),
-            Button("✏️ Изменить описание", "prompt:edit"),
-            Button("🗑 Отменить", "prompt:cancel"),
-        ),
-    )
+        )
+    return View(text, buttons)
 
 
 def delete_confirmation_view() -> View:
     return View(
-        "Удалить эту работу и все её версии? Исходник, preview и originals будут удалены без восстановления.",
+        "Удалить работу со всеми версиями?\n\nЭто нельзя отменить.",
         (
-            Button("🗑 Да, удалить", "delete:confirm"),
-            Button("↩️ Не удалять", "delete:cancel"),
+            Button("🗑 Удалить", "delete:confirm"),
+            Button("Отмена", "delete:cancel"),
         ),
     )
 
 
 def gallery_item_actions() -> tuple[Button, ...]:
     return (
-        Button("⬅️ Предыдущая", "work:previous"),
-        Button("➡️ Следующая", "work:next"),
-        Button("🏆 Сделать главной", "work:main"),
-        Button("✏️ Исправить", "result:correct"),
-        Button("🔄 Другой вариант", "result:repeat"),
+        Button("⬇ Получить оригинал", "result:unlock"),
+        Button("✨ Исправить", "result:correct"),
+        Button("🎲 Другой вариант", "result:repeat"),
         Button("⭐ В избранное", "result:favorite"),
+        Button("История версий", "work:history"),
         Button("🗑 Удалить", "result:delete"),
-        Button("📁 К списку работ", "studio:works"),
-        Button("🏠 Главное меню", "menu"),
+        Button("📂 К работам", "studio:works"),
+    )
+
+
+def version_history_actions() -> tuple[Button, ...]:
+    return (
+        Button("← Предыдущая", "work:previous"),
+        Button("Следующая →", "work:next"),
+        Button("Сделать основной", "work:main"),
+        Button("← К работе", "work:open"),
     )
 
 
@@ -232,7 +242,7 @@ class MaxDemoAdapter:
             return self.transport.send_image(
                 platform_user_id,
                 preview,
-                "Демо-результат. Оригинал хранится отдельно и станет доступен только после оплаты.",
+                "Это демо с водяным знаком.",
                 (),
             )
 

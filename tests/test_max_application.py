@@ -168,22 +168,31 @@ class MaxApplicationTests(TestCase):
     def generate_first(self) -> None:
         self.onboard_to_prompt()
         self.app.handle(self.event("message_created", text="Сделай светлый фон"))
-        self.assertEqual(self.store.get("u1").state, "confirmation")
-        confirmation = self.transport.messages[-1]
-        self.assertIn("Я понял задачу так", confirmation[1])
-        self.assertIn("Бесплатных вариантов доступно: 5", confirmation[1])
-        self.callback("prompt:start")
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertFalse(any("Я понял задачу" in message[1] for message in self.transport.messages))
+        self.assertFalse(any("Бесплатных вариантов доступно" in message[1] for message in self.transport.messages))
 
-    def test_start_legal_upload_prompt_cancel_and_invalid_file(self) -> None:
+    def test_start_legal_details_upload_and_invalid_file(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "legal_required")
-        self.callback("legal:offer")
-        self.assertIn("Оферта (черновик)", self.transport.messages[-1][1])
-        self.callback("legal:privacy")
-        self.assertIn("Обработка данных (черновик)", self.transport.messages[-1][1])
+        self.assertEqual(self.transport.messages[-1][1], "✨ Pixora\n\nПродолжая, вы принимаете условия использования.")
+        self.callback("menu")
+        self.assertEqual(self.store.get("u1").state, "legal_required")
+        self.callback("settings")
+        self.assertEqual(self.store.get("u1").state, "legal_required")
+        self.callback("legal:details")
+        self.assertIn("внешнего AI-сервиса", self.transport.messages[-1][1])
+        self.callback("legal:back")
         self.callback("legal:accept_all")
+        self.assertEqual(self.transport.messages[-1][1], "✨ Pixora\n\nЧто хотите сделать?")
+        self.callback("settings")
+        self.callback("legal:offer")
+        self.assertIn("Условия использования", self.transport.messages[-1][1])
+        self.callback("settings")
+        self.callback("legal:privacy")
+        self.assertIn("Приватность", self.transport.messages[-1][1])
+        self.callback("menu")
         self.callback("custom")
 
         invalid = self.base / "invalid.bin"
@@ -192,7 +201,7 @@ class MaxApplicationTests(TestCase):
         accepted_after_persistence = []
 
         def verify_photo_is_persisted_before_acceptance(text):
-            if text.startswith("Фото принято"):
+            if text.startswith("Фото получено"):
                 with self.database.read() as connection:
                     row = connection.execute(
                         "SELECT source_file_path FROM demo_sessions"
@@ -215,17 +224,15 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(accepted_after_persistence, [True])
         self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
-        self.app.handle(self.event("message_created", text="Измени фон"))
-        self.callback("prompt:cancel")
-        self.assertEqual(self.provider.calls, 0)
-        self.assertEqual(self.store.get("u1").state, "main_menu")
 
     def test_start_clears_stale_session_and_custom_requires_a_new_source(self) -> None:
         self.onboard_to_prompt()
         before_restart = self.store.get("u1")
         self.assertIsNotNone(before_restart.session_id)
 
+        message_count = len(self.transport.messages)
         self.app.handle(self.event("message_created", text="/start"))
+        self.assertEqual(len(self.transport.messages), message_count + 1)
         restarted = self.store.get("u1")
         self.assertEqual(restarted.state, "main_menu")
         self.assertIsNone(restarted.session_id)
@@ -237,8 +244,28 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("message_created", text="Замени фон"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         self.assertEqual(self.provider.calls, 0)
-        self.assertEqual(self.transport.messages[-1][1], "Нужно отправить одно изображение.")
+        self.assertEqual(self.transport.messages[-1][1], "Пришлите фотографию 📷")
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
+
+    def test_photoshoot_catalog_and_source_replacement_have_product_copy(self) -> None:
+        self.generate_first()
+        calls_before = self.provider.calls
+        self.app.handle(self.event("message_created", text="/start"))
+        self.callback("catalog:photoshoot")
+        self.assertEqual(self.transport.messages[-1][1], "🎭 Готовые фотосессии\n\nВыберите образ.")
+        self.callback("scenario:cafe")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+
+        other = self.base / "other.png"
+        Image.new("RGB", (320, 240), "#aa7755").save(other)
+        self.transport.source = other
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/other")
+        )
+        message = self.transport.messages[-1]
+        self.assertIn("Бесплатное демо уже связано с первой фотографией", message[1])
+        self.assertEqual(message[2][0].text, "📂 Мои работы")
+        self.assertEqual(self.provider.calls, calls_before)
 
     def test_image_outside_waiting_for_source_is_saved_and_not_silently_ignored(self) -> None:
         self.app.handle(self.event("bot_started"))
@@ -251,7 +278,7 @@ class MaxApplicationTests(TestCase):
         preloaded = self.store.get("u1")
         self.assertEqual(preloaded.state, "main_menu")
         self.assertIsNotNone(preloaded.session_id)
-        self.assertIn("Фото принято", self.transport.messages[-2][1])
+        self.assertIn("Фото получено", self.transport.messages[-1][1])
         with self.database.read() as connection:
             source = Path(connection.execute(
                 "SELECT source_file_path FROM demo_sessions WHERE id=?",
@@ -264,16 +291,15 @@ class MaxApplicationTests(TestCase):
 
     def test_expired_source_never_reaches_processing_and_same_reupload_recovers(self) -> None:
         self.onboard_to_prompt()
-        self.app.handle(self.event("message_created", text="Замени фон"))
         self.clock.advance(self.settings.demo_session_ttl_minutes * 60 + 1)
 
-        self.callback("prompt:start")
+        self.app.handle(self.event("message_created", text="Замени фон"))
         expired = self.store.get("u1")
         self.assertEqual(expired.state, "main_menu")
         self.assertIsNone(expired.session_id)
         self.assertEqual(self.provider.calls, 0)
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
-        self.assertIn("Срок предыдущей фотосессии истёк", self.transport.messages[-1][1])
+        self.assertIn("Сессия завершилась", self.transport.messages[-1][1])
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT status FROM demo_sessions").fetchone()[0],
@@ -288,7 +314,6 @@ class MaxApplicationTests(TestCase):
         self.assertIsNotNone(refreshed.session_id)
         self.callback("custom")
         self.app.handle(self.event("message_created", text="Замени фон"))
-        self.callback("prompt:start")
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.store.get("u1").state, "result_ready")
 
@@ -298,7 +323,8 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(self.transport.edits)
         delivered_path = self.transport.images[-1][1]
         self.assertTrue(delivered_path.is_file())
-        self.assertIn("Бесплатных вариантов осталось: 4", self.transport.images[-1][2])
+        self.assertEqual(self.transport.images[-1][2], "Это демо с водяным знаком.")
+        self.assertEqual(self.transport.edits[-1][1], "✨ Готово")
         with self.database.read() as connection:
             attempt = connection.execute(
                 "SELECT original_result_path,demo_result_path FROM generation_attempts"
@@ -323,9 +349,8 @@ class MaxApplicationTests(TestCase):
         self.generate_first()
         first = self.store.get("u1").current_version_id
         self.callback("result:correct")
-        self.app.handle(self.event("message_created", text="Сделай лицо естественнее"))
         self.clock.advance(2)
-        self.callback("prompt:start")
+        self.app.handle(self.event("message_created", text="Сделай лицо естественнее"))
         second = self.store.get("u1").current_version_id
         self.clock.advance(2)
         self.callback("result:repeat")
@@ -350,14 +375,15 @@ class MaxApplicationTests(TestCase):
 
         self.callback("result:favorite")
         self.callback("studio:works")
-        self.assertIn("📁 Мои работы", self.transport.messages[-1][1])
+        self.assertIn("📂 Мои работы", self.transport.messages[-1][1])
         self.callback(f"works:open:{dialog.current_gallery_item_id}")
+        self.callback("work:history")
         self.callback("work:previous")
         self.callback("work:main")
         self.assertTrue(self.transport.images)
 
         self.callback("result:delete")
-        self.assertIn("Удалить эту работу", self.transport.messages[-1][1])
+        self.assertIn("Удалить работу", self.transport.messages[-1][1])
         self.callback("delete:confirm")
         self.assertFalse(root.exists())
         with self.database.read() as connection:
@@ -371,9 +397,8 @@ class MaxApplicationTests(TestCase):
 
     def test_send_failure_and_technical_failure_do_not_debit(self) -> None:
         self.onboard_to_prompt()
-        self.app.handle(self.event("message_created", text="Измени фон"))
         self.transport.image_delivery = False
-        self.callback("prompt:start")
+        self.app.handle(self.event("message_created", text="Измени фон"))
         with self.database.read() as connection:
             session = connection.execute(
                 "SELECT successful_generations FROM demo_sessions"
@@ -384,6 +409,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(session[0], 0)
         self.assertEqual(attempt[0], "delivery_failed")
         self.assertEqual(self.store.get("u1").state, "confirmation")
+        self.assertEqual(self.transport.edits[-1][1], "Не получилось завершить обработку.")
 
         self.provider.fail = RuntimeError("provider unavailable")
         self.transport.image_delivery = True

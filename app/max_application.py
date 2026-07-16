@@ -10,19 +10,31 @@ from typing import Optional, Protocol, Sequence
 from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
-from app.domain import DemoError, DemoExpiredError, InvalidInputError
+from app.domain import (
+    CooldownError,
+    DailyBudgetError,
+    DeliveryError,
+    DemoError,
+    DemoExpiredError,
+    DemoLimitError,
+    InvalidInputError,
+    PolicyRejectedError,
+    SourceReplacementError,
+)
 from app.gallery import GalleryService, GalleryVersion
 from app.max_adapter import (
     Button,
     MaxDemoAdapter,
     View,
-    WELCOME_TEXT,
-    confirmation_view,
     delete_confirmation_view,
     gallery_item_actions,
+    legal_details_view,
     legal_view,
     main_menu,
+    photoshoot_catalog,
     result_actions,
+    settings_view,
+    version_history_actions,
 )
 from app.max_conversation import MaxConversationStore, MaxDialog
 from app.max_transport import MaxIncomingEvent, MaxTransportError
@@ -31,21 +43,20 @@ from app.max_transport import MaxIncomingEvent, MaxTransportError
 LOGGER = logging.getLogger(__name__)
 
 PHOTO_ACCEPTED_TEXT = (
-    "Фото принято.\n\n"
-    "Теперь напишите обычной фразой, что нужно изменить.\n\n"
-    "Лучше просить одно конкретное изменение за раз."
+    "Фото получено ✅\n\n"
+    "Что изменить?"
 )
 PROCESSING_TEXT = (
-    "⏳ Обрабатываю фотографию.\n\n"
-    "Обычно это занимает около 1–3 минут. Можно закрыть MAX — результат придёт сюда."
+    "⏳ Обрабатываю фотографию…\n\n"
+    "Обычно это занимает около минуты."
 )
 UNLOCK_PLACEHOLDER = (
-    "Оплата оригинала пока недоступна. Сейчас идёт закрытое тестирование.\n\n"
-    "Ваш результат сохранён в «Моих работах»."
+    "Получение оригинала пока недоступно — идёт закрытое тестирование.\n\n"
+    "Работа сохранена в «Моих работах»."
 )
 OWNER_ONLY_TEXT = (
-    "Спасибо за интерес к Pixora! Сейчас сервис находится в закрытом тестировании. "
-    "Мы откроем доступ для новых пользователей после завершения проверки."
+    "Pixora пока в закрытом тестировании.\n\n"
+    "Скоро откроем доступ."
 )
 
 
@@ -106,7 +117,7 @@ class MaxApplication:
             self._reset_dialog_to_main(event.user_id, event.event_key)
             self.transport.send_message(
                 event.user_id,
-                "Срок предыдущей фотосессии истёк. Выберите задачу и загрузите фотографию заново.",
+                "Сессия завершилась.\n\nВыберите действие и загрузите фото снова.",
                 main_menu().buttons,
             )
             self.store.finish_event(event.event_key, True)
@@ -116,11 +127,7 @@ class MaxApplication:
                 "MAX domain request rejected (event_type=%s,error_type=%s)",
                 event.event_type, type(exc).__name__,
             )
-            self.transport.send_message(
-                event.user_id,
-                "Не удалось выполнить действие. Проверьте формат фото, описание и доступный лимит.",
-                (Button("🏠 Главное меню", "menu"),),
-            )
+            self._show_demo_error(event, exc)
             self.store.finish_event(event.event_key, True)
             return True
         except Exception:
@@ -128,6 +135,69 @@ class MaxApplication:
             raise
         self.store.finish_event(event.event_key, True)
         return True
+
+    def _show_demo_error(self, event: MaxIncomingEvent, exc: DemoError) -> None:
+        if isinstance(exc, SourceReplacementError):
+            self.transport.send_message(
+                event.user_id,
+                "Бесплатное демо уже связано с первой фотографией.\n\nПродолжите в «Моих работах».",
+                (
+                    Button("📂 Мои работы", "studio:works"),
+                    Button("← В меню", "menu"),
+                ),
+            )
+            return
+        if isinstance(exc, DemoLimitError):
+            self.transport.send_message(
+                event.user_id,
+                "Бесплатные варианты закончились.",
+                (
+                    Button("⬇ Получить оригинал", "result:unlock"),
+                    Button("📂 Мои работы", "studio:works"),
+                ),
+            )
+            return
+        if isinstance(exc, CooldownError):
+            self.transport.send_message(
+                event.user_id,
+                "Слишком быстро. Попробуйте ещё раз через минуту.",
+                (Button("Попробовать снова", "prompt:start"),),
+            )
+            return
+        if isinstance(exc, DailyBudgetError):
+            self.transport.send_message(
+                event.user_id,
+                "Сегодня бесплатные обработки закончились.\n\nПопробуйте позже.",
+                (Button("← В меню", "menu"),),
+            )
+            return
+        if isinstance(exc, PolicyRejectedError):
+            self.transport.send_message(
+                event.user_id,
+                "Не могу выполнить этот запрос. Попробуйте описать его иначе.",
+                (Button("Изменить запрос", "prompt:edit"),),
+            )
+            return
+        if isinstance(exc, DeliveryError):
+            self.transport.send_message(
+                event.user_id,
+                "Не получилось отправить результат. Попробуйте немного позже.",
+                (Button("← В меню", "menu"),),
+            )
+            return
+        dialog = self.store.get(event.user_id)
+        if isinstance(exc, InvalidInputError) and dialog and dialog.state == "waiting_for_source":
+            text = "Не получилось прочитать фото. Отправьте другое изображение 📷"
+            buttons: tuple[Button, ...] = ()
+        elif isinstance(exc, InvalidInputError) and dialog and dialog.state in {
+            "waiting_for_prompt", "waiting_for_correction"
+        }:
+            text = "Не получилось прочитать запрос. Напишите короче."
+            buttons = ()
+        else:
+            text = "Что-то пошло не так. Попробуйте ещё раз."
+            buttons = (Button("← В меню", "menu"),)
+        self.transport.send_message(event.user_id, text, buttons)
 
     def _dispatch(self, event: MaxIncomingEvent) -> None:
         dialog = self.store.get_or_create(event.user_id, event.chat_id)
@@ -137,7 +207,7 @@ class MaxApplication:
             return
         if event.event_type == "message_callback":
             if event.callback_id:
-                self.transport.answer_callback(event.callback_id, "Принято")
+                self.transport.answer_callback(event.callback_id, "Готово")
             self._callback(event, dialog)
             return
         if event.event_type != "message_created":
@@ -177,7 +247,6 @@ class MaxApplication:
 
     def _show_main(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
         self._reset_dialog_to_main(user_id, event_key)
-        self.transport.send_message(user_id, WELCOME_TEXT)
         self._send_view(user_id, main_menu())
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
@@ -198,16 +267,22 @@ class MaxApplication:
         if action == "legal:offer":
             self.transport.send_message(
                 event.user_id,
-                "Оферта (черновик): сервис предоставляет демонстрационную обработку фото. "
-                "Оплата и выдача оригинала пока не подключены.",
+                "Условия использования\n\nСервис создаёт демо-обработку. Оплата оригинала пока недоступна.",
+                (Button("← Назад", "settings"),),
             )
             return
         if action == "legal:privacy":
             self.transport.send_message(
                 event.user_id,
-                "Обработка данных (черновик): фото передаётся внешнему AI-провайдеру "
-                "для выполнения выбранной обработки и хранится по правилам сервиса.",
+                "Приватность\n\nФото используется для обработки и передаётся AI-провайдеру.",
+                (Button("← Назад", "settings"),),
             )
+            return
+        if action == "legal:details":
+            self._send_view(event.user_id, legal_details_view())
+            return
+        if action == "legal:back":
+            self._send_view(event.user_id, legal_view())
             return
         if action == "legal:accept_all":
             self.store.accept_required_documents(event.user_id)
@@ -219,10 +294,20 @@ class MaxApplication:
             self._show_main(event.user_id, dialog, event.event_key)
             return
         if action == "legal:show":
-            self._send_view(event.user_id, legal_view())
+            view = settings_view() if self.store.legal_is_current(event.user_id) else legal_view()
+            self._send_view(event.user_id, view)
             return
         if action == "menu":
-            self._show_main(event.user_id, dialog, event.event_key)
+            if self.store.legal_is_current(event.user_id):
+                self._show_main(event.user_id, dialog, event.event_key)
+            else:
+                self._show_legal(event.user_id, dialog, event.event_key)
+            return
+        if action == "settings":
+            if self.store.legal_is_current(event.user_id):
+                self._send_view(event.user_id, settings_view())
+            else:
+                self._show_legal(event.user_id, dialog, event.event_key)
             return
         if not self.store.legal_is_current(event.user_id):
             self._show_legal(event.user_id, dialog, event.event_key)
@@ -233,7 +318,7 @@ class MaxApplication:
         elif action == "prompt:edit":
             target = "waiting_for_correction" if dialog.pending_action == "correction" else "waiting_for_prompt"
             self.store.transition(event.user_id, target, event_key=event.event_key)
-            self.transport.send_message(event.user_id, "Напишите новое описание одним сообщением.")
+            self.transport.send_message(event.user_id, "Что изменить?")
         elif action == "prompt:cancel":
             self._show_main(event.user_id, dialog, event.event_key)
         elif action == "prompt:start":
@@ -247,7 +332,7 @@ class MaxApplication:
             )
             self.transport.send_message(
                 event.user_id,
-                "Напишите одно конкретное замечание: что именно нужно исправить?",
+                "Что исправить?",
             )
         elif action == "result:repeat":
             self._generate(event, dialog, correction=False, repeat=True)
@@ -257,6 +342,12 @@ class MaxApplication:
             self._show_works(event, dialog)
         elif action.startswith("works:open:"):
             self._open_work(event, dialog, action.rsplit(":", 1)[1])
+        elif action == "work:open":
+            if not dialog.current_gallery_item_id:
+                raise InvalidInputError("No gallery work selected")
+            self._open_work(event, dialog, dialog.current_gallery_item_id)
+        elif action == "work:history":
+            self._show_version_history(event, dialog)
         elif action in {"work:previous", "work:next"}:
             self._navigate_version(event, dialog, -1 if action.endswith("previous") else 1)
         elif action == "work:main":
@@ -270,12 +361,8 @@ class MaxApplication:
                 self._show_main(event.user_id, dialog, event.event_key)
         elif action == "delete:confirm":
             self._delete_current(event, dialog)
-        elif action.startswith("catalog:"):
-            self.transport.send_message(
-                event.user_id,
-                "Для первого теста выберите одну из задач главного меню или «Своя идея».",
-                main_menu().buttons,
-            )
+        elif action == "catalog:photoshoot":
+            self._send_view(event.user_id, photoshoot_catalog())
 
     def _begin_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, scenario_id: Optional[str]
@@ -297,7 +384,7 @@ class MaxApplication:
         if target == "waiting_for_source":
             self.transport.send_message(
                 event.user_id,
-                "Отправьте одну фотографию JPEG, PNG или WEBP как изображение.",
+                "Пришлите фотографию 📷",
             )
         else:
             self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
@@ -310,7 +397,7 @@ class MaxApplication:
         choose_scenario: bool = False,
     ) -> None:
         if not event.image_url:
-            self.transport.send_message(event.user_id, "Нужно отправить одно изображение.")
+            self.transport.send_message(event.user_id, "Пришлите фотографию 📷")
             return
         destination = self.settings.temp_dir / f"max-{event.message_id or event.event_key}.upload"
         try:
@@ -340,9 +427,9 @@ class MaxApplication:
             )
             self.transport.send_message(
                 event.user_id,
-                "Фото принято. Теперь выберите, что хотите с ним сделать.",
+                "Фото получено ✅\n\nЧто хотите сделать?",
+                main_menu().buttons,
             )
-            self._send_view(event.user_id, main_menu())
         else:
             self.store.transition(
                 event.user_id, "waiting_for_prompt", event_key=event.event_key,
@@ -387,7 +474,7 @@ class MaxApplication:
     def _receive_prompt(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         prompt = (event.text or "").strip()
         if not prompt:
-            self.transport.send_message(event.user_id, "Описание не должно быть пустым.")
+            self.transport.send_message(event.user_id, "Что изменить?")
             return
         if len(prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is too long")
@@ -398,10 +485,7 @@ class MaxApplication:
             event.user_id, "confirmation", event_key=event.event_key,
             pending_prompt=prompt, pending_action=mode,
         )
-        self._send_view(
-            event.user_id,
-            confirmation_view(prompt, self._remaining(updated.session_id or "")),
-        )
+        self._generate(event, updated, correction=mode == "correction")
 
     def _generate(
         self,
@@ -424,7 +508,7 @@ class MaxApplication:
             self.store.transition(
                 event.user_id, "demo_exhausted", event_key=event.event_key, force=True
             )
-            self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
+            self._send_view(event.user_id, result_actions(0))
             return
         remaining_after = available - 1
         status_id = self.transport.send_message(event.user_id, PROCESSING_TEXT)
@@ -434,10 +518,7 @@ class MaxApplication:
         )
 
         def deliver(preview: Path, _attempt_id: str) -> bool:
-            caption = (
-                "Готово — это демо-результат с водяным знаком.\n\n"
-                f"Бесплатных вариантов осталось: {remaining_after}"
-            )
+            caption = result_actions(remaining_after).text
             return self.transport.send_image(
                 event.user_id, preview, caption, result_actions(remaining_after).buttons
             )
@@ -459,6 +540,10 @@ class MaxApplication:
                 event.user_id, recovery_state, event_key=event.event_key,
                 status_message_id=None, force=True,
             )
+            try:
+                self.transport.edit_message(status_id, "Не получилось завершить обработку.")
+            except MaxTransportError:
+                LOGGER.info("MAX status message could not be edited after failed generation")
             raise
         with self.database.read() as connection:
             version = connection.execute(
@@ -473,7 +558,7 @@ class MaxApplication:
             pending_prompt=None, pending_action=None,
         )
         try:
-            self.transport.edit_message(status_id, "✅ Обработка завершена. Результат отправлен ниже.")
+            self.transport.edit_message(status_id, "✨ Готово")
         except MaxTransportError:
             LOGGER.info("MAX status message could not be edited after successful delivery")
 
@@ -481,11 +566,15 @@ class MaxApplication:
         if not dialog.user_id or not dialog.current_version_id:
             raise InvalidInputError("No current version")
         self.gallery.set_version_favorite(dialog.user_id, dialog.current_version_id, True)
-        self.transport.send_message(platform_user_id, "Версия добавлена в избранное ⭐")
+        self.transport.send_message(platform_user_id, "Добавлено в избранное ⭐")
 
     def _show_works(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id:
-            self.transport.send_message(event.user_id, "У вас пока нет сохранённых работ.")
+            self.transport.send_message(
+                event.user_id,
+                "Здесь пока пусто.\n\nСоздайте первую фотографию.",
+                (Button("← В меню", "menu"),),
+            )
             return
         with self.database.read() as connection:
             rows = connection.execute(
@@ -496,19 +585,25 @@ class MaxApplication:
             ).fetchall()
         self.store.transition(event.user_id, "gallery", event_key=event.event_key, force=True)
         if not rows:
-            self.transport.send_message(event.user_id, "У вас пока нет сохранённых работ.")
+            self.transport.send_message(
+                event.user_id,
+                "Здесь пока пусто.\n\nСоздайте первую фотографию.",
+                (Button("← В меню", "menu"),),
+            )
             return
-        lines = ["📁 Мои работы"]
+        lines = ["📂 Мои работы", "Выберите работу."]
         buttons: list[Button] = []
         for index, row in enumerate(rows, start=1):
             favorite = " ⭐" if row["favorite"] else ""
-            scenario = row["scenario_id"] or "Своя идея"
-            lines.append(
-                f"{index}. {row['title']}{favorite}\n"
-                f"   {scenario} · версий: {row['generation_count']} · {row['created_at'][:10]}"
+            count = row["generation_count"]
+            version_word = "версия" if count == 1 else "версии"
+            buttons.append(
+                Button(
+                    f"{index}. {row['title'][:28]}{favorite} · {count} {version_word}",
+                    f"works:open:{row['id']}",
+                )
             )
-            buttons.append(Button(f"Открыть: {row['title'][:40]}", f"works:open:{row['id']}"))
-        buttons.append(Button("🏠 Главное меню", "menu"))
+        buttons.append(Button("← В меню", "menu"))
         self.transport.send_message(event.user_id, "\n\n".join(lines), tuple(buttons))
 
     def _open_work(
@@ -525,29 +620,43 @@ class MaxApplication:
             current_gallery_item_id=item.id,
             current_version_id=best.id if best else None,
         )
-        self._send_work(event.user_id, item.title, item.scenario_id, item.favorite, versions, best)
+        self._send_work(event.user_id, item.title, item.favorite, versions, best)
 
     def _send_work(
         self,
         platform_user_id: str,
         title: str,
-        scenario_id: Optional[str],
         favorite: bool,
         versions: list[GalleryVersion],
         current: Optional[GalleryVersion],
+        *,
+        history: bool = False,
     ) -> None:
         if current is None or current.preview_path is None:
-            self.transport.send_message(platform_user_id, "У работы пока нет готовых версий.")
+            self.transport.send_message(platform_user_id, "Результат ещё не готов.")
             return
-        caption = (
-            f"{title}{' ⭐' if favorite or current.favorite else ''}\n"
-            f"Сценарий: {scenario_id or 'Своя идея'}\n"
-            f"Версия {current.version_number} из {len(versions)}"
-        )
+        heading = "История версий" if history else title
+        caption = f"{heading}{' ⭐' if favorite or current.favorite else ''}\nВерсия {current.version_number} из {len(versions)}"
+        buttons = version_history_actions() if history else gallery_item_actions()
         if not self.transport.send_image(
-            platform_user_id, current.preview_path, caption, gallery_item_actions()
+            platform_user_id, current.preview_path, caption, buttons
         ):
             raise MaxTransportError("MAX gallery preview delivery failed")
+
+    def _show_version_history(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        if not dialog.user_id or not dialog.current_gallery_item_id:
+            raise InvalidInputError("No gallery work selected")
+        item, best = self.gallery.open_item(dialog.user_id, dialog.current_gallery_item_id)
+        versions = self.gallery.list_versions(dialog.user_id, item.id)
+        current = next(
+            (version for version in versions if version.id == dialog.current_version_id),
+            best or (versions[-1] if versions else None),
+        )
+        self._send_work(
+            event.user_id, item.title, item.favorite, versions, current, history=True
+        )
 
     def _navigate_version(
         self, event: MaxIncomingEvent, dialog: MaxDialog, direction: int
@@ -564,7 +673,9 @@ class MaxApplication:
         )
         selected = versions[(current_index + direction) % len(versions)]
         self.store.update(event.user_id, current_version_id=selected.id)
-        self._send_work(event.user_id, item.title, item.scenario_id, item.favorite, versions, selected)
+        self._send_work(
+            event.user_id, item.title, item.favorite, versions, selected, history=True
+        )
 
     def _make_current_best(self, platform_user_id: str, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id or not dialog.current_version_id:
@@ -572,7 +683,7 @@ class MaxApplication:
         self.gallery.set_current_best(
             dialog.user_id, dialog.current_gallery_item_id, dialog.current_version_id
         )
-        self.transport.send_message(platform_user_id, "Эта версия теперь главная 🏆")
+        self.transport.send_message(platform_user_id, "Выбрано как основное.")
 
     def _delete_current(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id:
@@ -588,6 +699,6 @@ class MaxApplication:
         )
         self.transport.send_message(
             event.user_id,
-            "Работа и все её файлы удалены.",
-            (Button("🏠 Главное меню", "menu"),),
+            "Работа удалена.",
+            (Button("← В меню", "menu"),),
         )

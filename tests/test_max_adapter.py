@@ -8,7 +8,21 @@ from app.config import Settings
 from app.database import Database
 from app.domain import InvalidInputError
 from app.image_service import build_demo_service
-from app.max_adapter import MaxDemoAdapter, WELCOME_TEXT, legal_view, main_menu, result_actions, scenario_catalog, studio_menu_contract
+from app.max_adapter import (
+    MaxDemoAdapter,
+    WELCOME_TEXT,
+    delete_confirmation_view,
+    gallery_item_actions,
+    legal_details_view,
+    legal_view,
+    main_menu,
+    photoshoot_catalog,
+    result_actions,
+    scenario_catalog,
+    settings_view,
+    studio_menu_contract,
+    version_history_actions,
+)
 from app.scenarios import SCENARIO_CATEGORIES
 
 
@@ -24,19 +38,64 @@ class Transport:
 class MaxAdapterTests(TestCase):
     def test_menu_order_catalog_and_required_copy(self) -> None:
         menu = main_menu()
-        self.assertEqual(menu.buttons[0].text, "💬 Своя идея")
-        self.assertEqual(len(menu.buttons), 9)
+        self.assertEqual(
+            [button.text for button in menu.buttons],
+            [
+                "💬 Своя идея",
+                "📸 Сменить фон",
+                "👔 Фото для работы",
+                "✨ Улучшить качество",
+                "🧥 Одежда и образ",
+                "🪄 Восстановить старое фото",
+                "🎭 Готовые фотосессии",
+                "📂 Мои работы",
+                "⚙️ Настройки",
+            ],
+        )
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
         self.assertGreaterEqual(len(scenario_catalog().buttons), 9)
         self.assertEqual(len(SCENARIO_CATEGORIES), 12)
-        self.assertEqual(len(legal_view().buttons), 3)
+        self.assertEqual([button.text for button in legal_view().buttons], ["Продолжить", "Подробнее →"])
+        self.assertEqual(len(legal_details_view().buttons), 2)
+        self.assertEqual(len(photoshoot_catalog().buttons), 4)
+        self.assertEqual(len(settings_view().buttons), 3)
         self.assertEqual(
             [button.text for button in studio_menu_contract().buttons],
-            ["📁 Мои работы", "⭐ Избранное", "🕒 Последние", "📂 Коллекции", "🗑 Корзина"],
+            ["📂 Мои работы", "⭐ Избранное", "Последние", "Коллекции", "🗑 Корзина"],
         )
-        self.assertIn("одной исходной фотографии", WELCOME_TEXT)
-        self.assertIn("Бесплатных правок осталось: 4", result_actions(4).text)
-        self.assertIn("демонстрация завершена", result_actions(0).text)
+        self.assertEqual(WELCOME_TEXT, "✨ Pixora\n\nЧто хотите сделать?")
+        self.assertEqual(result_actions(4).text, "Это демо с водяным знаком.")
+        self.assertNotIn("4", result_actions(4).text)
+        self.assertIn("Бесплатные варианты закончились", result_actions(0).text)
+        self.assertEqual(result_actions(4).buttons[0].text, "⬇ Получить оригинал")
+        self.assertEqual(len(gallery_item_actions()), 7)
+        self.assertEqual(len(version_history_actions()), 4)
+
+    def test_user_screens_are_short_and_hide_internal_vocabulary(self) -> None:
+        views = (
+            main_menu(),
+            legal_view(),
+            legal_details_view(),
+            settings_view(),
+            photoshoot_catalog(),
+            result_actions(4),
+            result_actions(0),
+            delete_confirmation_view(),
+        )
+        forbidden = (
+            "demo session",
+            "source",
+            "storage",
+            "gallery version",
+            "preview",
+            "originals",
+            "gpt",
+        )
+        for view in views:
+            normalized = view.text.lower()
+            for term in forbidden:
+                self.assertNotIn(term, normalized)
+            self.assertLessEqual(len(view.text), 180)
 
     def test_consent_is_required_and_only_preview_is_delivered(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
