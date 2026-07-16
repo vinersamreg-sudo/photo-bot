@@ -1,3 +1,4 @@
+import json
 import tempfile
 from pathlib import Path
 from unittest import TestCase
@@ -113,9 +114,14 @@ class MaxTransportTests(TestCase):
         self.assertTrue(media_requests)
 
     def test_image_upload_accepts_the_documented_photo_token_map(self) -> None:
+        sent_messages = []
+
         def api_handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/uploads":
                 return httpx.Response(200, json={"url": "https://iu.oneme.ru/upload"})
+            if request.url.path == "/messages":
+                sent_messages.append(request.read().decode("utf-8"))
+                return httpx.Response(200, json={"message": {"body": {"mid": "sent-photo"}}})
             return httpx.Response(200, json={"success": True})
 
         media = httpx.Client(
@@ -138,7 +144,13 @@ class MaxTransportTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "preview.jpg"
             source.write_bytes(b"image-bytes")
-            self.assertEqual(client.upload_image(source), "photo-token")
+            self.assertTrue(
+                client.send_image("42", source, "preview", (Button("Open", "open"),))
+            )
+        self.assertEqual(len(sent_messages), 1)
+        sent = json.loads(sent_messages[0])
+        self.assertEqual(sent["attachments"][0]["type"], "image")
+        self.assertEqual(sent["attachments"][0]["payload"]["token"], "photo-token")
 
     def test_rejects_unknown_media_host_and_redacts_api_error(self) -> None:
         api = httpx.Client(
