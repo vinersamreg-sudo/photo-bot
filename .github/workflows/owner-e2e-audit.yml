@@ -39,7 +39,7 @@ jobs:
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -euo pipefail
             cd /opt/photo-bot
             scripts/healthcheck.sh >/dev/null
-            venv/bin/python scripts/export_owner_e2e_audit.py --limit 5' \
+            venv/bin/python -m scripts.export_owner_e2e_audit --limit 5' \
             > artifact/owner-e2e-audit.json
       - name: Validate redaction and final safety state
         run: |
