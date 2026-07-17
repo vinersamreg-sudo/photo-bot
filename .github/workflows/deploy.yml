@@ -15,6 +15,12 @@ on:
         required: false
         type: boolean
         default: false
+      grant_owner_e2e_attempts:
+        description: Add a bounded number of attempts to the existing owner demo session
+        required: false
+        type: choice
+        options: ['0', '5']
+        default: '0'
       pilot_user_limit:
         description: Number of explicitly allowlisted closed-pilot users
         required: false
@@ -557,5 +563,63 @@ jobs:
           if reset_count == 0:
               raise SystemExit("No allowlisted owner dialog was available to reset")
           print(f"owner_dialogs_reset={reset_count}")
+          PY
+          REMOTE
+      - name: Grant bounded owner E2E attempts
+        if: >-
+          env.DEPLOY_CONFIGURED == 'true' && github.event_name == 'workflow_dispatch' &&
+          inputs.grant_owner_e2e_attempts == '5'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            cd /opt/photo-bot
+            venv/bin/python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          from app.config import load_settings
+          from app.database import Database
+
+          def iso(value: datetime) -> str:
+              return value.isoformat()
+
+          settings = load_settings()
+          database = Database(settings.database_path)
+          now = datetime.now(timezone.utc)
+          expires = now + timedelta(minutes=settings.demo_session_ttl_minutes)
+          granted_count = 0
+          with database.transaction() as connection:
+              for owner_id in settings.max_owner_user_ids:
+                  row = connection.execute(
+                      """SELECT s.id,s.source_file_path,s.successful_generations,
+                                s.max_generations,s.status
+                         FROM demo_sessions s
+                         JOIN users u ON u.id=s.user_id
+                         WHERE u.platform='max' AND u.platform_user_id=?""",
+                      (owner_id,),
+                  ).fetchone()
+                  if (
+                      row is None
+                      or row["status"] == "deleted"
+                      or row["successful_generations"] < row["max_generations"]
+                      or not Path(row["source_file_path"]).is_file()
+                  ):
+                      continue
+                  connection.execute(
+                      """UPDATE demo_sessions
+                         SET max_generations=successful_generations+5,
+                             status='active',expires_at=?,updated_at=?
+                         WHERE id=?""",
+                      (iso(expires), iso(now), row["id"]),
+                  )
+                  granted_count += 1
+          if granted_count == 0:
+              raise SystemExit("No allowlisted owner session with a valid source was available")
+          print(f"owner_e2e_sessions_granted={granted_count}")
+          print("owner_e2e_attempts_granted=5")
           PY
           REMOTE

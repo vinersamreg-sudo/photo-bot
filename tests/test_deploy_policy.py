@@ -148,6 +148,16 @@ class DeployPolicyTests(TestCase):
         self.assertIn("owner_dialogs_reset=", self.workflow)
         self.assertNotIn("print(owner_id)", self.workflow)
 
+    def test_manual_deploy_can_grant_only_bounded_owner_e2e_attempts(self) -> None:
+        self.assertIn("grant_owner_e2e_attempts:", self.workflow)
+        self.assertIn("options: ['0', '5']", self.workflow)
+        self.assertIn("Grant bounded owner E2E attempts", self.workflow)
+        self.assertIn("inputs.grant_owner_e2e_attempts == '5'", self.workflow)
+        self.assertIn("max_generations=successful_generations+5", self.workflow)
+        self.assertIn('row["successful_generations"] < row["max_generations"]', self.workflow)
+        self.assertIn("owner_e2e_attempts_granted=5", self.workflow)
+        self.assertNotIn("print(owner_id)", self.workflow)
+
     def test_deploy_uses_one_systemd_service_without_background_watchdogs(self) -> None:
         self.assertIn("install -o root -g root -m 644", self.workflow)
         self.assertIn("systemctl enable photo-bot.service", self.workflow)
