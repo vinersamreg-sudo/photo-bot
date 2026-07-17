@@ -463,3 +463,149 @@ QUALITY REQUIREMENTS
 ## Решение о готовности AI Brain
 
 Архитектурная база стала лучше и реальный lineage подтверждён. Но свободные corrections пока нельзя считать production-ready для платного публичного использования: два из пяти тестовых запросов не были поняты, а точечные правки приводили к непредусмотренной перегенерации сцены. До следующего owner-only eval нужно исправить deterministic coverage, active-vs-inherited prompt semantics и fail-closed поведение при пустом `changed_fields`.
+
+---
+
+# Повторная owner-only валидация — 17 июля 2026
+
+## Область проверки
+
+- Выполнено ровно **5 из разрешённых 5** реальных запросов `gpt-image-2`; шестого запроса не было.
+- Использована та же безопасная синтетическая фотография взрослого человека.
+- Запросы прошли через настоящий production MAX flow, а не через unit test или отдельный `curl`.
+- Генерации выполнялись на production commit `677528a4c707037f160b4e1afa0e89b97b57975c`. После аудита production обновлён до `0f91627d5bd532da24e21c49c2047545a43044f6`; image pipeline между этими commit не менялся.
+- Точный redacted evidence собран workflow `29602676360`. В нём сохранены полные English provider prompts, request IDs, хэши входов, размеры и lineage без owner ID, токенов и приватных путей.
+
+## Краткий вердикт
+
+Результат **лучше предыдущей валидации**, но не идеален. Детерминированные правила теперь правильно распознали изменение цвета куртки, correction резкости реально улучшила скалы, а цепочка parent/source версий отработала без потери данных. Личность оставалась узнаваемой во всех пяти результатах.
+
+Главный оставшийся недостаток — генеративный drift. Repeat сохранил скалы и тёмно-зелёную куртку, но заметно изменил кадрирование/композицию. Текстовые constraints снижают drift, но не дают pixel-level гарантии сохранения сцены.
+
+Semantic parser прямо сейчас не требуется. Сначала нужно расширять детерминированные правила по измеренному корпусу фраз и добавить автоматический visual regression/eval. Разговорный parser fallback в этой серии не проверялся: пятый и последний разрешённый вызов был настоящим `Другой вариант` для проверки Repeat. Предыдущая валидация уже показала, что фраза про «уютный travel-журнал» не была структурно понята.
+
+## Фактические операции
+
+| № | Русский запрос | Mode / action | Parent → source → version | Provider request | Duration | Output | Quota |
+|---:|---|---|---|---|---:|---:|---|
+| 1 | «Замени фон на реалистичные скалистые горы» | `initial_edit / replace_background` | source → source → 11 | `req_960afffd69b14d149ff02b850a23dee5` | 68.667 с | 1,602,484 B | списана 1 |
+| 2 | «Переодень в одежду для хайкинга и немного измени позу. Лицо не меняй» | `correction / custom` | 11 → 11 → 12 | `req_2aa45919e54a4e2ebbd2c2e1dad5765c` | 65.034 с | 1,668,193 B | списана 1 |
+| 3 | «Сохрани эти же скалы. Убери размытие фона, сделай скалы резкими и детальными. Остальное не меняй» | `correction / sharpen_background` | 12 → 12 → 13 | `req_b574f129b26c4ea68457d5b8c9f98191` | 55.740 с | 1,934,646 B | списана 1 |
+| 4 | «Поменяй только цвет куртки на тёмно-зелёный» | `correction / change_clothes` | 13 → 13 → 14 | `req_5d274578062641378aa80ad4572be23f` | 75.398 с | 2,010,590 B | списана 1 |
+| 5 | «Другой вариант» | `repeat / change_clothes` | 14 → 13 → 15 | `req_173d6374f93d4174bea436b6684ad385` | 54.281 с | 1,947,747 B | списана 1 |
+
+Средняя сохранённая provider duration: **63.824 секунды**. Наблюдаемое пользователем время было около **99 секунд** в среднем: оно дополнительно включает transport, доставку, отрисовку MAX и ручную фиксацию результата.
+
+Внутренняя оценка стоимости — **50 RUB** суммарно, по 10 RUB на успешную операцию. Это резерв приложения, а не сверенный счёт OpenAI.
+
+Точный HTTP status SDK в БД не сохраняет, поэтому утверждать именно `HTTP 200` нельзя. Все пять attempts имеют `status=succeeded`, provider request ID, output bytes и созданную GalleryVersion; успешный 2xx следует из результата, но конкретный код не доказан сохранёнными данными.
+
+## SceneIntent, изменения и технические prompts
+
+### 1. Скалистые горы
+
+- SceneIntent: `background.operation=replace`, `category=rocky_mountains`, `setting=realistic rocky mountains`, `sharpness=sharp`, `realism=photorealistic`, `blur=forbidden`.
+- Changed fields: только поля background; inherited constraints отсутствуют.
+- Input: synthetic WEBP `840×1050`, SHA-256 `5c197e654f80…`.
+- English technical prompt потребовал заменить фон на realistic rocky mountains, держать фон резким, сохранить identity/face/skin/outfit/pose и фотореалистичную геометрию.
+- Факт: горы созданы, личность сохранена; фон получился реалистичным, но мягче, чем требовал `sharp`.
+
+### 2. Хайкинг и поза
+
+- SceneIntent добавил `outfit.operation=replace`, `outfit.style=realistic practical hiking clothing`, `pose.operation=change`, `pose.description=natural requested pose`; negative содержит запрет изменения identity.
+- Inherited: скалистые горы из версии 11.
+- Фактический input — private original версии 11, SHA-256 `3f858e969f62…`.
+- English technical prompt активировал одежду и позу, а горы перенёс в continuity/preserve constraints.
+- Факт: одежда и поза изменены, скалы и узнаваемость сохранены.
+
+### 3. Резкие скалы
+
+- SceneIntent: `background.operation=sharpen`; negative запретил replacement background и background blur.
+- Inherited: горы, hiking outfit и поза.
+- Parent/source: версия 12; input SHA-256 `0fc6973392dd…`.
+- English technical prompt: keep the current background; make it sharp, detailed and clearly readable; do not replace the background; preserve all successful parent edits.
+- Факт: скалы стали резче и детальнее; подмена фона не наблюдалась, хотя точная пиксельная геометрия не гарантируется.
+
+### 4. Тёмно-зелёная куртка
+
+- SceneIntent: `outfit.operation=recolor`, `outfit.color=dark green`, `outfit.style=null`.
+- Inherited: горы, hiking outfit, поза и sharp background.
+- Parent/source: версия 13; input SHA-256 `794a82777313…`.
+- English technical prompt явно содержит `dark green` и требует изменить только цвет одежды, сохранив фон, лицо, позу и композицию.
+- Факт: куртка стала тёмно-зелёной. Это исправляет главный детерминированный провал предыдущей валидации, где `changed_fields={}` и цвет не попадал в provider prompt.
+
+### 5. Repeat
+
+- SceneIntent не получил новых полей: `changed_fields={}` корректно для Repeat.
+- Parent — версия 14; source — версия 13. Это ожидаемая lineage для альтернативного результата того же recolor: Repeat повторно применяет запрос версии 14 к её исходному input, а не редактирует уже отредактированный output.
+- English technical prompt сохранил `dark green` и все накопленные continuity constraints.
+- Факт: создана альтернативная версия 15, куртка и скалы сохранены, личность узнаваема. Кадрирование/композиция изменились заметнее желаемого — это оставшийся visual drift.
+
+## Визуальная оценка
+
+Шкала 1–5; для «ограничений» высокий балл означает отсутствие запрещённых изменений.
+
+| № | Identity | Выполнение изменения | Сохранение предыдущего | Ограничения | Детализация | Артефакты |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 4 | 4 | 5 | 4 | 3 | 5 |
+| 2 | 4 | 5 | 4 | 4 | 4 | 5 |
+| 3 | 4 | 5 | 4 | 4 | 5 | 4 |
+| 4 | 4 | 5 | 4 | 4 | 4 | 5 |
+| 5 | 4 | 4 | 4 | 3 | 4 | 4 |
+
+Тяжёлых анатомических артефактов не обнаружено. Identity не заменялась, но мягкий накопительный drift внешности остаётся принципиальным риском цепочки генеративных edits.
+
+## Gallery и продуктовая цепочка
+
+- Созданы версии 11–15; Gallery показывает 15 версий с учётом предыдущей валидации.
+- `Correction` проверен три раза на реальных parent originals.
+- `Repeat` проверен реальным provider call и создал версию 15.
+- Favorite включён и сохранён.
+- Версия 15 выбрана current best.
+- History открывается. Regression-тест теперь явно проверяет переход «Предыдущая» 3→2; наблюдавшийся в UI скачок на старую карточку был вызван кликом по сдвинувшейся inline-клавиатуре MAX, а не ошибкой domain navigation.
+- Удаление не выполнялось: это разрушило бы evidence и требует отдельного подтверждения непосредственно перед действием.
+
+## Что улучшилось и что осталось
+
+Сработало:
+
+- deterministic parser распознал все четыре содержательных запроса;
+- `outfit.color=dark green` дошёл до English provider prompt;
+- correction резкости сохранил текущие скалы и сделал их детальнее;
+- parent/source lineage подтверждён хэшами реальных файлов;
+- Repeat повторил именно последнее изменение на корректном source;
+- каждая успешная доставка списала ровно одну попытку и создала ровно одну GalleryVersion.
+
+Не сработало полностью:
+
+- первый background edit не дал требуемую резкость сразу;
+- текстовые preserve constraints не исключают visual drift композиции и лица;
+- Repeat изменил кадрирование сильнее ожидаемого;
+- точный HTTP status и фактический OpenAI billing пока не сохраняются;
+- разговорный/неизвестный parser fallback в этой серии не перепроверен из-за жёсткого лимита 5 запросов.
+
+Следующие детерминированные правила до semantic parser:
+
+1. Явно разделить «другой вариант результата» и «повторить только последнее локальное изменение» в UX.
+2. Добавить поля `camera.framing`, `lighting.mood` и `editorial_style` для разговорных формулировок.
+3. Ввести visual/embedding guard на identity drift и scene continuity.
+4. Для точечных recolor/background corrections исследовать mask/region edit вместо надежды только на prompt.
+5. Сохранять provider HTTP status и сверяемую usage/cost telemetry.
+
+## Финальное состояние production
+
+- deployed commit: `0f91627d5bd532da24e21c49c2047545a43044f6`;
+- `MAX_POLL_OBSERVE_ONLY=true`;
+- owner allowlist настроен, pilot limit `0`;
+- пользовательские handlers остановлены;
+- owner dialog: `main_menu`;
+- pending/processing attempts: `0`;
+- dialogs в processing: `0`;
+- GalleryVersions в processing: `0`;
+- SQLite `PRAGMA quick_check`: `ok`;
+- healthcheck: passed;
+- orphan private files: `0`.
+
+Во время финального аудита был найден один ложный orphan: штатный session `metadata.json` не входил в referenced set maintenance и после grace period мог быть удалён cleanup. Исправлена первопричина, добавлен regression-тест, после deploy повторный read-only аудит подтвердил `orphan_private_file_count=0`.
+
+Итог: AI Brain и lineage стали заметно надёжнее, а точечный recolor теперь реально работает. Но свободные edits нельзя считать полностью защищёнными от визуального drift; для платного публичного запуска нужен измеримый visual quality gate, а не только корректная структура prompt.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 17.07.2026 — Повторная owner-only visual validation
+
+- выполнено ровно 5/5 разрешённых реальных `gpt-image-2` запросов через production MAX flow;
+- подтверждены watermarked delivery, GalleryVersions 11–15, Correction, Repeat, History, Favorite и Current best;
+- детерминированный parser теперь корректно передаёт `outfit.color=dark green`; correction резкости скал сработала;
+- зафиксированы средняя provider duration 63.824 с и внутренний cost reserve 50 RUB;
+- добавлен redacted read-only owner E2E audit workflow без идентификаторов, токенов и приватных путей;
+- session `metadata.json` исключён из orphan cleanup; добавлены regression tests;
+- production возвращён в `MAX_POLL_OBSERVE_ONLY=true`, pilot 0, processing 0, quick_check ok, orphans 0;
+- visual drift композиции/identity остаётся риском; public launch readiness остаётся false.
+
 ## 17.07.2026 — Closed-pilot launch hardening
 
 - `gpt-image-2` зафиксирован единственным production image provider v1; router выключен;

@@ -1,43 +1,39 @@
 # Current State
 
-Актуально на 17.07.2026 после production deploy этапа closed-pilot hardening.
+Актуально на 17.07.2026 после повторной owner-only visual validation.
 
 ## Подтверждено в production
 
-- commit `7deb6c0` развёрнут workflow `29589482028`; production marker совпал с полным Git SHA;
-- `photo-bot.service` и MAX polling здоровы, Python 3.12, один MainPID и single-instance lock;
-- `MAX_POLL_OBSERVE_ONLY=true`, owner allowlist настроен, pilot limit 0, пользовательские handlers выключены;
-- OpenAI auth/model check зелёный для `gpt-image-2`; router/composite/segmentation выключены;
-- SQLite migration v6 и `PRAGMA quick_check=ok`; активных/stale processing нет;
-- encrypted backup workflow `29590129626` создал online snapshot, проверил restore на VPS, скопировал только encrypted artifact off-site и независимо восстановил его на GitHub runner;
-- off-site artifact хранится 14 дней; migration v6 и quick_check подтверждены после расшифровки;
-- cleanup удалил 3 подтверждённых orphan-файла (1 256 651 байт), после чего remaining orphan/temp count равен 0;
-- `launch-status --strict`: operational readiness `true`, public launch readiness `false`, observe-only сохранён.
+- deployed commit `0f91627d5bd532da24e21c49c2047545a43044f6`;
+- `photo-bot.service` и MAX polling здоровы; `MAX_POLL_OBSERVE_ONLY=true`;
+- owner allowlist настроен, pilot limit 0, пользовательские handlers выключены;
+- OpenAI `gpt-image-2` — единственный production image provider; router/composite/segmentation выключены;
+- SQLite migration v6, `PRAGMA quick_check=ok`, pending/processing attempts 0, processing dialogs 0, processing GalleryVersions 0;
+- owner dialog восстановлен в `main_menu`;
+- encrypted backup/restore/off-site lifecycle подтверждён; public launch readiness остаётся false.
 
-Изменения статического сайта не публикуются автоматически; production сайта этим backend deploy не менялся.
+## Реальный owner E2E
 
-## Реализовано и проверено тестами
+- выполнено ровно 5/5 разрешённых production image requests через MAX;
+- все 5 attempts завершились `succeeded`, все previews доставлены с watermark;
+- созданы GalleryVersions 11–15; quota списана ровно по одной попытке на доставленную версию;
+- проверены три Correction, Repeat, Gallery, History, Favorite и Current best;
+- средняя provider duration 63.824 с; внутренний cost reserve 50 RUB;
+- identity оставалась узнаваемой; recolor куртки и correction резкости сработали;
+- остаётся visual drift: Repeat заметно изменил композицию, а первый background edit не дал требуемую резкость сразу;
+- разговорный parser fallback в повторной серии не проверялся из-за жёсткого лимита; semantic parser не добавлен.
 
-- direct MAX flow `/start → photo → text → result`, optional «Идеи»;
-- short UX, exact CTA order, quota hidden except last/exhausted;
-- correction/repeat lineage, Gallery cards/history/current best/favorite/delete;
-- exact invalid/size/timeout/network/quota/policy/delivery/budget errors;
-- one status message, edit-on-success/error, crash recovery without duplicate provider replay;
-- migration v6 privacy-minimal `product_events` without prompt/image/platform identity;
-- owner + ordered pilot allowlist with fail-closed 0/5/10/20 activation;
-- encrypted backup/restore/off-site/retention and scoped dry-run/execute cleanup;
-- privacy-safe `python -m app.main launch-status`;
-- site copy aligned with the bot and its current payment/model limitations.
+Полный отчёт: `docs/AI_BRAIN_VISUAL_VALIDATION.md`. Redacted production evidence собирается workflow `owner-e2e-audit.yml` без owner ID, токенов и приватных путей.
 
-Local suite: 153 pytest checks, 145 unittest checks, 26 subtests and 8 site tests. No real OpenAI image request was made by this sprint at this stage.
+## Исправлено по итогам аудита
 
-## Ещё не подтверждено live
+- добавлен read-only owner E2E exporter и workflow с проверкой observe-only/processing/SQLite/orphans;
+- добавлен regression на точный переход Gallery history «Предыдущая»;
+- исправлен ложный orphan: session `metadata.json` теперь считается referenced и не удаляется maintenance;
+- после deploy повторный аудит подтвердил orphan private files 0.
 
-- owner E2E: new generation, correction, repeat + Gallery + delete;
-- пять последовательных полных успешных owner E2E;
-- фактические latency/cost/error/delivery metrics нового UX;
-- readiness for five external pilot users.
+Local/CI suite: 147 unittest tests, secret scan и production healthcheck зелёные.
 
 ## Не готово
 
-Эквайринг, verified payment callback/refunds, окончательные legal documents/operator details, support process, public deep link/site launch, 10/20-user evidence и public scale. Long polling допустим для малого allowlisted pilot, но не для сотен публичных пользователей.
+Эквайринг, verified payment callback/refunds, окончательные legal documents/operator details, support process, public deep link/site launch, внешний пилот 5 пользователей и 10/20-user evidence. Long polling допустим для малого allowlisted pilot, но не для сотен публичных пользователей. До платного публичного запуска нужен visual quality gate для identity/scene drift.

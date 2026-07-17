@@ -15,6 +15,13 @@ Current v1 contract:
 - never make real OpenAI image calls without explicit agreed maximum;
 - never expose user IDs, tokens, prompts, private paths or originals in reports/logs.
 
+Latest production evidence (17.07.2026): owner-only E2E used exactly 5/5 approved
+real image requests; all succeeded and created GalleryVersions 11–15. Corrections,
+Repeat, History, Favorite and Current best were exercised. Production is restored
+to observe-only with pilot limit 0, processing 0, SQLite quick_check ok and orphan
+private files 0. Read `docs/AI_BRAIN_VISUAL_VALIDATION.md` and
+`docs/CURRENT_STATE.md` before proposing more image calls or parser work.
+
 Operations:
 
 - `python -m app.main health`
