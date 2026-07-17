@@ -1,0 +1,80 @@
+name: Read-only production owner E2E audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: photo-bot-production
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_HOST"
+          test -n "$SSH_PORT"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Export redacted production evidence
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          install -d artifact
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -euo pipefail
+            cd /opt/photo-bot
+            scripts/healthcheck.sh >/dev/null
+            venv/bin/python scripts/export_owner_e2e_audit.py --limit 5' \
+            > artifact/owner-e2e-audit.json
+      - name: Validate redaction and final safety state
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("artifact/owner-e2e-audit.json").read_text(encoding="utf-8"))
+          assert report["request_count"] == 5
+          assert report["request_cap"] == 5
+          assert report["summary"]["all_succeeded"] is True
+          assert report["summary"]["gallery_versions_created"] == 5
+          assert report["runtime"]["observe_only"] is True
+          assert report["runtime"]["pilot_user_limit"] == 0
+          assert report["final_checks"]["pending_or_processing_attempts"] == 0
+          assert report["final_checks"]["processing_dialogs"] == 0
+          assert report["final_checks"]["processing_gallery_versions"] == 0
+          assert report["final_checks"]["sqlite_quick_check"] == "ok"
+          forbidden_keys = {"user_id", "platform_user_id", "source_path", "original_result_path", "demo_result_path"}
+
+          def walk(value):
+              if isinstance(value, dict):
+                  assert forbidden_keys.isdisjoint(value)
+                  for nested in value.values():
+                      walk(nested)
+              elif isinstance(value, list):
+                  for nested in value:
+                      walk(nested)
+
+          walk(report)
+          PY
+      - name: Store redacted audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: owner-e2e-audit-${{ github.run_id }}
+          path: artifact/owner-e2e-audit.json
+          if-no-files-found: error
+          retention-days: 14

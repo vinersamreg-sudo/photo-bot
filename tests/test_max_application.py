@@ -473,6 +473,7 @@ class MaxApplicationTests(TestCase):
         self.callback(f"works:open:{dialog.current_gallery_item_id}")
         self.callback("work:history")
         self.callback("work:previous")
+        self.assertEqual(self.store.get("u1").current_version_id, second)
         self.callback("work:main")
         self.assertTrue(self.transport.images)
 
