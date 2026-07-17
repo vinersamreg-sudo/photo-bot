@@ -10,7 +10,8 @@
   <meta name="robots" content="index,follow,max-image-preview:large">
   <link rel="canonical" href="https://pixoraai.ru/">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="/assets/hero-480.webp" as="image" type="image/webp" fetchpriority="high" imagesrcset="/assets/hero-480.webp 480w, /assets/hero-840.webp 840w, /assets/hero-1120.webp 1120w" imagesizes="(max-width: 760px) 94vw, 46vw">
+  <link rel="preload" href="/assets/hero-480.webp" as="image" type="image/webp" fetchpriority="high" media="(max-width: 760px)">
+  <link rel="preload" href="/assets/hero-840.webp" as="image" type="image/webp" fetchpriority="high" media="(min-width: 761px)">
   <link rel="stylesheet" href="/styles.css">
   <meta property="og:type" content="website">
   <meta property="og:locale" content="ru_RU">
@@ -84,7 +85,7 @@
         <div class="hero-visual" aria-label="Пример естественного портрета Pixora AI">
           <picture>
             <source srcset="/assets/hero-480.webp 480w, /assets/hero-840.webp 840w, /assets/hero-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 46vw">
-            <img src="/assets/hero-840.webp" width="840" height="1050" alt="Естественный студийный портрет, созданный как пример Pixora AI" fetchpriority="high" loading="eager" decoding="sync">
+            <img src="/assets/hero-480.webp" width="840" height="1050" alt="Естественный студийный портрет, созданный как пример Pixora AI" fetchpriority="high" loading="eager" decoding="sync">
           </picture>
           <div class="visual-caption"><span class="spark" aria-hidden="true">✦</span><span>Естественный результат<br><small>без лишней ретуши</small></span></div>
         </div>

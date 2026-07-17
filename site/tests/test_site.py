@@ -96,7 +96,8 @@ class PixoraSiteTests(unittest.TestCase):
         webp = list((PUBLIC / "assets").glob("*.webp"))
         self.assertEqual(len(webp), 9)
         self.assertLess(max(path.stat().st_size for path in webp), 100_000)
-        self.assertIn('imagesrcset="/assets/hero-480.webp 480w', self.html)
+        self.assertIn('href="/assets/hero-480.webp" as="image"', self.html)
+        self.assertIn('href="/assets/hero-840.webp" as="image"', self.html)
         self.assertIn('fetchpriority="high" loading="eager" decoding="sync"', self.html)
 
     def test_internal_links_and_static_assets_exist(self) -> None:

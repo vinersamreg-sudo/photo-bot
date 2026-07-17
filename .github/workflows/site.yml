@@ -39,7 +39,7 @@ jobs:
           } finally {
             Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
           }
-      - name: Enforce Lighthouse budgets
+      - name: Measure Lighthouse budgets
         working-directory: site
         run: |
           npm ci
@@ -50,7 +50,15 @@ jobs:
           sleep 1
           mkdir -p .lighthouse
           npm run lighthouse
-          python scripts/assert_lighthouse.py .lighthouse/report.json
+      - name: Preserve Lighthouse diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pixora-lighthouse-${{ github.sha }}
+          path: site/.lighthouse/report.json
+          if-no-files-found: warn
+      - name: Enforce Lighthouse budgets
+        run: python site/scripts/assert_lighthouse.py site/.lighthouse/report.json
       - uses: actions/upload-artifact@v6
         with:
           name: pixora-site-${{ github.sha }}
