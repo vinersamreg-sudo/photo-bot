@@ -69,7 +69,7 @@ not used as the provider instruction source.
 
 Raw Russian user text is never appended to a provider prompt, including `custom`
 requests. The provider boundary rejects every non-ASCII prompt before an API call.
-This makes OpenAI/Flux/Imagen adapters consumers of one normalized English contract.
+Pixora v1 sends this normalized English contract only to the configured OpenAI `gpt-image-2` adapter.
 
 The technical prompt redacts credential-like values, local paths and long internal identifiers. Normal users never receive it. `python -m app.main ai-inspect --attempt-id ...` provides an administrative, identity-free inspection view.
 
@@ -102,6 +102,8 @@ pixels lack detail. Direct contradictions are resolved conservatively in favor o
 an explicit negation; the main flow has no clarification screen.
 
 ## Hybrid execution layer (v3)
+
+This section documents dormant experimental code. It is not enabled in Pixora v1 production and does not authorize a second provider or local composite path.
 
 `EditPlan` no longer implies that every request is a generative edit. `ModeRouter`
 converts it to a typed `ProcessingPlan` with one of five modes, asset/mask lineage

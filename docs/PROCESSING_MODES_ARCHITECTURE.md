@@ -48,7 +48,7 @@ GalleryVersion или расходовать demo quota. AI finishing после
 Безопасный production baseline:
 
 ```text
-PROCESSING_MODE_ROUTER_ENABLED=true
+PROCESSING_MODE_ROUTER_ENABLED=false
 REAL_BACKGROUND_COMPOSITE_ENABLED=false
 ALLOW_AI_BACKGROUND_FALLBACK=false
 SEGMENTATION_BACKEND=disabled
