@@ -39,6 +39,9 @@ def _referenced_private_files(database: Database) -> set[Path]:
                 for column in columns:
                     if row[column]:
                         paths.add(Path(row[column]).resolve())
+                if table == "demo_sessions" and row["source_file_path"]:
+                    session_root = Path(row["source_file_path"]).resolve().parent.parent
+                    paths.add((session_root / "metadata.json").resolve())
     return paths
 
 

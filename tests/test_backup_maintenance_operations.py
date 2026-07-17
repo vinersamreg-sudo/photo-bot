@@ -71,6 +71,8 @@ class BackupMaintenanceOperationsTests(TestCase):
             session = service.start_session("test", "pilot", source)
             old = datetime.now(timezone.utc).timestamp() - 7200
             os.utime(session.source_path, (old, old))
+            metadata = session.source_path.parent.parent / "metadata.json"
+            os.utime(metadata, (old, old))
             orphan = settings.users_dir / "orphan.bin"
             orphan.write_bytes(b"orphan")
             os.utime(orphan, (old, old))
@@ -89,6 +91,7 @@ class BackupMaintenanceOperationsTests(TestCase):
             self.assertFalse(orphan.exists())
             self.assertFalse(temporary.exists())
             self.assertTrue(session.source_path.exists())
+            self.assertTrue(metadata.exists())
 
     def test_launch_status_is_privacy_safe_and_covers_readiness_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
