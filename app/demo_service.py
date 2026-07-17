@@ -28,6 +28,7 @@ from app.domain import (
     PaymentRequiredError,
     PolicyRejectedError,
     SourceReplacementError,
+    StorageFailureError,
 )
 from app.edit_intent import EditPlan, merge_edit_plans, parse_edit_intent, repeat_edit_plan
 from app.image_provider import ImageProvider
@@ -515,6 +516,15 @@ class DemoService:
         except DeliveryError as exc:
             self._fail_attempt(attempt_id, "delivery_failed", "delivery_failed", str(exc), True)
             raise
+        except OSError as exc:
+            self._fail_attempt(
+                attempt_id,
+                "failed_technical",
+                "storage_failure",
+                "Private storage operation failed",
+                True,
+            )
+            raise StorageFailureError("Private storage operation failed") from exc
         except Exception as exc:
             self._fail_attempt(attempt_id, "failed_technical", type(exc).__name__, "Technical generation failure", True)
             raise

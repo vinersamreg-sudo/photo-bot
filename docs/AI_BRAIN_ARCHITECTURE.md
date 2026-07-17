@@ -1,5 +1,9 @@
 # AI Brain architecture
 
+> Pixora v1 production uses OpenAI `gpt-image-2` only. Provider-neutral
+> structures support deterministic interpretation and lineage; they do not
+> authorize a second provider or semantic parser before pilot evidence.
+
 ## Scope
 
 AI Brain is a deterministic interpretation layer between MAX/user input and the existing image provider. It is not an autonomous agent, does not call a second model, does not inspect a photo through an extra vision service and does not change quota, payment, storage, watermark, retention, owner-only or delivery rules.

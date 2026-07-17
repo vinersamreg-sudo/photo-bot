@@ -1,5 +1,17 @@
 # Changelog
 
+## 17.07.2026 — Closed-pilot launch hardening
+
+- `gpt-image-2` зафиксирован единственным production image provider v1; router выключен;
+- `/start`, upload, processing, result и Gallery сокращены; «Идеи» разбиты по категориям;
+- добавлены точные timeout/network/quota/policy/delivery/storage/size ошибки и restart recovery;
+- migration v6 добавляет privacy-minimal product telemetry без prompt/photo/MAX ID;
+- добавлены owner + 0/5/10/20 pilot allowlist stages;
+- реализованы encrypted SQLite backup, restore test, off-site artifact и retention;
+- добавлены dry-run/execute retention/temp/orphan cleanup и `launch-status`;
+- сайт приведён к фактическому пути и ограничениям качества/оплаты;
+- regression suite расширен до 153 pytest checks, 145 unittest checks и 26 subtests без реальных OpenAI image calls.
+
 ## 16.07.2026 — Direct photo flow and AI Brain 2.0
 
 - основной MAX flow сокращён до `/start → photo → text → result`;

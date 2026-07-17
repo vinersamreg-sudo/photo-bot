@@ -5,8 +5,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
 
+import httpx
 from PIL import Image
+from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError
 
+from app.domain import (
+    PolicyRejectedError,
+    ProviderQuotaError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
 from app.image_provider import OpenAIImageProvider
 
 
@@ -42,6 +50,14 @@ class RawImages(Images):
 
     def parse(self):
         return self.parsed
+
+
+class FailingImages:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def edit(self, **_kwargs):
+        raise self.error
 
 
 class OpenAIImageProviderTests(TestCase):
@@ -102,3 +118,35 @@ class OpenAIImageProviderTests(TestCase):
                 SimpleNamespace(images=images), "gpt-image-2"
             ).edit(source, "test")
             self.assertEqual(result.retries, 2)
+
+    def test_provider_errors_are_mapped_to_stable_product_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            Image.new("RGB", (32, 32), "white").save(source)
+            request = httpx.Request("POST", "https://api.openai.com/v1/images/edits")
+            response = httpx.Response(400, request=request)
+            cases = (
+                (APITimeoutError(request=request), ProviderTimeoutError),
+                (APIConnectionError(request=request), ProviderUnavailableError),
+                (
+                    RateLimitError(
+                        "quota", response=httpx.Response(429, request=request),
+                        body={"error": {"code": "insufficient_quota"}},
+                    ),
+                    ProviderQuotaError,
+                ),
+                (
+                    BadRequestError(
+                        "blocked", response=response,
+                        body={"error": {"code": "content_policy_violation"}},
+                    ),
+                    PolicyRejectedError,
+                ),
+            )
+            for error, expected in cases:
+                with self.subTest(expected=expected.__name__):
+                    provider = OpenAIImageProvider(
+                        SimpleNamespace(images=FailingImages(error)), "gpt-image-2"
+                    )
+                    with self.assertRaises(expected):
+                        provider.edit(source, "replace background")

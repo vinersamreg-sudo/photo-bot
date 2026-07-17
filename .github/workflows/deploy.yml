@@ -15,6 +15,12 @@ on:
         required: false
         type: boolean
         default: false
+      pilot_user_limit:
+        description: Number of explicitly allowlisted closed-pilot users
+        required: false
+        type: choice
+        options: ['0', '5', '10', '20']
+        default: '0'
 
 permissions:
   contents: read
@@ -31,6 +37,7 @@ jobs:
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
       MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
       MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
+      MAX_PILOT_CONFIGURED: ${{ secrets.MAX_PILOT_USER_IDS != '' }}
       MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
     steps:
       - uses: actions/checkout@v7
@@ -43,6 +50,29 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip check
+      - name: Validate closed-pilot rollout configuration
+        if: github.event_name == 'workflow_dispatch' && inputs.pilot_user_limit != '0'
+        env:
+          PILOT_USER_LIMIT: ${{ inputs.pilot_user_limit }}
+          MAX_PILOT_USER_IDS: ${{ secrets.MAX_PILOT_USER_IDS }}
+          MAX_OWNER_USER_ID: ${{ secrets.MAX_OWNER_USER_ID }}
+        run: |
+          python - <<'PY'
+          import os
+
+          limit = int(os.environ["PILOT_USER_LIMIT"])
+          pilots = tuple(dict.fromkeys(
+              value.strip()
+              for value in os.environ.get("MAX_PILOT_USER_IDS", "").split(",")
+              if value.strip()
+          ))
+          owner = os.environ.get("MAX_OWNER_USER_ID", "").strip()
+          if len(pilots) < limit:
+              raise SystemExit("Pilot allowlist is shorter than the requested rollout stage")
+          if owner and owner in pilots:
+              raise SystemExit("Pilot allowlist must not contain the owner")
+          print(f"pilot_rollout_validated={limit}")
+          PY
       - name: Scan tracked files for secrets
         run: |
           python scripts/scan_secrets.py
@@ -89,6 +119,35 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Require idle production before deployment
+        if: env.DEPLOY_CONFIGURED == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            if [ -f /opt/photo-bot/data/photo_bot.sqlite3 ] && [ -x /opt/photo-bot/venv/bin/python ]; then
+              /opt/photo-bot/venv/bin/python - <<'PY'
+          import sqlite3
+
+          connection = sqlite3.connect("/opt/photo-bot/data/photo_bot.sqlite3")
+          try:
+              active = connection.execute(
+                  """SELECT
+                         (SELECT COUNT(*) FROM generation_attempts
+                          WHERE status IN ('pending','processing')) +
+                         (SELECT COUNT(*) FROM max_dialogs WHERE state='processing')"""
+              ).fetchone()[0]
+          finally:
+              connection.close()
+          if active:
+              raise SystemExit("Deployment paused: active processing is present")
+          print("active_processing=0")
+          PY
+            fi
+          REMOTE
       - name: Synchronize application files
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -184,19 +243,39 @@ jobs:
             printf "%s\n" "MAX_OWNER_USER_IDS=" >> "$TMP"
             chmod 600 "$TMP"
             mv "$TMP" "$ROOT/.env"'
-      - name: Install and verify production
+      - name: Configure closed-pilot allowlist
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
+          MAX_PILOT_USER_IDS: ${{ secrets.MAX_PILOT_USER_IDS }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" <<'REMOTE'
+          printf '%s' "$MAX_PILOT_USER_IDS" | \
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
+            ROOT=/opt/photo-bot
+            PILOT_IDS=$(cat)
+            TMP="$ROOT/.env.tmp"
+            grep -v "^MAX_PILOT_USER_IDS=" "$ROOT/.env" > "$TMP" || true
+            printf "%s\n" "MAX_PILOT_USER_IDS=$PILOT_IDS" >> "$TMP"
+            chmod 600 "$TMP"
+            mv "$TMP" "$ROOT/.env"
+            unset PILOT_IDS'
+      - name: Install and verify production
+        if: env.DEPLOY_CONFIGURED == 'true'
+        env:
+          MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
+          PILOT_USER_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.pilot_user_limit || '0' }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" <<'REMOTE'
             set -euo pipefail
             ROOT=/opt/photo-bot
             DEPLOY_SHA="$1"
             MAX_OWNER_HANDLERS_ENABLED="${2:-false}"
+            PILOT_USER_LIMIT="${3:-0}"
             test "$(id -un)" = "photoapp"
             test "$(stat -c '%U:%G' "$ROOT")" = "photoapp:photoapp"
             mkdir -p "$ROOT/data" "$ROOT/logs" "$ROOT/temp"
@@ -205,9 +284,6 @@ jobs:
             else
               chmod 600 "$ROOT/.env"
             fi
-            grep -q '^OPENAI_IMAGE_MODEL=' "$ROOT/.env" || printf '%s\n' 'OPENAI_IMAGE_MODEL=gpt-image-2' >> "$ROOT/.env"
-            grep -q '^APP_ENV=' "$ROOT/.env" || printf '%s\n' 'APP_ENV=production' >> "$ROOT/.env"
-            grep -q '^BASE_DIR=' "$ROOT/.env" || printf '%s\n' 'BASE_DIR=/opt/photo-bot' >> "$ROOT/.env"
             ensure_env() { grep -q "^$1=" "$ROOT/.env" || printf '%s=%s\n' "$1" "$2" >> "$ROOT/.env"; }
             ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5
             ensure_env IMAGE_EDIT_QUALITY medium
@@ -236,6 +312,7 @@ jobs:
             ensure_env TRASH_RETENTION_DAYS 30
             ensure_env MAX_BOT_TOKEN ''
             ensure_env MAX_OWNER_USER_IDS ''
+            ensure_env MAX_PILOT_USER_IDS ''
             ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
             ensure_env MAX_CA_BUNDLE ops/certs/russian_trusted_root_ca_pem.crt
             set_env() {
@@ -247,6 +324,9 @@ jobs:
               chmod 600 "$TMP"
               mv "$TMP" "$ROOT/.env"
             }
+            set_env OPENAI_IMAGE_MODEL gpt-image-2
+            set_env APP_ENV production
+            set_env BASE_DIR /opt/photo-bot
             if grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
               set_env MAX_TRANSPORT_MODE polling
             else
@@ -261,8 +341,13 @@ jobs:
             set_env MAX_POLL_RETRY_SECONDS 5
             set_env MAX_POLL_IDLE_SECONDS 1
             set_env MAX_POLL_MAX_STALE_SECONDS 90
+            set_env PILOT_USER_LIMIT "$PILOT_USER_LIMIT"
+            if [ "$PILOT_USER_LIMIT" != 0 ] && ! grep -Eq '^MAX_PILOT_USER_IDS=.+$' "$ROOT/.env"; then
+              echo "Pilot limit requires MAX_PILOT_USER_IDS" >&2
+              exit 1
+            fi
             ensure_env MAX_MEDIA_HOST_SUFFIXES .max.ru,.oneme.ru,.okcdn.ru
-            set_env PROCESSING_MODE_ROUTER_ENABLED true
+            set_env PROCESSING_MODE_ROUTER_ENABLED false
             set_env REAL_BACKGROUND_COMPOSITE_ENABLED false
             set_env ALLOW_AI_BACKGROUND_FALLBACK false
             set_env BACKGROUND_ASSET_CATALOG assets/backgrounds/catalog.json
@@ -270,6 +355,12 @@ jobs:
             set_env SEGMENTATION_MODEL u2net_human_seg
             set_env SEGMENTATION_MODEL_DIR data/models/rembg
             set_env LOCAL_AI_FINISHING_ENABLED false
+            set_env BACKUP_DIR data/backups
+            set_env BACKUP_RETENTION_DAYS 14
+            set_env BACKUP_MAX_AGE_HOURS 30
+            set_env CLEANUP_TEMP_RETENTION_HOURS 24
+            set_env CLEANUP_ORPHAN_GRACE_HOURS 24
+            set_env DISK_MIN_FREE_MB 2048
             chmod +x "$ROOT"/scripts/*.sh
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
@@ -368,13 +459,13 @@ jobs:
           connection = sqlite3.connect(settings.database_path)
           try:
               quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
-              migration_v5 = bool(connection.execute(
-                  "SELECT 1 FROM schema_migrations WHERE version=5"
+              migration_v6 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=6"
               ).fetchone())
           finally:
               connection.close()
           assert quick_check == "ok"
-          assert migration_v5
+          assert migration_v6
           stale_processing_orphans = 0
           cutoff = time.time() - 3600
           for path in settings.temp_dir.iterdir():
@@ -416,9 +507,10 @@ jobs:
               "memory_total_mb": memory_total_mb,
               "stale_processing_orphans": stale_processing_orphans,
               "sqlite_quick_check": quick_check,
-              "migration_v5": migration_v5,
+              "migration_v6": migration_v6,
           }, sort_keys=True))
           PY
+            "$ROOT"/venv/bin/python -m app.main launch-status
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
             test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"

@@ -305,6 +305,25 @@ CREATE TABLE IF NOT EXISTS max_dialog_transitions (
 CREATE INDEX IF NOT EXISTS idx_max_transitions_user ON max_dialog_transitions(platform_user_id, id DESC);
 """
 
+TELEMETRY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS product_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    session_id TEXT REFERENCES demo_sessions(id) ON DELETE SET NULL,
+    attempt_id TEXT REFERENCES generation_attempts(id) ON DELETE SET NULL,
+    gallery_item_id TEXT REFERENCES gallery_items(id) ON DELETE SET NULL,
+    error_type TEXT,
+    duration_ms INTEGER,
+    estimated_cost REAL,
+    parser_fallback INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_product_events_type_time
+ON product_events(event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_product_events_session
+ON product_events(session_id, created_at DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -401,6 +420,7 @@ class Database:
                     ("personal_ai_studio_gallery", datetime.now(timezone.utc).isoformat()),
                 )
             connection.executescript(MAX_SCHEMA)
+            connection.executescript(TELEMETRY_SCHEMA)
             dialog_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(max_dialogs)")
             }
@@ -443,24 +463,53 @@ class Database:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
-            connection.execute(
-                """UPDATE max_dialogs SET state='confirmation',status_message_id=NULL,
-                   updated_at=datetime('now') WHERE state='processing'"""
-            )
-            connection.execute(
+            telemetry_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=6"
+            ).fetchone()
+            if telemetry_migration is None:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(6,?,?)",
+                    (
+                        "privacy_safe_product_events",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def recover_interrupted_runtime(self) -> dict[str, int]:
+        """Recover crash state only from the primary runtime after it owns the lock."""
+
+        with self.transaction() as connection:
+            completed_events = connection.execute(
+                """UPDATE max_processed_events SET status='completed',updated_at=datetime('now')
+                   WHERE status='processing' AND event_key IN (
+                       SELECT transition.event_key
+                       FROM max_dialog_transitions AS transition
+                       JOIN max_dialogs AS dialog
+                         ON dialog.platform_user_id=transition.platform_user_id
+                       WHERE dialog.state='processing'
+                         AND transition.to_state='processing'
+                         AND transition.event_key IS NOT NULL
+                   )"""
+            ).rowcount
+            retryable_events = connection.execute(
                 """UPDATE max_processed_events SET status='failed',updated_at=datetime('now')
                    WHERE status='processing'"""
-            )
-            connection.execute(
+            ).rowcount
+            interrupted_attempts = connection.execute(
                 """UPDATE generation_attempts
                    SET status='failed_technical', completed_at=datetime('now'),
                        error_type='process_restarted',
                        error_message_safe='Generation interrupted by process restart',
                        technical_refund=1
                    WHERE status IN ('pending', 'processing')"""
-            )
-        finally:
-            connection.close()
+            ).rowcount
+        return {
+            "completed_events": completed_events,
+            "retryable_events": retryable_events,
+            "interrupted_attempts": interrupted_attempts,
+        }
 
     @staticmethod
     def _backfill_gallery(connection: sqlite3.Connection) -> None:

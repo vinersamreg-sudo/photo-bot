@@ -40,7 +40,7 @@ class MaxAdapterTests(TestCase):
         menu = main_menu()
         self.assertEqual(
             [button.text for button in menu.buttons],
-            ["Подробнее"],
+            ["✨ Идеи", "📂 Мои работы", "ℹ️ Подробнее"],
         )
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
         self.assertGreaterEqual(len(scenario_catalog().buttons), 12)
@@ -53,15 +53,16 @@ class MaxAdapterTests(TestCase):
             [button.text for button in studio_menu_contract().buttons],
             ["📂 Мои работы", "⭐ Избранное", "Последние", "Коллекции", "🗑 Корзина"],
         )
-        self.assertIn("Просто отправьте фотографию", WELCOME_TEXT)
-        self.assertIn("соглашаетесь с обработкой фотографии", WELCOME_TEXT)
-        self.assertEqual(result_actions(4).text, "Это демо с водяным знаком.")
+        self.assertIn("Отправьте фотографию и напишите", WELCOME_TEXT)
+        self.assertIn("соглашаетесь с условиями сервиса", WELCOME_TEXT)
+        self.assertEqual(result_actions(4).text, "Демо с водяным знаком.")
         self.assertNotIn("4", result_actions(4).text)
+        self.assertIn("Остался один бесплатный вариант", result_actions(1).text)
         self.assertIn("Бесплатные варианты закончились", result_actions(0).text)
         self.assertEqual(result_actions(4).buttons[0].text, "⬇ Получить оригинал")
-        self.assertEqual(len(gallery_item_actions()), 10)
-        self.assertIn("👍 Получилось", [button.text for button in gallery_item_actions()])
-        self.assertIn("👎 Не то", [button.text for button in gallery_item_actions()])
+        self.assertEqual(len(gallery_item_actions()), 9)
+        self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])
+        self.assertNotIn("👎 Не то", [button.text for button in gallery_item_actions()])
         self.assertEqual(len(version_history_actions()), 4)
 
     def test_user_screens_are_short_and_hide_internal_vocabulary(self) -> None:

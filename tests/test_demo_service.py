@@ -329,7 +329,7 @@ class DemoServiceTests(TestCase):
                     self.clock().isoformat(),
                 ),
             )
-        Database(self.settings.database_path)
+        Database(self.settings.database_path).recover_interrupted_runtime()
         with service.database.read() as connection:
             attempt = connection.execute(
                 "SELECT status,technical_refund FROM generation_attempts WHERE id='interrupted'"

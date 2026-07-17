@@ -32,6 +32,9 @@ from app.gallery import GalleryService
 from app.storage import PrivateStorage
 from app.edit_intent import EditPlan
 from app.prompt_builder import safe_prompt_inspection
+from app.backup import BackupError, BackupManager
+from app.maintenance import run_maintenance
+from app.operations import print_launch_status
 
 
 LOGGER = logging.getLogger(__name__)
@@ -347,7 +350,76 @@ def run_gallery_cleanup(settings: Settings, execute: bool) -> int:
         settings,
     )
     due = service.purge_due(execute=execute)
-    print(json.dumps({"mode": "execute" if execute else "dry-run", "count": len(due), "gallery_item_ids": due}))
+    print(json.dumps({"mode": "execute" if execute else "dry-run", "count": len(due)}))
+    return 0
+
+
+def _backup_manager(settings: Settings) -> BackupManager:
+    return BackupManager(
+        settings.database_path,
+        settings.backup_dir_path,
+        settings.backup_retention_days,
+    )
+
+
+def _passphrase_from_stdin(enabled: bool) -> str:
+    if not enabled:
+        raise BackupError("Passphrase input must use --passphrase-stdin")
+    return sys.stdin.readline().rstrip("\r\n")
+
+
+def run_backup_create(settings: Settings, passphrase_stdin: bool) -> int:
+    try:
+        report = _backup_manager(settings).create(
+            _passphrase_from_stdin(passphrase_stdin)
+        )
+    except BackupError as exc:
+        LOGGER.error("Backup creation failed: %s", exc)
+        return 1
+    except (OSError, sqlite3.Error) as exc:
+        LOGGER.error("Backup creation failed safely (error_type=%s)", type(exc).__name__)
+        return 1
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def run_backup_restore_test(
+    settings: Settings, backup: str, passphrase_stdin: bool
+) -> int:
+    try:
+        report = _backup_manager(settings).restore_test(
+            Path(backup), _passphrase_from_stdin(passphrase_stdin)
+        )
+    except BackupError as exc:
+        LOGGER.error("Backup restore test failed: %s", exc)
+        return 1
+    except (OSError, sqlite3.Error) as exc:
+        LOGGER.error("Backup restore test failed safely (error_type=%s)", type(exc).__name__)
+        return 1
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def run_backup_mark_offsite(settings: Settings, backup: str, provider: str) -> int:
+    try:
+        report = _backup_manager(settings).mark_offsite(backup, provider)
+    except BackupError as exc:
+        LOGGER.error("Off-site backup mark failed: %s", exc)
+        return 1
+    except OSError as exc:
+        LOGGER.error("Off-site backup mark failed safely (error_type=%s)", type(exc).__name__)
+        return 1
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def run_maintenance_command(settings: Settings, execute: bool) -> int:
+    try:
+        report = run_maintenance(settings, execute=execute)
+    except (OSError, sqlite3.Error) as exc:
+        LOGGER.error("Maintenance failed safely (error_type=%s)", type(exc).__name__)
+        return 1
+    print(json.dumps(report, sort_keys=True))
     return 0
 
 
@@ -393,6 +465,18 @@ def build_parser() -> argparse.ArgumentParser:
         subparsers.add_parser(command)
     cleanup = subparsers.add_parser("gallery-cleanup")
     cleanup.add_argument("--execute", action="store_true")
+    maintenance = subparsers.add_parser("maintenance-cleanup")
+    maintenance.add_argument("--execute", action="store_true")
+    backup_create = subparsers.add_parser("backup-create")
+    backup_create.add_argument("--passphrase-stdin", action="store_true")
+    backup_restore = subparsers.add_parser("backup-restore-test")
+    backup_restore.add_argument("--backup", required=True)
+    backup_restore.add_argument("--passphrase-stdin", action="store_true")
+    backup_offsite = subparsers.add_parser("backup-mark-offsite")
+    backup_offsite.add_argument("--backup", required=True)
+    backup_offsite.add_argument("--provider", required=True)
+    launch_status = subparsers.add_parser("launch-status")
+    launch_status.add_argument("--strict", action="store_true")
     demo = subparsers.add_parser("demo-edit")
     demo.add_argument("--user-id", required=True)
     demo.add_argument("--image", required=True)
@@ -421,6 +505,16 @@ def main(argv: list[str] | None = None) -> int:
         return run_demo_stats(settings)
     if args.command == "gallery-cleanup":
         return run_gallery_cleanup(settings, args.execute)
+    if args.command == "maintenance-cleanup":
+        return run_maintenance_command(settings, args.execute)
+    if args.command == "backup-create":
+        return run_backup_create(settings, args.passphrase_stdin)
+    if args.command == "backup-restore-test":
+        return run_backup_restore_test(settings, args.backup, args.passphrase_stdin)
+    if args.command == "backup-mark-offsite":
+        return run_backup_mark_offsite(settings, args.backup, args.provider)
+    if args.command == "launch-status":
+        return print_launch_status(settings, strict=args.strict)
     if args.command == "ai-inspect":
         return run_ai_inspect(settings, args.attempt_id)
     return run_process(settings)

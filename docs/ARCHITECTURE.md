@@ -1,88 +1,33 @@
 # Architecture
 
-## AI Brain boundary
+## Runtime
 
-`MAX text → EditPlan v2 parser → structured scene merge → English technical prompt builder → ImageProvider`.
+One Python 3.12 process under `photo-bot.service` runs MAX long polling. SQLite is the durable store; private files live under `data/users`; `temp` contains only disposable intermediates. A file lock prevents a second polling consumer. Restart recovery runs only in that primary process after it owns the lock; health, backup and reporting database clients are read-only with respect to runtime state. Recovery marks unfinished generation attempts technical/refunded and best-effort closes any stale MAX status message without blocking startup.
 
-Initial/scenario работает от immutable source; Correction — от private original выбранной успешной версии; Repeat — от того же input branch с тем же effective intent. `parent_version_id` и `source_version_id` имеют разные смыслы и сохраняются отдельно. Полное описание: [AI_BRAIN_ARCHITECTURE.md](AI_BRAIN_ARCHITECTURE.md). Правила prompt: [PROMPT_ENGINEERING_RULES.md](PROMPT_ENGINEERING_RULES.md).
+An event already linked to a processing attempt is completed rather than replayed, so a crash cannot silently duplicate a paid provider request. An event interrupted before processing remains retryable. Deployment refuses to stop the service while an active generation or processing dialog exists.
 
-## Owner-only transport topology
+`MAX_POLL_OBSERVE_ONLY=true` builds no handlers or image service. When handlers are enabled, access is checked before dialog creation: owner plus the active 0/5/10/20 prefix of `MAX_PILOT_USER_IDS`. Other users receive the closed-test response without files or OpenAI calls.
 
-`MAX Long Polling → MaxApiClient → owner gate → MaxApplication → Demo/Gallery`.
+## User request path
 
-В `MAX_POLL_OBSERVE_ONLY=true` runtime намеренно не строит `MaxApplication` и OpenAI image service. При включённых handlers обязательный `MAX_OWNER_USER_IDS` проверяется до создания диалога: owner проходит приложение, остальные получают только закрытый ответ. Systemd supervises единственный процесс под `photoapp`; advisory lock является второй независимой защитой от двух consumers. Operational health проверяет unit state/MainPID/command, SQLite quick-check, свежесть `poll_last_success` и занятый lock. Это временная инфраструктурная топология; публичная целевая схема остаётся `MAX Webhook HTTPS:443 → быстрый durable accept → queue/worker`.
+`MAX event → deduplication → dialog state → validated private source → deterministic EditPlan → English prompt → OpenAI gpt-image-2 images.edit → private original → watermark preview → MAX delivery → quota commit → GalleryVersion`.
 
-## Pixora website boundary
+Delivery precedes success/quota commit. Timeout/network/quota/policy/storage/delivery errors use separate domain types. Technical failures set `technical_refund=1`. The MAX processing status is edited to success or a precise safe error; no HTTP status, request ID or provider name is shown.
 
-Статический сайт Pixora изолирован в `site/public`. Он не импортирует Python backend, не имеет server-side runtime и разворачивается отдельным opt-in workflow в `/opt/pixora-site`; Nginx root не пересекается с `/opt/photo-bot`. Structural/HTTP/Lighthouse проверки сайта находятся в `site/tests`, `site/scripts` и `.github/workflows/site.yml`.
+Correction reads the selected parent version's private original and creates a child. Repeat reuses the same effective plan and parent branch. The immutable initial source remains attached to one demo session. Experimental processing router/composite/segmentation code is dormant in v1 (`PROCESSING_MODE_ROUTER_ENABLED=false`); OpenAI `gpt-image-2` is the only production image provider.
 
-## Текущая схема
+## Data
 
-`GitHub main → GitHub Actions → SSH/rsync → /opt/photo-bot → Python 3.12 venv → OpenAI API`.
+Migration v6 adds `product_events`. It stores event category, internal session/attempt/gallery references, error type, duration, estimate and parser fallback. It deliberately has no prompt, image, platform ID or biometric columns.
 
-CI запускает unit-тесты, healthcheck, `pip check` и secret scan. Deploy выполняется непривилегированным `photoapp`, синхронизирует только код и сохраняет `.env`, `venv/`, `data/`, `logs/`, `temp/`. После проверки SHA фиксируется в `data/deployed_commit.txt`.
+Gallery retention covers demo, paid and trash. `maintenance-cleanup` first reports due gallery items, stale temp and unreferenced private files; `--execute` deletes only scoped, non-symlink candidates after their grace period.
 
-## Компоненты
+## Backup and operations
 
-- configuration: environment variables и `.env` через `app/config.py`;
-- OpenAI boundary: создание клиента, классификация безопасных ошибок и проверка модели в `app/openai_client.py`;
-- runtime CLI: health, OpenAI/MAX checks, `demo-edit`, `demo-stats` и MAX runtime selection в `app/main.py`;
-- demo policy: quota, TTL, idempotency, concurrency, daily budgets и unlock guards в `app/demo_service.py`;
-- persistence: SQLite schema/transactions/recovery в `app/database.py`;
-- image boundary: OpenAI/fake providers в `app/image_provider.py`;
-- private storage: `source/`, `originals/`, `previews/`, `metadata.json` в `app/storage.py`;
-- preview protection: масштабируемый watermark в `app/watermark.py`;
-- MAX HTTPS boundary: официальный API client/Update parser/media и polling lock в `app/max_transport.py`;
-- MAX application: durable dialog orchestration в `app/max_application.py`, state/legal/idempotency в `app/max_conversation.py`, runtime composition в `app/max_runtime.py`;
-- filesystem state: локальные каталоги `data`, `logs`, `temp`;
-- operations: скрипты в `scripts/` и GitHub Actions.
+SQLite online backup API creates a consistent snapshot. OpenSSL encrypts it using AES-256-CBC + PBKDF2/200k iterations. The backup is decrypted into a temporary DB and passes `PRAGMA quick_check`; the encrypted file is copied to a GitHub Actions artifact with 14-day retention. Cleanup follows only after off-site confirmation.
 
-## Demo workflow
+`launch-status` checks systemd, fresh polling, MAX connectivity, OpenAI auth/model, SQLite/migration, disk, backup age/restore/off-site, cleanup/orphans, active processing and daily duration/errors/delivery/cost. Output contains counts and booleans, not user IDs, secrets, prompts or paths.
 
-`/start upload view → source signature/size validation + persistence → implicit consent record → user text → structured EditPlan → quota/budget/concurrency guard → idempotent attempt → ImageProvider → private original → reduced watermark preview → delivery → single transactional quota increment`.
+## Deferred topology
 
-The main MAX flow has no scenario menu and no prompt-confirmation message. Ready
-scenarios are an optional catalog. Existing legal tables and versioned documents are
-preserved; upload-based consent is recorded only after a valid source exists.
-
-При network/provider/timeout/storage/policy/delivery failure попытка получает отдельный статус, но `successful_generations` не меняется. После перезапуска незавершённые `pending/processing` переводятся в `failed_technical`.
-
-Файлы располагаются в `data/users/<opaque-user-id>/demo_sessions/<session-id>/{source,originals,previews}`. Platform ID, username или телефон не используются в путях. Original не входит в `DemoGenerationResult` и может быть получен только через paid payment intent.
-
-Границы модулей: transport adapter, use-case/service, OpenAI image gateway, repository для операций/баланса, storage policy, observability. Внешние интеграции должны быть заменяемыми и покрываться тестами через fake-клиенты.
-
-## Cost telemetry
-
-Для каждой попытки сохраняются provider/model, requested size/quality/format, duration, status, request id, provider usage metadata, input/output bytes, retries, correction и technical-refund flags. Если provider не возвращает достаточных данных для точной стоимости, `estimated_cost` равен конфигурируемому budget reserve:
-
-`estimated demo spend = successful attempts × DEMO_ESTIMATED_COST_RUB_PER_GENERATION`.
-
-Это консервативный operational guard, а не бухгалтерская стоимость. После получения provider usage формула должна учитывать text input, high-fidelity image input и image output, а затем проверяться по фактическому счёту.
-
-## Безопасность и эксплуатация
-
-Секреты поступают только из окружения; логи редактируют известные значения ключей; пользовательский ввод и файлы имеют ограничения; операции получают UUID без персональных данных. Private directories/files закрыты от других POSIX-пользователей. Сервис не запускается от root. Systemd появится при реализации реального обработчика.
-
-## Ограничения масштаба
-
-2 GB RAM требуют ограничить размер изображений и число одновременных задач. Redis/Celery, отдельное хранилище и дополнительные узлы вводятся только после измерения очереди, памяти и времени обработки.
-
-## Personal studio domain
-
-`platform user → одна Gallery → gallery_item (source) → gallery_version (preview + version-specific original)`.
-
-`app/gallery.py` отвечает за работы, версии, favorites, current best, collections, tags, preferences, recent, trash и retention. Успешная demo-попытка и её версия Gallery фиксируются в одной транзакции. Repeat использует effective prompt родителя; correction добавляет замечание и сохраняет parent link. Внешний DTO проверяет владельца и скрывает `original_path`, пока конкретная версия не разблокирована.
-
-Migration v2 добавляет `galleries`, `gallery_items`, `gallery_versions`, `collections`, `tags`, `gallery_item_tags`, `user_preferences` и `schema_migrations`. Backfill существующих demo-данных не перемещает файлы. Новые независимые работы используют `data/users/<opaque-user-id>/gallery/<item-id>/{source,versions,metadata}`, а legacy demo layout остаётся читаемым.
-
-Удаление имеет две стадии: soft delete задаёт `deleted_at`/`purge_after`; отдельный `gallery-cleanup` сначала показывает кандидатов, а с `--execute` удаляет приватное дерево и связанные строки. Поиск намеренно использует индексированные фильтры SQLite и `LIKE`; FTS и object storage отложены до измеримого объёма.
-
-## MAX transport
-
-`MAX Update → parse_update → processed-event guard → MaxApplication → MaxDemoAdapter → DemoService/GalleryService → MaxApiClient response`.
-
-Transport не содержит quota, watermark, generation, payment или retention rules. `message.body.mid` дедуплицирует message, `callback.callback_id` — callback. Dialog state и Long Polling marker находятся в SQLite. Callback payload содержит только короткое действие и при необходимости opaque GalleryItem id.
-
-API base URL — `platform-api2.max.ru`, token передаётся заголовком Authorization. Входной image скачивается по проверенному HTTPS media URL во временный файл, валидируется Pillow/domain storage и удаляется из temp. Preview получает upload token через `/uploads?type=image` и отправляется `/messages`; original не передаётся transport-слою для отправки.
-
-Long Polling имеет advisory file lock и предназначен только для закрытой проверки. Целевая production topology: MAX Webhook → TLS termination на 443 → быстрый authenticated accept → durable SQLite event → application worker. Endpoint ещё не реализован, поскольку отсутствуют домен/TLS/secret и публичный порт; синхронно держать Webhook во время OpenAI edit нельзя из-за требования ответа MAX в пределах 30 секунд.
+Webhook/queue/workers/object storage and horizontal scale are deferred. They become relevant only after pilot metrics show that one polling process + SQLite is insufficient. The static site is a separate artifact under `site/` and is not published automatically with backend deploy.

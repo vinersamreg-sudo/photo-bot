@@ -46,15 +46,15 @@ class DeployPolicyTests(TestCase):
         self.assertIn("python scripts/scan_secrets.py", self.workflow)
         self.assertIn("python scripts/check_asset_licenses.py", self.workflow)
 
-    def test_hybrid_processing_deploy_is_fail_closed_and_audited(self) -> None:
-        self.assertIn("set_env PROCESSING_MODE_ROUTER_ENABLED true", self.workflow)
+    def test_v1_provider_path_is_single_and_experiments_are_fail_closed(self) -> None:
+        self.assertIn("set_env PROCESSING_MODE_ROUTER_ENABLED false", self.workflow)
         self.assertIn("set_env REAL_BACKGROUND_COMPOSITE_ENABLED false", self.workflow)
         self.assertIn("set_env ALLOW_AI_BACKGROUND_FALLBACK false", self.workflow)
         self.assertIn("set_env SEGMENTATION_BACKEND disabled", self.workflow)
         self.assertIn("set_env LOCAL_AI_FINISHING_ENABLED false", self.workflow)
         self.assertIn("scripts/benchmark_processing.py", self.workflow)
-        self.assertIn("WHERE version=5", self.workflow)
-        self.assertIn('"migration_v5": migration_v5', self.workflow)
+        self.assertIn("WHERE version=6", self.workflow)
+        self.assertIn('"migration_v6": migration_v6', self.workflow)
         self.assertIn('"stale_processing_orphans": stale_processing_orphans', self.workflow)
         self.assertIn("assert stale_processing_orphans == 0", self.workflow)
 
@@ -88,8 +88,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn('if [ ! -f "$ROOT/.env" ]', self.workflow)
         self.assertIn('install -m 600 /dev/null "$ROOT/.env"', self.workflow)
         self.assertNotIn("'OPENAI_API_KEY=", self.workflow)
-        self.assertIn("OPENAI_IMAGE_MODEL=gpt-image-2", self.workflow)
-        self.assertIn("APP_ENV=production", self.workflow)
+        self.assertIn("set_env OPENAI_IMAGE_MODEL gpt-image-2", self.workflow)
+        self.assertIn("set_env APP_ENV production", self.workflow)
+        self.assertIn("set_env BASE_DIR /opt/photo-bot", self.workflow)
         self.assertIn("ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5", self.workflow)
         self.assertIn("ensure_env GLOBAL_MAX_CONCURRENT_GENERATIONS 2", self.workflow)
         self.assertIn("ensure_env DEMO_RETENTION_DAYS 30", self.workflow)
@@ -125,7 +126,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("enable_owner_handlers:", self.workflow)
         self.assertIn('MAX_OWNER_HANDLERS_ENABLED', self.workflow)
         self.assertIn('[ "$MAX_OWNER_HANDLERS_ENABLED" = true ]', self.workflow)
-        self.assertIn('"$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED"', self.workflow)
+        self.assertIn('"$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT"', self.workflow)
         self.assertIn('MAX_OWNER_HANDLERS_ENABLED="${2:-false}"', self.workflow)
         self.assertNotIn(
             "MAX_OWNER_HANDLERS_ENABLED: ${{ env.MAX_OWNER_HANDLERS_ENABLED }}",
@@ -155,6 +156,13 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("nohup", self.workflow)
         self.assertNotIn("crontab", self.workflow)
         self.assertNotIn("pkill", self.workflow)
+
+    def test_deploy_refuses_to_interrupt_active_processing(self) -> None:
+        self.assertIn("Require idle production before deployment", self.workflow)
+        self.assertIn("Deployment paused: active processing is present", self.workflow)
+        idle_check = self.workflow.index("Require idle production before deployment")
+        stop = self.workflow.index("systemctl stop photo-bot.service")
+        self.assertLess(idle_check, stop)
 
     def test_systemd_template_uses_least_privilege_and_restart_safety(self) -> None:
         service = SERVICE.read_text(encoding="utf-8")

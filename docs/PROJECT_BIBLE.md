@@ -1,70 +1,44 @@
-# Project Bible
+# Pixora Project Bible
 
-> Дополнение 16.07.2026: Pixora использует typed hybrid-processing architecture.
-> Real backgrounds должны идти через licensed local composite, enhancement — через
-> local Pillow, а generative provider применяется только к подходящим modes.
-> Composite/segmentation/AI finishing остаются выключенными до checklist из
-> `REAL_BACKGROUND_PIPELINE.md`. Новые `PROCESSING_MODES_*`,
-> `SEGMENTATION_EVALUATION.md` и `BACKGROUND_ASSET_POLICY.md` являются частью wiki.
+Актуально с 17.07.2026. Этот документ имеет приоритет над историческими ADR и описаниями hybrid-processing.
 
-Публичный бренд продукта утверждён: **Pixora**. Техническое имя репозитория и backend остаётся `photo-bot`; продуктовая стратегия продажи понравившегося результата не меняется.
+## Продукт
 
-Актуально на 15 июля 2026 года. Это главный источник истины проекта; при конфликте других документов сначала обновляется решение здесь.
+Pixora — AI-редактор фотографий в MAX. `photo-bot` — только техническое имя репозитория и systemd unit. Продукт продаёт понравившийся результат, а не модель, токены или подписку.
 
-## Идентичность и цель
+Основной v1-путь: `/start → фотография → текст → обработка → демо с watermark → исправить / другой вариант / Мои работы`. До первой обработки нет меню сценариев и нет подтверждения запроса. «Идеи» — необязательный вторичный каталог.
 
-`photo-bot` — техническое имя личной AI-фотостудии пользователя. Публичный бренд — Pixora. Продукт продаёт не модель, генерации или кредиты, а конкретную понравившуюся фотографию без watermark, её историю версий и простой возврат к прежним работам.
+## Зафиксированный v1 scope
 
-Основное обещание: «Сначала посмотрите реальный результат. Платите только если он вам понравился». После первой покупки пользователь должен понимать: «Все мои фотографии теперь живут здесь».
+- один production image provider: OpenAI `gpt-image-2` через `/v1/images/edits`;
+- quality `medium`, output `1024x1024` PNG, timeout 300 секунд, до двух SDK retries;
+- структурированный SceneIntent/EditPlan и English technical prompt;
+- correction от выбранной успешной версии, repeat в той же ветке;
+- preview с watermark, Gallery/versions/favorite/delete, placeholder оригинала;
+- SQLite, private filesystem, один systemd process, MAX polling;
+- owner allowlist и закрытые этапы 5/10/20 пользователей;
+- privacy-minimal telemetry, backup/restore, cleanup и `launch-status`.
 
-Demo MVP закрепляет одну исходную фотографию за одним пользователем MAX, создаёт до пяти успешно доставленных уменьшенных результатов с крупным watermark «ОБРАЗЕЦ» и хранит оригиналы приватно. Пользователь платит за разблокировку конкретного уже увиденного результата. Реальный MAX transport авторизован; application handlers защищены обязательным owner allowlist, а без owner secret production остаётся в observe-only. Live `/start`/upload/generation E2E ещё должен быть подтверждён, эквайринг не подключён.
+Экспериментальные hybrid/real-background/segmentation модули остаются в коде, но `PROCESSING_MODE_ROUTER_ENABLED=false`; они не являются production-путём v1. Semantic parser, второй provider, платный фотобанк, очередь, Redis, mini app и публичный запуск отложены до данных пилота.
 
-Каждый пользователь имеет одну Gallery. Одна работа (`gallery_item`) содержит source и историю `gallery_versions`; original всегда принадлежит конкретной версии. Повтор и correction создают новую версию той же работы. Коллекции, tags, favorites, current best, preferences, recent и trash являются частью доменной модели, но реальные MAX-экраны пока не реализованы.
+## Безопасность и данные
 
-## Источники истины
+Секреты хранятся только в GitHub Environment и `/opt/photo-bot/.env` с mode `600`; их нельзя выводить, коммитить или передавать в аргументах. Original не отправляется до подтверждённой оплаты. Технические, provider, storage и delivery ошибки квоту не списывают.
 
-- код: GitHub `vinersamreg-sudo/photo-bot`, ветка `main`;
-- рабочая копия: `C:\Users\viner\Documents\Codex\photo-bot`;
-- production-код: `/opt/photo-bot`, только результат CI/CD;
-- состояние реализации: `docs/CURRENT_STATE.md`;
-- принятые решения: `docs/DECISIONS.md`;
-- последовательность развития: `docs/ROADMAP.md`.
+Телеметрия хранит тип события, технические связи, duration/cost/error/fallback. Она не хранит отдельную копию prompt, изображения, MAX ID или биометрию.
 
-## Production
+SQLite ежедневно копируется online-backup API, шифруется AES-256-CBC/PBKDF2, проходит реальное восстановление и копируется в GitHub Actions artifact. Cleanup запускается только после подтверждения off-site copy. Retention: backup 14 дней, demo 30, paid 180, trash 30.
 
-- Hetzner Cloud VPS `ai-prod-01`, Nuremberg, Germany;
-- Ubuntu 24.04 LTS, x86_64, 1 vCPU, 2 GB RAM, 40 GB disk;
-- публичный вход только SSH `22/tcp`;
-- администратор `vineradmin`, вход по персональному ключу, `sudo`;
-- приложение/деплой `photoapp`, отдельный ключ, без `sudo`;
-- корень `/opt/photo-bot`, владелец `photoapp:photoapp`;
-- venv `/opt/photo-bot/venv`, Python 3.12;
-- UFW: deny incoming, allow outgoing, SSH only;
-- fail2ban: jail `sshd`;
-- SSH: password и keyboard-interactive отключены, root только по ключу;
-- отдельный Hetzner Cloud Firewall пока не настроен; применён один ясный host-level слой UFW.
+## Доступ и запуск
 
-## Секреты
+Production: Hetzner Ubuntu, `/opt/photo-bot`, user `photoapp`, `photo-bot.service`. Обычный deploy всегда оставляет `MAX_POLL_OBSERVE_ONLY=true`. Handlers включаются только ручным workflow и только при owner secret. Pilot users берутся из секретного ordered allowlist, активный prefix — строго 0/5/10/20.
 
-Production Environment GitHub использует `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`, `OPENAI_API_KEY` и `MAX_BOT_TOKEN`. Для Webhook потребуется отдельный `MAX_WEBHOOK_SECRET`. Значения секретов не документируются и доставляются в production безопасным deploy-контуром.
+Публичная готовность запрещено заявлять до реального owner E2E, успешного backup/restore/off-site run, cleanup, monitoring и юридической проверки. После owner E2E observe-only возвращается, если владелец явно не разрешил иное.
 
-Приватные ключи и `.env` запрещено выводить, коммитить, пересылать в аргументах команд или сохранять в документации. Деплой передаёт OpenAI-ключ через stdin и записывает `.env` с правами `600`.
+## Ограничения качества
 
-## Обязательные границы
+`gpt-image-2` недетерминирован: лицо и незапрошенные детали могут измениться, локальная правка может затронуть фон, последовательные edits могут накапливать drift. Pixora не обещает pixel-perfect Photoshop. Решение о втором provider принимается только после достаточной статистики реальных пользователей.
 
-- TripDay полностью вне области проекта; любые его файлы, процессы, настройки и deploy запрещено затрагивать.
-- Никаких proxy, VPN или обходов региональных ограничений.
-- Не вводить Docker, Redis, Celery, Kubernetes и микросервисы без подтверждённой необходимости.
-- Не создавать постоянно работающий сервис для idle-каркаса. `run` в disabled mode завершается; systemd-шаблон устанавливается только после выбора работающего transport mode.
-- Long Polling MAX допустим только для разработки и закрытого smoke. Production mode — Webhook по HTTPS:443 с проверкой secret.
-- Использовать утверждённый публичный бренд Pixora; не придумывать параллельные названия.
-- Не обещать функциональность, которой нет в `CURRENT_STATE.md`.
-- Не отправлять original до подтверждённого paid status и не считать техническую ошибку успешной итерацией.
-- Бесплатные расходы всегда ограничиваются пользовательской квотой, concurrency и глобальным дневным бюджетом.
-- Gallery API не раскрывает original заблокированной версии.
-- Preferences помогают навигации и персонализации интерфейса, но не используются для скрытого обучения моделей.
-- Soft delete предшествует физической очистке; retention и purge управляются конфигурацией и проверяемой задачей.
+## Definition of done
 
-## Критерий production-ready для каждого изменения
-
-Тесты, secret scan, `pip check` и healthcheck зелёные; deploy ограничен `/opt/photo-bot`; runtime-файлы сохранены; SHA записан в `data/deployed_commit.txt`; при наличии ключа OpenAI проверка авторизации и модели успешна; документация отражает реальность.
+Tests/secret scan/pip check/health зелёные; backup реально восстановлен; orphan cleanup проверен; `launch-status` не раскрывает секреты; commit, Actions run и production SHA совпадают; реальные image requests заранее согласованы и посчитаны; документация разделяет «реализовано» и «подтверждено live».

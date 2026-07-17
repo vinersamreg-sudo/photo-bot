@@ -1,37 +1,30 @@
 # Delivery Process
 
-## Текущий owner-only MAX deploy
+## Backend deploy
 
-Если Environment secret `MAX_BOT_TOKEN` существует, workflow передаёт его по stdin в `/opt/photo-bot/.env` и выставляет `MAX_TRANSPORT_MODE=polling`. Handlers включаются (`MAX_POLL_OBSERVE_ONLY=false`) только для ручного запуска с `enable_owner_handlers=true` и при наличии отдельного `MAX_OWNER_USER_ID`; обычный push и ручной deploy без флага всегда возвращают observe-only. Owner ID передаётся по stdin и записывается как `MAX_OWNER_USER_IDS`. Без owner secret deploy очищает allowlist. Затем workflow выполняет `max-check`, устанавливает `/etc/systemd/system/photo-bot.service`, включает autostart и ожидает полноценный readiness. Значения secrets не попадают в shell arguments или отчёт.
+Push to `main` runs Python 3.12 dependency checks, secret/license scans, all unit tests and health. GitHub Environment `production` supplies Hetzner, OpenAI and MAX secrets. rsync is scoped to `/opt/photo-bot` and preserves `.env`, `venv`, `data`, `logs`, `temp` and the separate `site` deployment.
 
-MAX требует доверия цепочке Минцифры для `platform-api2.max.ru`. Репозиторий хранит публичный root из официального `https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt`; приложение указывает его только MAX API client через `MAX_CA_BUNDLE`. Системный trust store не расширяется, TLS verification не отключается, сертификат защищён тестом DER SHA-256.
+Production env is converged to `OPENAI_IMAGE_MODEL=gpt-image-2`, quality medium, router/composite/segmentation disabled, polling enabled only with a MAX token. Push deploy sets `PILOT_USER_LIMIT=0` and `MAX_POLL_OBSERVE_ONLY=true`. A manual workflow may enable owner handlers and choose 0/5/10/20 pilot users; a positive limit fails before deployment when the secret list is shorter than the requested stage or contains the owner.
 
-Если MAX secret отсутствует, deploy кода разрешён, но mode принудительно остаётся `disabled`, unit останавливается и readiness MAX не заявляется. Прямой background-start и cron watchdog не используются. Изменение systemd ограничено отдельными разрешёнными deployment-командами; само приложение не имеет root/sudo.
+Before stopping systemd, deployment checks the live database and aborts if a generation attempt or dialog is actively processing. Server verification then applies migration v6, runs tests, OpenAI/MAX auth checks, restarts one hardened systemd unit, validates MainPID/command/lock, checks restart and duplicate-instance protection, runs SQLite quick_check and `launch-status`, then records the deployed SHA.
 
-## Обычный выпуск
+## Backup workflow
 
-1. Изменить код и документацию в локальном репозитории.
-2. Выполнить `python scripts/scan_secrets.py`, unit-тесты, healthcheck и `pip check`.
-3. Просмотреть diff и убедиться, что TripDay и секреты не затронуты.
-4. Commit и push в `main` запускают workflow `Test and deploy`.
-5. Job `test` использует Python 3.12. Job `deploy` работает только после него и через Environment `production`.
-6. Перед rsync безопасно останавливается только PID `photo-bot`; rsync обновляет `/opt/photo-bot`, сохраняя `.env`, `venv`, `data`, `logs`, `temp` и исключая отдельный `site/`.
-7. На сервере устанавливаются зависимости, применяются идемпотентные SQLite migrations, повторяются тесты и healthcheck, фиксируется SHA, а при наличии `OPENAI_API_KEY` проверяются авторизация и модель. Runtime запускается только при `MAX_TRANSPORT_MODE=polling` и непустом token; disabled mode не оставляет idle-процесс.
+`Encrypted production backup` runs daily and manually. Required secret: `BACKUP_ENCRYPTION_PASSPHRASE` (plus Hetzner secrets). It creates an online SQLite snapshot, encrypts it, performs a server restore test, copies only the encrypted file off VPS, independently restores it on the runner, uploads a 14-day artifact, marks the off-site copy, executes maintenance cleanup and requires strict launch readiness.
 
-Ручной повтор: GitHub Actions → `Test and deploy` → `Run workflow`.
+The passphrase is read through stdin and is never printed or stored in metadata. A green workflow is the evidence for backup readiness; code or an encrypted file alone is not.
 
-## Секреты
+## Rollback
 
-Инфраструктурные секреты: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`. Application/API secrets: `OPENAI_API_KEY`, подтверждённый `MAX_BOT_TOKEN` и закрытый `MAX_OWNER_USER_ID`; для будущего Webhook потребуется `MAX_WEBHOOK_SECRET`. Значения передаются deploy через stdin, никогда не являются shell argument и не выводятся.
+Rollback is a new reviewed commit and normal deploy; runtime data is preserved. Before a destructive/schema-risk change, run and restore-test a backup. Never edit production code manually.
 
-## Откат
+## Release checklist
 
-Откат — новый commit, возвращающий нужное состояние, и обычный deploy. Runtime state не удаляется. Перед изменением формата данных требуется миграция с резервной копией и проверяемым обратным путём; сейчас миграций данных нет.
-
-## Аварийный доступ
-
-Использовать `vineradmin` по персональному SSH-ключу. `photoapp` не получает `sudo`. Root оставлен только для key-based аварийного доступа до отдельного решения об окончательном отключении. Не редактировать код вручную; диагностика допустима, исправление возвращается через Git.
-
-## Проверка выпуска
-
-Проверить зелёный Actions run, соответствие `data/deployed_commit.txt` SHA коммита, healthcheck, отсутствие секретов в логах и, когда ключи настроены, `openai-check`/`max-check`. Systemd template устанавливает администратор из `ops/photo-bot.service` только после готовности transport mode; unit работает под `photoapp`, читает `/opt/photo-bot/.env`, имеет restart-on-failure и graceful SIGTERM.
+1. Clean diff and no unrelated project changes.
+2. Secret scan, tests, `pip check`, site tests.
+3. Push and green deploy run.
+4. Matching Git commit, Actions SHA and production marker.
+5. Green backup workflow/restore/off-site/cleanup.
+6. `launch-status --strict` for pilot activation.
+7. Owner E2E only after agreeing the real OpenAI request maximum.
+8. Return observe-only unless continued access was explicitly authorized.

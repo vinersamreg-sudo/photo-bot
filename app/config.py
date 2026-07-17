@@ -57,8 +57,10 @@ class Settings:
     max_poll_max_stale_seconds: int = 90
     max_poll_observe_only: bool = True
     max_owner_user_ids: tuple[str, ...] = ()
+    max_pilot_user_ids: tuple[str, ...] = ()
+    pilot_user_limit: int = 0
     max_media_host_suffixes: tuple[str, ...] = (".max.ru", ".oneme.ru", ".okcdn.ru")
-    processing_mode_router_enabled: bool = True
+    processing_mode_router_enabled: bool = False
     real_background_composite_enabled: bool = False
     allow_ai_background_fallback: bool = False
     background_asset_catalog: str = "assets/backgrounds/catalog.json"
@@ -68,6 +70,12 @@ class Settings:
     segmentation_model_sha256: str = ""
     segmentation_timeout_seconds: int = 120
     local_ai_finishing_enabled: bool = False
+    backup_dir: str = "data/backups"
+    backup_retention_days: int = 14
+    backup_max_age_hours: int = 30
+    cleanup_temp_retention_hours: int = 24
+    cleanup_orphan_grace_hours: int = 24
+    disk_min_free_mb: int = 2048
 
     @property
     def data_dir(self) -> Path:
@@ -111,6 +119,18 @@ class Settings:
     def segmentation_model_dir_path(self) -> Path:
         path = Path(self.segmentation_model_dir).expanduser()
         return path if path.is_absolute() else self.base_dir / path
+
+    @property
+    def backup_dir_path(self) -> Path:
+        path = Path(self.backup_dir).expanduser()
+        return path if path.is_absolute() else self.base_dir / path
+
+    @property
+    def max_allowed_user_ids(self) -> tuple[str, ...]:
+        """Owner plus the explicitly enabled prefix of the pilot allowlist."""
+
+        pilot = self.max_pilot_user_ids[: self.pilot_user_limit]
+        return tuple(dict.fromkeys((*self.max_owner_user_ids, *pilot)))
 
 
 def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
@@ -216,11 +236,29 @@ def load_settings(
             if part.strip()
         )
     )
+    pilot_user_ids = tuple(
+        dict.fromkeys(
+            part.strip()
+            for part in values.get("MAX_PILOT_USER_IDS", "").split(",")
+            if part.strip()
+        )
+    )
+    pilot_user_limit = _nonnegative_int(values, "PILOT_USER_LIMIT", 0)
+    if pilot_user_limit not in {0, 5, 10, 20}:
+        raise ValueError("PILOT_USER_LIMIT must be 0, 5, 10 or 20")
+    if set(owner_user_ids) & set(pilot_user_ids):
+        raise ValueError("MAX pilot allowlist must not contain an owner")
+    if len(pilot_user_ids) < pilot_user_limit:
+        raise ValueError("MAX pilot allowlist is shorter than PILOT_USER_LIMIT")
+    app_env = values.get("APP_ENV", "production").strip() or "production"
+    image_model = values.get("OPENAI_IMAGE_MODEL", "").strip()
+    if app_env == "production" and image_model and image_model != "gpt-image-2":
+        raise ValueError("Pixora v1 production requires OPENAI_IMAGE_MODEL=gpt-image-2")
 
     return Settings(
         openai_api_key=values.get("OPENAI_API_KEY", "").strip(),
-        openai_image_model=values.get("OPENAI_IMAGE_MODEL", "").strip(),
-        app_env=values.get("APP_ENV", "production").strip() or "production",
+        openai_image_model=image_model,
+        app_env=app_env,
         base_dir=base_dir.resolve(),
         image_edit_quality=image_edit_quality,
         image_edit_size=image_edit_size,
@@ -261,9 +299,11 @@ def load_settings(
         max_poll_max_stale_seconds=_positive_int(values, "MAX_POLL_MAX_STALE_SECONDS", 90),
         max_poll_observe_only=_boolean(values, "MAX_POLL_OBSERVE_ONLY", True),
         max_owner_user_ids=owner_user_ids,
+        max_pilot_user_ids=pilot_user_ids,
+        pilot_user_limit=pilot_user_limit,
         max_media_host_suffixes=media_suffixes,
         processing_mode_router_enabled=_boolean(
-            values, "PROCESSING_MODE_ROUTER_ENABLED", True
+            values, "PROCESSING_MODE_ROUTER_ENABLED", False
         ),
         real_background_composite_enabled=_boolean(
             values, "REAL_BACKGROUND_COMPOSITE_ENABLED", False
@@ -288,4 +328,14 @@ def load_settings(
         local_ai_finishing_enabled=_boolean(
             values, "LOCAL_AI_FINISHING_ENABLED", False
         ),
+        backup_dir=values.get("BACKUP_DIR", "data/backups").strip() or "data/backups",
+        backup_retention_days=_positive_int(values, "BACKUP_RETENTION_DAYS", 14),
+        backup_max_age_hours=_positive_int(values, "BACKUP_MAX_AGE_HOURS", 30),
+        cleanup_temp_retention_hours=_positive_int(
+            values, "CLEANUP_TEMP_RETENTION_HOURS", 24
+        ),
+        cleanup_orphan_grace_hours=_positive_int(
+            values, "CLEANUP_ORPHAN_GRACE_HOURS", 24
+        ),
+        disk_min_free_mb=_positive_int(values, "DISK_MIN_FREE_MB", 2048),
     )

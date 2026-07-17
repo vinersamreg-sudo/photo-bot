@@ -1,4 +1,4 @@
-"""MAX runtime composition and temporary closed-test polling loop."""
+"""MAX runtime composition and fail-closed production polling loop."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def build_max_application(
 
 
 def run_polling(settings: Settings, stop_event: threading.Event) -> int:
-    """Development/closed-smoke mode. Official production mode remains Webhook."""
+    """Run the single production polling instance for observe-only or allowlisted use."""
 
     database = Database(settings.database_path)
     store = MaxConversationStore(database)
@@ -65,6 +65,23 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
         application, client, store = build_max_application(settings, client)
     try:
         with SingleInstanceLock(settings.max_poll_lock_path):
+            runtime_database = application.database if application is not None else database
+            crash_recovery = runtime_database.recover_interrupted_runtime()
+            if any(crash_recovery.values()):
+                LOGGER.warning(
+                    "Recovered interrupted runtime state "
+                    "(completed_events=%s,retryable_events=%s,attempts=%s)",
+                    crash_recovery["completed_events"],
+                    crash_recovery["retryable_events"],
+                    crash_recovery["interrupted_attempts"],
+                )
+            if application is not None:
+                recovered = application.recover_interrupted_processing()
+                if recovered:
+                    LOGGER.warning(
+                        "Recovered interrupted MAX processing dialogs (count=%s)",
+                        recovered,
+                    )
             marker = store.get_marker()
             LOGGER.info(
                 "MAX closed-test polling started (observe_only=%s)",

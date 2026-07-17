@@ -1,5 +1,17 @@
 # Decisions
 
+## ADR-034 — Pilot readiness requires restore-tested off-site backup
+
+Принято 17.07.2026. Ежедневный SQLite snapshot шифруется и считается готовым только после фактической расшифровки, `quick_check` и внешней копии. Cleanup выполняется после off-site confirmation. `launch-status --strict` является автоматическим gate пилота, но не заменяет owner E2E.
+
+## ADR-033 — OpenAI gpt-image-2 является единственным provider Pixora v1
+
+Принято 17.07.2026. Production router выключен, real-background/segmentation experiments dormant. Не добавлять semantic parser, второй image engine или multi-provider platform до достаточной статистики пилота. Это решение заменяет ADR-027 и ADR-032/typed-hybrid утверждения в части production routing; их код и исследования остаются историческим материалом.
+
+## ADR-032 — Закрытый запуск идёт ступенями owner / 5 / 10 / 20
+
+Принято 17.07.2026. Pilot IDs хранятся как secret ordered allowlist, а активный prefix задаётся только 0/5/10/20. Обычный deploy возвращает observe-only и limit 0. Public access не включается этим механизмом.
+
 ## ADR-031 — Provider получает только нормализованный English contract
 
 Принято 16.07.2026. `EditPlan` schema v2 содержит provider-neutral scene fields; prompt builder рендерит их на английском. Raw Russian user text хранится для audit/history, но не участвует в provider prompt. ImageProvider fail-fast отклоняет non-ASCII prompt до сетевого вызова. Это позволяет менять OpenAI на другой image provider без изменения MAX UX.

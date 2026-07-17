@@ -1,5 +1,9 @@
 # Processing modes architecture
 
+> Status 17.07.2026: experimental and dormant. Pixora v1 production has
+> `PROCESSING_MODE_ROUTER_ENABLED=false` and sends image edits only to OpenAI
+> `gpt-image-2`. Reconsider this architecture only after closed-pilot data.
+
 ## Контракт
 
 `EditPlan` описывает намерение, `ModeRouter` выбирает технологию, а

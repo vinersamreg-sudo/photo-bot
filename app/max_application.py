@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Protocol, Sequence
@@ -18,11 +19,16 @@ from app.domain import (
     DemoError,
     DemoExpiredError,
     DemoLimitError,
+    ImageTooLargeError,
     InvalidInputError,
     IntentAmbiguityError,
     PolicyRejectedError,
+    ProviderQuotaError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
     SegmentationFailedError,
     SourceReplacementError,
+    StorageFailureError,
 )
 from app.gallery import GalleryService, GalleryVersion
 from app.edit_intent import parse_edit_intent
@@ -32,6 +38,7 @@ from app.max_adapter import (
     View,
     delete_confirmation_view,
     gallery_item_actions,
+    ideas_catalog,
     legal_details_view,
     legal_view,
     photoshoot_catalog,
@@ -43,21 +50,22 @@ from app.max_adapter import (
 )
 from app.max_conversation import MaxConversationStore, MaxDialog
 from app.max_transport import MaxIncomingEvent, MaxTransportError
+from app.telemetry import TelemetryRecorder
 
 
 LOGGER = logging.getLogger(__name__)
 
 PHOTO_ACCEPTED_TEXT = (
-    "✅ Фото загружено.\n\n"
+    "Фото загружено ✅\n\n"
     "Что хотите изменить?"
 )
 PHOTO_REUSED_TEXT = (
-    "✅ Фото уже загружено.\n\n"
+    "Фото уже загружено ✅\n\n"
     "Что хотите изменить?"
 )
 PROCESSING_TEXT = (
-    "⏳ Обрабатываю фотографию…\n\n"
-    "Обычно это занимает около минуты."
+    "✨ Создаю новый вариант.\n\n"
+    "Обычно это занимает 1–3 минуты. Можно закрыть MAX — результат придёт сюда."
 )
 UNLOCK_PLACEHOLDER = (
     "Получение оригинала пока недоступно — идёт закрытое тестирование.\n\n"
@@ -67,6 +75,14 @@ OWNER_ONLY_TEXT = (
     "Pixora пока в закрытом тестировании.\n\n"
     "Скоро откроем доступ."
 )
+
+
+def _version_word(count: int) -> str:
+    if count % 10 == 1 and count % 100 != 11:
+        return "версия"
+    if count % 10 in {2, 3, 4} and count % 100 not in {12, 13, 14}:
+        return "версии"
+    return "версий"
 
 
 class LiveMaxTransport(Protocol):
@@ -102,6 +118,49 @@ class MaxApplication:
         self.store = store or MaxConversationStore(database)
         self.adapter = MaxDemoAdapter(demo_service, database, transport)
         self.gallery: GalleryService = demo_service.gallery
+        self.telemetry = TelemetryRecorder(database)
+
+    def _track(self, event_type: str, **values: object) -> None:
+        try:
+            self.telemetry.record(event_type, **values)
+        except Exception as exc:
+            LOGGER.warning(
+                "Product telemetry write skipped (event_type=%s,error_type=%s)",
+                event_type,
+                type(exc).__name__,
+            )
+
+    def recover_interrupted_processing(self) -> int:
+        """Close stale MAX status messages after a process restart."""
+
+        with self.database.read() as connection:
+            rows = connection.execute(
+                """SELECT platform_user_id,status_message_id,current_version_id
+                   FROM max_dialogs WHERE state='processing'"""
+            ).fetchall()
+        for row in rows:
+            text = "Обработка прервалась. Попытка не списана — попробуйте ещё раз."
+            try:
+                if row["status_message_id"]:
+                    try:
+                        self.transport.edit_message(row["status_message_id"], text)
+                    except MaxTransportError:
+                        self.transport.send_message(row["platform_user_id"], text)
+                else:
+                    self.transport.send_message(row["platform_user_id"], text)
+            except MaxTransportError:
+                LOGGER.warning(
+                    "Interrupted-processing notice deferred because MAX is unavailable"
+                )
+            self.store.transition(
+                row["platform_user_id"],
+                "result_ready" if row["current_version_id"] else "waiting_for_prompt",
+                event_key="ops:restart-recovery",
+                force=True,
+                status_message_id=None,
+                pending_prompt=None,
+            )
+        return len(rows)
 
     def handle(self, event: MaxIncomingEvent) -> bool:
         """Handle one deduplicated event. Returns false for a known duplicate."""
@@ -109,7 +168,7 @@ class MaxApplication:
         if not self.store.begin_event(event.event_key, event.event_type):
             return False
         try:
-            if event.user_id not in self.settings.max_owner_user_ids:
+            if event.user_id not in self.settings.max_allowed_user_ids:
                 if event.callback_id:
                     self.transport.answer_callback(
                         event.callback_id, "Сервис находится в закрытом тестировании"
@@ -120,6 +179,19 @@ class MaxApplication:
             self._dispatch(event)
         except MaxTransportError:
             self.store.finish_event(event.event_key, False)
+            raise
+        except sqlite3.Error as exc:
+            LOGGER.error(
+                "MAX database operation failed safely (error_type=%s)",
+                type(exc).__name__,
+            )
+            try:
+                self.transport.send_message(
+                    event.user_id,
+                    "Сервис временно недоступен. Попытка не списана.",
+                )
+            except MaxTransportError:
+                pass
             raise
         except DemoExpiredError:
             LOGGER.info("MAX demo session expired (event_type=%s)", event.event_type)
@@ -139,31 +211,52 @@ class MaxApplication:
             self._show_demo_error(event, exc)
             self.store.finish_event(event.event_key, True)
             return True
-        except Exception:
+        except Exception as exc:
+            LOGGER.error(
+                "MAX application failure closed (event_type=%s,error_type=%s)",
+                event.event_type,
+                type(exc).__name__,
+            )
+            dialog = self.store.get(event.user_id)
+            if dialog and dialog.status_message_id:
+                self._send_error(
+                    event.user_id, "Сервис временно недоступен. Попытка не списана."
+                )
+                self.store.transition(
+                    event.user_id,
+                    "result_ready" if dialog.current_version_id else "waiting_for_prompt",
+                    event_key=event.event_key,
+                    force=True,
+                    status_message_id=None,
+                    pending_prompt=None,
+                )
+                self.store.finish_event(event.event_key, True)
+                return True
             self.store.finish_event(event.event_key, False)
             raise
         self.store.finish_event(event.event_key, True)
         return True
 
     def _show_demo_error(self, event: MaxIncomingEvent, exc: DemoError) -> None:
+        dialog = self.store.get(event.user_id)
+        self._track(
+            "error",
+            session_id=dialog.session_id if dialog else None,
+            gallery_item_id=dialog.current_gallery_item_id if dialog else None,
+            error_type=type(exc).__name__,
+        )
         if isinstance(exc, AssetUnavailableError):
-            self.transport.send_message(
-                event.user_id,
-                "Подходящего лицензированного фона пока нет.\n\n"
-                "Выберите другой готовый фон или напишите: «создай AI-фон …».",
-                (Button("✨ Идеи", "ideas"),),
+            self._send_error(
+                event.user_id, "Не удалось выполнить обработку. Измените описание."
             )
             return
         if isinstance(exc, SegmentationFailedError):
-            self.transport.send_message(
-                event.user_id,
-                "Это фото пока сложно аккуратно отделить от фона.\n\n"
-                "Попробуйте другое фото или попросите создать AI-фон.",
-                (),
+            self._send_error(
+                event.user_id, "Не удалось выполнить обработку. Попробуйте другое фото."
             )
             return
         if isinstance(exc, SourceReplacementError):
-            self.transport.send_message(
+            self._send_error(
                 event.user_id,
                 "Бесплатное демо уже связано с первой фотографией.\n\n"
                 "Продолжите с ней или откройте «Мои работы».",
@@ -177,7 +270,7 @@ class MaxApplication:
             self._show_intent_ambiguity(event.user_id, exc)
             return
         if isinstance(exc, DemoLimitError):
-            self.transport.send_message(
+            self._send_error(
                 event.user_id,
                 "Бесплатные варианты закончились.",
                 (
@@ -187,36 +280,47 @@ class MaxApplication:
             )
             return
         if isinstance(exc, CooldownError):
-            self.transport.send_message(
-                event.user_id,
-                "Слишком быстро. Попробуйте ещё раз через минуту.",
-                (Button("Попробовать снова", "prompt:start"),),
+            self._send_error(
+                event.user_id, "Слишком быстро. Попробуйте ещё раз через минуту."
             )
             return
         if isinstance(exc, DailyBudgetError):
-            self.transport.send_message(
+            self._send_error(
                 event.user_id,
-                "Сегодня бесплатные обработки закончились.\n\nПопробуйте позже.",
-                (Button("← В меню", "menu"),),
+                "Сегодня бесплатная обработка временно недоступна. Попробуйте позже.",
             )
             return
         if isinstance(exc, PolicyRejectedError):
-            self.transport.send_message(
+            self._send_error(
                 event.user_id,
-                "Не могу выполнить этот запрос. Попробуйте описать его иначе.",
-                (Button("Изменить запрос", "prompt:edit"),),
+                "Это изображение или запрос нельзя обработать. Попробуйте изменить описание.",
             )
             return
         if isinstance(exc, DeliveryError):
-            self.transport.send_message(
+            self._send_error(
                 event.user_id,
-                "Не получилось отправить результат. Попробуйте немного позже.",
-                (Button("← В меню", "menu"),),
+                "Изображение создано, но не удалось отправить его в MAX. Попытка не списана.",
             )
             return
-        dialog = self.store.get(event.user_id)
+        if isinstance(exc, ProviderTimeoutError):
+            self._send_error(
+                event.user_id,
+                "Обработка заняла слишком много времени. Попытка не списана — попробуйте ещё раз.",
+            )
+            return
+        if isinstance(exc, (ProviderUnavailableError, ProviderQuotaError, StorageFailureError)):
+            self._send_error(
+                event.user_id, "Сервис временно недоступен. Попытка не списана."
+            )
+            return
+        if isinstance(exc, ImageTooLargeError):
+            self._send_error(
+                event.user_id,
+                f"Файл слишком большой. Отправьте изображение до {self.settings.max_source_file_size_mb} МБ.",
+            )
+            return
         if isinstance(exc, InvalidInputError) and dialog and dialog.state == "waiting_for_source":
-            text = "Не получилось прочитать фото. Отправьте другое изображение 📷"
+            text = "Не удалось открыть изображение. Отправьте JPG, PNG или WEBP."
             buttons: tuple[Button, ...] = ()
         elif isinstance(exc, InvalidInputError) and dialog and dialog.state in {
             "waiting_for_prompt", "waiting_for_correction"
@@ -226,7 +330,25 @@ class MaxApplication:
         else:
             text = "Что-то пошло не так. Попробуйте ещё раз."
             buttons = (Button("← В меню", "menu"),)
-        self.transport.send_message(event.user_id, text, buttons)
+        self._send_error(event.user_id, text, buttons)
+
+    def _send_error(
+        self, user_id: str, text: str, buttons: Sequence[Button] = ()
+    ) -> None:
+        """Finish a processing status in place; send one fallback if editing fails."""
+
+        dialog = self.store.get(user_id)
+        status_id = dialog.status_message_id if dialog else None
+        if status_id:
+            try:
+                self.transport.edit_message(status_id, text, buttons)
+            except MaxTransportError:
+                LOGGER.info("MAX processing status edit failed; using one fallback message")
+                self.transport.send_message(user_id, text, buttons)
+            finally:
+                self.store.update(user_id, status_message_id=None)
+            return
+        self.transport.send_message(user_id, text, buttons)
 
     def _dispatch(self, event: MaxIncomingEvent) -> None:
         dialog = self.store.get_or_create(event.user_id, event.chat_id)
@@ -264,6 +386,7 @@ class MaxApplication:
             self._show_main(event.user_id, dialog, event.event_key)
 
     def _start(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        self._track("start", session_id=dialog.session_id)
         if self.store.legal_is_current(event.user_id):
             stored = self.adapter.resume_demo(event.user_id)
             if stored is not None:
@@ -347,7 +470,12 @@ class MaxApplication:
             self._send_view(event.user_id, settings_view())
             return
         if action == "catalog:ideas":
-            self._send_view(event.user_id, scenario_catalog())
+            self._send_view(event.user_id, ideas_catalog())
+            return
+        if action.startswith("ideas:"):
+            self._send_view(
+                event.user_id, scenario_catalog(action.split(":", 1)[1])
+            )
             return
         if action == "custom" or action.startswith("scenario:"):
             scenario = action.split(":", 1)[1] if action.startswith("scenario:") else None
@@ -361,17 +489,32 @@ class MaxApplication:
         elif action == "prompt:start":
             self._generate(event, dialog, correction=dialog.pending_action == "correction")
         elif action == "result:unlock":
+            self._track(
+                "unlock_clicked",
+                session_id=dialog.session_id,
+                gallery_item_id=dialog.current_gallery_item_id,
+            )
             self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
         elif action == "result:correct":
+            self._track(
+                "correction_started",
+                session_id=dialog.session_id,
+                gallery_item_id=dialog.current_gallery_item_id,
+            )
             self.store.transition(
                 event.user_id, "waiting_for_correction", event_key=event.event_key,
                 pending_prompt=None, pending_action="correction",
             )
             self.transport.send_message(
                 event.user_id,
-                "Что исправить?",
+                "Что нужно поправить?",
             )
         elif action == "result:repeat":
+            self._track(
+                "repeat_started",
+                session_id=dialog.session_id,
+                gallery_item_id=dialog.current_gallery_item_id,
+            )
             self._generate(event, dialog, correction=False, repeat=True)
         elif action == "result:favorite":
             self._favorite(event.user_id, dialog)
@@ -489,20 +632,33 @@ class MaxApplication:
             return
         destination = self.settings.temp_dir / f"max-{event.message_id or event.event_key}.upload"
         try:
-            self.transport.download_image(
-                event.image_url,
-                destination,
-                self.settings.max_source_file_size_mb * 1024 * 1024,
-            )
-            session = self.adapter.start_demo_with_implicit_consent(
-                event.user_id, destination
-            )
+            try:
+                self.transport.download_image(
+                    event.image_url,
+                    destination,
+                    self.settings.max_source_file_size_mb * 1024 * 1024,
+                )
+            except MaxTransportError as exc:
+                if exc.kind == "media_too_large":
+                    raise ImageTooLargeError("Source image exceeds the allowed limit") from exc
+                raise
+            try:
+                session = self.adapter.start_demo_with_implicit_consent(
+                    event.user_id, destination
+                )
+            except OSError as exc:
+                raise StorageFailureError("Source image storage failed") from exc
         finally:
             destination.unlink(missing_ok=True)
         with self.database.read() as connection:
             item_id = connection.execute(
                 "SELECT gallery_item_id FROM demo_sessions WHERE id=?", (session.session_id,)
             ).fetchone()[0]
+        self._track(
+            "photo_uploaded",
+            session_id=session.session_id,
+            gallery_item_id=item_id,
+        )
         if dialog.selected_scenario_id:
             updated = self.store.transition(
                 event.user_id, "confirmation", event_key=event.event_key, force=True,
@@ -578,6 +734,12 @@ class MaxApplication:
                 dialog.current_version_id if mode == "correction" else None
             ),
         )
+        self._track(
+            "prompt_submitted",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+            parser_fallback=preflight.primary_action == "custom",
+        )
         updated = self.store.transition(
             event.user_id, "confirmation", event_key=event.event_key,
             pending_prompt=prompt, pending_action=mode,
@@ -609,6 +771,11 @@ class MaxApplication:
             raise InvalidInputError("No current version for feedback")
         self.gallery.record_feedback(
             dialog.user_id, dialog.current_version_id, sentiment
+        )
+        self._track(
+            f"feedback_{sentiment}",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
         )
         if sentiment == "positive":
             self.transport.send_message(platform_user_id, "Спасибо за оценку 👍")
@@ -652,6 +819,11 @@ class MaxApplication:
             event.user_id, "processing", event_key=event.event_key,
             status_message_id=status_id,
         )
+        self._track(
+            "processing_started",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
 
         def deliver(preview: Path, _attempt_id: str) -> bool:
             caption = result_actions(remaining_after).text
@@ -672,19 +844,21 @@ class MaxApplication:
                 delivery_override=deliver,
             )
         except Exception:
-            recovery_state = "result_ready" if dialog.current_version_id else "confirmation"
+            recovery_state = (
+                "result_ready" if dialog.current_version_id else "waiting_for_prompt"
+            )
             self.store.transition(
                 event.user_id, recovery_state, event_key=event.event_key,
-                status_message_id=None, force=True,
+                status_message_id=status_id, pending_prompt=None, force=True,
             )
-            try:
-                self.transport.edit_message(status_id, "Не получилось завершить обработку.")
-            except MaxTransportError:
-                LOGGER.info("MAX status message could not be edited after failed generation")
             raise
         with self.database.read() as connection:
             version = connection.execute(
                 "SELECT id,gallery_item_id FROM gallery_versions WHERE attempt_id=?",
+                (result.attempt_id,),
+            ).fetchone()
+            attempt = connection.execute(
+                "SELECT duration_ms,estimated_cost FROM generation_attempts WHERE id=?",
                 (result.attempt_id,),
             ).fetchone()
         next_state = "demo_exhausted" if result.remaining_generations == 0 else "result_ready"
@@ -698,6 +872,14 @@ class MaxApplication:
             self.transport.edit_message(status_id, "✨ Готово")
         except MaxTransportError:
             LOGGER.info("MAX status message could not be edited after successful delivery")
+        self._track(
+            "result_delivered",
+            session_id=dialog.session_id,
+            attempt_id=result.attempt_id,
+            gallery_item_id=version["gallery_item_id"],
+            duration_ms=attempt["duration_ms"] if attempt else None,
+            estimated_cost=attempt["estimated_cost"] if attempt else None,
+        )
 
     def _favorite(self, platform_user_id: str, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_version_id:
@@ -706,6 +888,11 @@ class MaxApplication:
         self.transport.send_message(platform_user_id, "Добавлено в избранное ⭐")
 
     def _show_works(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        self._track(
+            "gallery_opened",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
         if not dialog.user_id:
             self.transport.send_message(
                 event.user_id,
@@ -715,9 +902,9 @@ class MaxApplication:
             return
         with self.database.read() as connection:
             rows = connection.execute(
-                """SELECT id,title,scenario_id,generation_count,favorite,created_at
+                """SELECT id,title,generation_count,favorite,created_at,cover_preview_path
                    FROM gallery_items WHERE user_id=? AND deleted=0
-                   ORDER BY updated_at DESC LIMIT 10""",
+                   ORDER BY updated_at DESC LIMIT 5""",
                 (dialog.user_id,),
             ).fetchall()
         self.store.transition(event.user_id, "gallery", event_key=event.event_key, force=True)
@@ -728,20 +915,41 @@ class MaxApplication:
                 (Button("← В меню", "menu"),),
             )
             return
-        lines = ["📂 Мои работы", "Выберите работу."]
-        buttons: list[Button] = []
-        for index, row in enumerate(rows, start=1):
+        self.transport.send_message(event.user_id, "📂 Мои работы\n\nВыберите работу.")
+        fallback_buttons: list[Button] = []
+        for row in rows:
             favorite = " ⭐" if row["favorite"] else ""
             count = row["generation_count"]
-            version_word = "версия" if count == 1 else "версии"
-            buttons.append(
+            version_word = _version_word(count)
+            try:
+                created = datetime.fromisoformat(row["created_at"]).strftime("%d.%m.%Y")
+            except (TypeError, ValueError):
+                created = ""
+            caption = (
+                f"{row['title'][:36]}{favorite}\n"
+                f"{created} · {count} {version_word}"
+            )
+            preview = Path(row["cover_preview_path"]) if row["cover_preview_path"] else None
+            if preview and preview.is_file() and self.transport.send_image(
+                event.user_id,
+                preview,
+                caption,
+                (Button("Открыть", f"works:open:{row['id']}"),),
+            ):
+                continue
+            fallback_buttons.append(
                 Button(
-                    f"{index}. {row['title'][:28]}{favorite} · {count} {version_word}",
+                    f"{row['title'][:28]}{favorite} · {count} {version_word}",
                     f"works:open:{row['id']}",
                 )
             )
-        buttons.append(Button("← В меню", "menu"))
-        self.transport.send_message(event.user_id, "\n\n".join(lines), tuple(buttons))
+        if fallback_buttons:
+            self.transport.send_message(
+                event.user_id, "Работы без доступного превью.", tuple(fallback_buttons)
+            )
+        self.transport.send_message(
+            event.user_id, "Что дальше?", (Button("← В меню", "menu"),)
+        )
 
     def _open_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, item_id: str
@@ -827,6 +1035,11 @@ class MaxApplication:
             raise InvalidInputError("No current gallery work")
         # Ownership is verified before the irreversible purge.
         self.gallery.open_item(dialog.user_id, dialog.current_gallery_item_id)
+        self._track(
+            "work_deleted",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
         self.gallery.soft_delete(dialog.user_id, dialog.current_gallery_item_id)
         self.gallery.purge_item(dialog.current_gallery_item_id)
         self.store.transition(

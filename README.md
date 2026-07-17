@@ -14,7 +14,7 @@ python -m app.main ai-inspect --attempt-id <opaque-attempt-id>
 
 Команда не выводит platform user ID, файловые пути, ключи или исходный пользовательский free text.
 
-Личная AI-фотостудия: все работы пользователя, их версии, избранное и коллекции живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Продукт продаёт конкретную понравившуюся фотографию без watermark, а не модели, кредиты или абстрактные генерации. Реальный модерированный MAX-бот поддерживает закрытый owner-only режим: handlers включаются только при непустом `MAX_OWNER_USER_IDS`; остальные получают сообщение о закрытом тестировании без создания сессии и OpenAI-вызова. Без owner secret deploy принудительно сохраняет `MAX_POLL_OBSERVE_ONLY=true`.
+Личная AI-фотостудия: все работы пользователя, их версии и избранное живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Pixora v1 использует только OpenAI `gpt-image-2`; экспериментальные hybrid-processing модули выключены. Доступ закрыт allowlist: owner и управляемые этапы 5/10/20 пользователей. Обычный deploy всегда возвращает `MAX_POLL_OBSERVE_ONLY=true` и pilot limit 0.
 
 ## MAX production smoke
 
@@ -25,7 +25,7 @@ python -m app.main max-check   # GET /me, без polling и сообщений
 python -m app.main health      # SQLite + systemd + MainPID + fresh MAX contact + lock
 ```
 
-Runtime запускается только как `/etc/systemd/system/photo-bot.service` под `photoapp`. Прямой background-start выведен из эксплуатации. Long Polling не считается публичным production transport; перед приглашением пользователей требуется Webhook HTTPS:443 и отдельный проверенный owner `/start` этап.
+Runtime запускается только как `/etc/systemd/system/photo-bot.service` под `photoapp`. Long Polling допускается для ограниченного пилота, но не считается архитектурой публичного массового запуска.
 
 ## Быстрый старт
 
@@ -65,9 +65,11 @@ python -m app.main demo-stats
 ```powershell
 python -m app.main gallery-cleanup           # dry-run
 python -m app.main gallery-cleanup --execute # физическая очистка
+python -m app.main maintenance-cleanup       # retention + temp + orphan dry-run
+python -m app.main launch-status              # privacy-safe readiness
 ```
 
-Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `TRASH_RETENTION_DAYS=30`. Реальные MAX-экраны Gallery, before/after slider, интерактивный поиск и экспорт пока не реализованы.
+Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `TRASH_RETENTION_DAYS=30`. MAX показывает последние работы как preview-карточки, версию, correction/repeat/current-best/favorite/delete. Collections, сложный поиск, before/after slider и экспорт не входят в основной v1 UX.
 
 ## MAX closed-test transport
 
@@ -99,25 +101,10 @@ Push в `main` запускает тесты и деплой через GitHub A
 /opt/photo-bot/scripts/stop_bot.sh
 ```
 
-Systemd hardening template находится в `ops/photo-bot.service`, но не устанавливается до получения MAX credentials и рабочего mode. Официальный production-вариант — Webhook; текущий VPS пока слушает только SSH.
+Systemd hardening template находится в `ops/photo-bot.service`. Ежедневный workflow создаёт encrypted SQLite backup, реально восстанавливает его, копирует off-site и только затем выполняет cleanup. Код backup без зелёного restore workflow не считается доказательством готовности.
 
 ## Документация
 
 Главный источник истины — [docs/PROJECT_BIBLE.md](docs/PROJECT_BIBLE.md). Текущее состояние, архитектура, процесс поставки и решения описаны в остальных файлах каталога `docs/`.
 
-### Hybrid processing
-
-Pixora routes each request into a typed mode instead of using a generative provider
-for every task. See [`PROCESSING_MODES_AUDIT.md`](docs/PROCESSING_MODES_AUDIT.md),
-[`PROCESSING_MODES_ARCHITECTURE.md`](docs/PROCESSING_MODES_ARCHITECTURE.md),
-[`SEGMENTATION_EVALUATION.md`](docs/SEGMENTATION_EVALUATION.md),
-[`BACKGROUND_ASSET_POLICY.md`](docs/BACKGROUND_ASSET_POLICY.md) and
-[`REAL_BACKGROUND_PIPELINE.md`](docs/REAL_BACKGROUND_PIPELINE.md).
-
-```powershell
-python scripts/check_asset_licenses.py
-python scripts/benchmark_processing.py --iterations 3 --size 1024
-```
-
-Real-background mode stays disabled until licensed assets, pinned weights, VPS
-resource measurements and owner-only visual QA are complete.
+Исторические hybrid-processing исследования сохранены в `docs/`, но не описывают production path v1. Повторная оценка provider/semantic parsing проводится только после данных закрытого пилота.

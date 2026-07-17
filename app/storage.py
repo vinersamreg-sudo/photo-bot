@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from PIL import Image, UnidentifiedImageError
 
-from app.domain import InvalidInputError
+from app.domain import ImageTooLargeError, InvalidInputError
 
 
 SUPPORTED_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
@@ -36,7 +36,9 @@ class PrivateStorage:
         if not source.is_file():
             raise InvalidInputError("Source image does not exist")
         size = source.stat().st_size
-        if size <= 0 or size > self.max_source_bytes:
+        if size > self.max_source_bytes:
+            raise ImageTooLargeError("Source image exceeds the allowed limit")
+        if size <= 0:
             raise InvalidInputError("Source image size is outside the allowed limit")
         try:
             with Image.open(source) as image:

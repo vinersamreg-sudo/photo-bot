@@ -311,7 +311,10 @@ class MaxApiClient:
                     for chunk in response.iter_bytes():
                         total += len(chunk)
                         if total > max_bytes:
-                            raise MaxTransportError("MAX media exceeds the configured size limit")
+                            raise MaxTransportError(
+                                "MAX media exceeds the configured size limit",
+                                kind="media_too_large",
+                            )
                         output.write(chunk)
             if total == 0:
                 raise MaxTransportError("MAX media download is empty")

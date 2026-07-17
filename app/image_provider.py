@@ -8,9 +8,21 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from PIL import Image, ImageDraw
-from openai import BadRequestError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    BadRequestError,
+    OpenAIError,
+    RateLimitError,
+)
 
-from app.domain import PolicyRejectedError, ProviderResult
+from app.domain import (
+    PolicyRejectedError,
+    ProviderQuotaError,
+    ProviderResult,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
 
 
 class ImageProvider(Protocol):
@@ -23,6 +35,20 @@ class ImageProvider(Protocol):
 def _validate_provider_prompt(prompt: str) -> None:
     if not prompt.strip() or not prompt.isascii():
         raise ValueError("Image providers accept normalized English ASCII prompts only")
+
+
+def _provider_error_code(exc: OpenAIError) -> str | None:
+    direct = getattr(exc, "code", None)
+    if direct:
+        return str(direct)
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        nested = body.get("error")
+        if isinstance(nested, dict) and nested.get("code"):
+            return str(nested["code"])
+        if body.get("code"):
+            return str(body["code"])
+    return None
 
 
 class OpenAIImageProvider:
@@ -68,10 +94,22 @@ class OpenAIImageProvider:
                 else:
                     response = self.client.images.edit(**request)
                     retries = 0
+        except APITimeoutError as exc:
+            raise ProviderTimeoutError("Image provider timed out") from exc
+        except APIConnectionError as exc:
+            raise ProviderUnavailableError("Image provider network failure") from exc
+        except RateLimitError as exc:
+            if _provider_error_code(exc) == "insufficient_quota":
+                raise ProviderQuotaError("Image provider quota is unavailable") from exc
+            raise ProviderUnavailableError("Image provider rate limit") from exc
         except BadRequestError as exc:
-            if getattr(exc, "code", None) == "moderation_blocked":
+            if _provider_error_code(exc) in {
+                "moderation_blocked", "content_policy_violation",
+            }:
                 raise PolicyRejectedError("The image request was rejected by provider policy") from exc
-            raise
+            raise ProviderUnavailableError("Image provider rejected the request") from exc
+        except OpenAIError as exc:
+            raise ProviderUnavailableError("Image provider request failed") from exc
         encoded = response.data[0].b64_json
         if not encoded:
             raise RuntimeError("Provider returned no image bytes")

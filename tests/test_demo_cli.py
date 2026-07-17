@@ -59,4 +59,4 @@ class DemoCliTests(TestCase):
             with redirect_stdout(cleanup_output):
                 self.assertEqual(run_gallery_cleanup(settings, execute=False), 0)
             cleanup = json.loads(cleanup_output.getvalue())
-            self.assertEqual(cleanup, {"mode": "dry-run", "count": 0, "gallery_item_ids": []})
+            self.assertEqual(cleanup, {"mode": "dry-run", "count": 0})

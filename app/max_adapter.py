@@ -14,11 +14,8 @@ from app.scenarios import SCENARIOS
 
 WELCOME_TEXT = (
     "✨ Pixora\n\n"
-    "Изменяем фотографии с помощью ИИ.\n\n"
-    "Просто отправьте фотографию.\n\n"
-    "После загрузки напишите своими словами, что хотите изменить.\n\n"
-    "Продолжая использование сервиса, вы соглашаетесь с обработкой "
-    "фотографии и условиями использования."
+    "Отправьте фотографию и напишите, что хотите изменить.\n\n"
+    "Продолжая, вы соглашаетесь с условиями сервиса и обработкой изображения."
 )
 
 LEGAL_TEXT = (
@@ -47,7 +44,11 @@ class MaxTransport(Protocol):
 def upload_view() -> View:
     return View(
         WELCOME_TEXT,
-        (Button("Подробнее", "start:details"),),
+        (
+            Button("✨ Идеи", "catalog:ideas"),
+            Button("📂 Мои работы", "studio:works"),
+            Button("ℹ️ Подробнее", "start:details"),
+        ),
     )
 
 
@@ -76,7 +77,7 @@ def legal_details_view() -> View:
 
 def settings_view() -> View:
     return View(
-        "⚙️ Настройки\n\nУсловия использования и приватность.",
+        "ℹ️ О сервисе\n\nУсловия использования и приватность.",
         (
             Button("Условия", "legal:offer"),
             Button("Приватность", "legal:privacy"),
@@ -89,7 +90,7 @@ def settings_view() -> View:
 
 def photoshoot_catalog() -> View:
     return View(
-        "🎭 Готовые фотосессии\n\nВыберите образ.",
+        "✨ Готовые фотосессии\n\nВыберите образ.",
         (
             Button("В уютном кафе", "scenario:cafe"),
             Button("На пляже", "scenario:beach"),
@@ -99,13 +100,52 @@ def photoshoot_catalog() -> View:
     )
 
 
-def scenario_catalog() -> View:
+IDEA_CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("work", "Для работы", ("работа", "другое")),
+    ("photoshoots", "Фотосессии", ("фотосессия",)),
+    ("backgrounds", "Фоны", ("фоны", "улучшение")),
+    ("outfit", "Одежда и образ", ("мужские образы", "женские образы")),
+    ("restoration", "Восстановление", ("восстановление",)),
+    ("enhancement", "Улучшение", ("улучшение",)),
+    ("holidays", "Праздники", ("праздники",)),
+    ("family", "Семья", ("семья",)),
+    ("travel", "Путешествия", ("путешествия",)),
+)
+
+
+def ideas_catalog() -> View:
+    return View(
+        "✨ Идеи\n\nВыберите категорию.",
+        tuple(Button(label, f"ideas:{slug}") for slug, label, _ in IDEA_CATEGORIES)
+        + (Button("← Назад", "menu"),),
+    )
+
+
+def scenario_catalog(category_slug: str | None = None) -> View:
+    selected_categories: tuple[str, ...] | None = None
+    category_title = "Готовые идеи"
+    if category_slug:
+        match = next(
+            (entry for entry in IDEA_CATEGORIES if entry[0] == category_slug), None
+        )
+        if match is not None:
+            _, category_title, selected_categories = match
     buttons = tuple(
-        Button(f"{scenario.emoji} {scenario.title}", f"scenario:{scenario.id}")
+        Button(scenario.title, f"scenario:{scenario.id}")
         for scenario in sorted(SCENARIOS, key=lambda value: value.sort_order)
-        if scenario.active
-    ) + (Button("← Назад", "menu"),)
-    return View("✨ Идеи\n\nВыберите готовый сценарий.", buttons)
+        if scenario.active and (
+            selected_categories is None or scenario.category in selected_categories
+        )
+    )
+    if not buttons:
+        return View(
+            f"✨ {category_title}\n\nНовые идеи скоро появятся.",
+            (Button("← К категориям", "catalog:ideas"),),
+        )
+    return View(
+        f"✨ {category_title}\n\nВыберите идею.",
+        buttons + (Button("← К категориям", "catalog:ideas"),),
+    )
 
 
 def studio_menu_contract() -> View:
@@ -124,27 +164,22 @@ def studio_menu_contract() -> View:
 
 def result_actions(remaining: int) -> View:
     if remaining > 0:
-        text = "Это демо с водяным знаком."
+        text = "Демо с водяным знаком."
+        if remaining == 1:
+            text += "\n\nОстался один бесплатный вариант."
         buttons = (
             Button("⬇ Получить оригинал", "result:unlock"),
-            Button("✨ Исправить", "result:correct"),
+            Button("✏️ Исправить", "result:correct"),
             Button("🎲 Другой вариант", "result:repeat"),
             Button("⭐ В избранное", "result:favorite"),
-            Button("👍 Получилось", "result:feedback:positive"),
-            Button("👎 Не то", "result:feedback:negative"),
             Button("📂 Мои работы", "studio:works"),
-            Button("✨ Идеи", "catalog:ideas"),
             Button("🗑 Удалить", "result:delete"),
         )
     else:
-        text = (
-            "Бесплатные варианты закончились.\n\n"
-            "Получите оригинал или продолжите после оплаты."
-        )
+        text = "Бесплатные варианты закончились."
         buttons = (
             Button("⬇ Получить оригинал", "result:unlock"),
             Button("📂 Мои работы", "studio:works"),
-            Button("✨ Идеи", "catalog:ideas"),
             Button("🗑 Удалить", "result:delete"),
         )
     return View(text, buttons)
@@ -163,15 +198,14 @@ def delete_confirmation_view() -> View:
 def gallery_item_actions() -> tuple[Button, ...]:
     return (
         Button("⬇ Получить оригинал", "result:unlock"),
-        Button("✨ Исправить", "result:correct"),
+        Button("← Предыдущая", "work:previous"),
+        Button("Следующая →", "work:next"),
+        Button("Сделать основной", "work:main"),
+        Button("✏️ Исправить", "result:correct"),
         Button("🎲 Другой вариант", "result:repeat"),
         Button("⭐ В избранное", "result:favorite"),
-        Button("👍 Получилось", "result:feedback:positive"),
-        Button("👎 Не то", "result:feedback:negative"),
-        Button("История версий", "work:history"),
         Button("🗑 Удалить", "result:delete"),
         Button("📂 К работам", "studio:works"),
-        Button("✨ Идеи", "catalog:ideas"),
     )
 
 

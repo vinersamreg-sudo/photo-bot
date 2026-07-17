@@ -53,11 +53,27 @@ class MaxConversationTests(TestCase):
             database = Database(path)
             store = MaxConversationStore(database)
             store.get_or_create("u1", "c1")
-            store.transition("u1", "processing", force=True)
             store.begin_event("message:processing", "message_created")
+            store.transition(
+                "u1", "processing", force=True, event_key="message:processing"
+            )
             restarted = Database(path)
+            restarted.recover_interrupted_runtime()
             recovered = MaxConversationStore(restarted)
-            self.assertEqual(recovered.get("u1").state, "confirmation")
-            self.assertTrue(
+            self.assertEqual(recovered.get("u1").state, "processing")
+            self.assertFalse(
                 recovered.begin_event("message:processing", "message_created")
+            )
+
+    def test_restart_retries_event_that_never_reached_processing_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "restart-before-processing.sqlite3"
+            database = Database(path)
+            store = MaxConversationStore(database)
+            store.begin_event("message:before-processing", "message_created")
+            restarted = Database(path)
+            restarted.recover_interrupted_runtime()
+            recovered = MaxConversationStore(restarted)
+            self.assertTrue(
+                recovered.begin_event("message:before-processing", "message_created")
             )

@@ -50,6 +50,10 @@ class InvalidInputError(DemoError):
     pass
 
 
+class ImageTooLargeError(InvalidInputError):
+    pass
+
+
 class IntentAmbiguityError(InvalidInputError):
     """Raised before provider work when deterministic rules find a contradiction."""
 
@@ -63,6 +67,22 @@ class PolicyRejectedError(DemoError):
 
 
 class DeliveryError(DemoError):
+    pass
+
+
+class ProviderTimeoutError(DemoError):
+    pass
+
+
+class ProviderUnavailableError(DemoError):
+    pass
+
+
+class ProviderQuotaError(DemoError):
+    pass
+
+
+class StorageFailureError(DemoError):
     pass
 
 
