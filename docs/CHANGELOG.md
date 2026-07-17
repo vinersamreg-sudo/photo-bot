@@ -11,6 +11,7 @@
 - добавлены dry-run/execute retention/temp/orphan cleanup и `launch-status`;
 - сайт приведён к фактическому пути и ограничениям качества/оплаты;
 - regression suite расширен до 153 pytest checks, 145 unittest checks и 26 subtests без реальных OpenAI image calls.
+- production commit `7deb6c0`, migration v6, observe-only runtime and encrypted backup/restore/off-site workflow подтверждены; operational readiness зелёный, public readiness остаётся false.
 
 ## 16.07.2026 — Direct photo flow and AI Brain 2.0
 

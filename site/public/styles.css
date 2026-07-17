@@ -68,6 +68,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .trust-items i { width: 4px; height: 4px; border-radius: 50%; background: #aaa2a9; }
 
 .section { padding: clamp(86px, 11vw, 150px) 0; }
+.section, .final-cta, .site-footer { content-visibility: auto; contain-intrinsic-size: auto 900px; }
 .section-heading { max-width: 590px; }
 .section-heading h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: clamp(42px, 5vw, 68px); font-weight: 500; line-height: 1; letter-spacing: -.045em; }
 .section-heading > p:last-child { margin: 22px 0 0; color: var(--muted); font-size: 17px; }

@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-Not public-ready. Code is prepared for an owner validation and then a five-user closed pilot, but readiness is conditional on a green production deploy, real encrypted backup restore/off-site workflow, cleanup report and three owner E2E paths.
+Not public-ready. Production deploy, encrypted restore/off-site backup, cleanup and strict operational readiness are green. The next gate is controlled owner validation: three required paths and five consecutive successful full E2E runs before any five-user pilot.
 
 ## Automated evidence
 
