@@ -155,5 +155,5 @@
 - stateless fallback, branch isolation, depth/idle reset и cleanup tombstones;
 - CLI `provider-context-cleanup` и retention integration;
 - deploy принудительно оставляет три context flags выключенными;
-- 207/207 unittest tests, dependency check, secret scan, license audit и compile check;
+- 208/208 unittest tests, dependency check, secret scan, license audit и compile check;
 - comparison подготовлен, не запускался; реальные image requests: 0.

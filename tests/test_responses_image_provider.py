@@ -51,6 +51,15 @@ class MissingImageResponses(RawResponses):
         return SimpleNamespace(id="resp-1", output=[], usage={})
 
 
+class InvalidImageResponses(RawResponses):
+    def parse(self):
+        return SimpleNamespace(
+            id="resp-1",
+            output=[SimpleNamespace(type="image_generation_call", result="not-base64!@")],
+            usage={},
+        )
+
+
 class FailingResponses:
     def __init__(self, error: Exception) -> None:
         self.error = error
@@ -221,3 +230,18 @@ class ResponsesImageProviderTests(TestCase):
         )
         result = wrapper.edit(self.source, "Preserve identity.")
         self.assertEqual((stateless.calls, result.provider_mode), (1, "stateless"))
+
+    def test_17_invalid_image_payload_is_eligible_for_stateless_fallback(self) -> None:
+        stateless = FakeImageProvider()
+        wrapper = ContextAwareImageProvider(
+            stateless,
+            self._provider(InvalidImageResponses(self.image_bytes)),
+        )
+
+        result = wrapper.edit_with_context(
+            self.source, "Preserve identity.", self.context
+        )
+
+        self.assertEqual(stateless.calls, 1)
+        self.assertTrue(result.context_fallback_used)
+        self.assertEqual(result.context_fallback_reason, "ProviderUnavailableError")

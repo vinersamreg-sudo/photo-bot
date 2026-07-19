@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import io
 import mimetypes
 import time
@@ -127,8 +128,14 @@ class OpenAIImageProvider:
             usage = usage_object
         else:
             usage = {}
+        try:
+            image_bytes = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError, TypeError) as exc:
+            raise ProviderUnavailableError(
+                "Image provider returned invalid image bytes"
+            ) from exc
         return ProviderResult(
-            image_bytes=base64.b64decode(encoded),
+            image_bytes=image_bytes,
             request_id=getattr(response, "_request_id", None),
             usage=usage,
             retries=retries,
@@ -265,8 +272,14 @@ class OpenAIResponsesImageProvider:
         response_id = getattr(response, "id", None)
         if not response_id:
             raise ProviderUnavailableError("Responses image provider returned no response id")
+        try:
+            image_bytes = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError, TypeError) as exc:
+            raise ProviderUnavailableError(
+                "Responses image provider returned invalid image bytes"
+            ) from exc
         return ProviderResult(
-            image_bytes=base64.b64decode(encoded),
+            image_bytes=image_bytes,
             request_id=request_id,
             usage=usage,
             retries=retries,

@@ -32,7 +32,7 @@
 - исправлен ложный orphan: session `metadata.json` теперь считается referenced и не удаляется maintenance;
 - после deploy повторный аудит подтвердил orphan private files 0.
 
-Local/CI suite: 207 unittest tests, dependency check, secret scan, license audit и compile check зелёные.
+Local/CI suite: 208 unittest tests, dependency check, secret scan, license audit и compile check зелёные.
 
 ## Не готово
 
@@ -46,6 +46,6 @@ Local/CI suite: 207 unittest tests, dependency check, secret scan, license audit
 - production flow остаётся `/v1/images/edits`;
 - три OpenAI context flags по умолчанию и в deploy выключены;
 - реальные OpenAI image requests для этой работы: 0;
-- 207/207 локальных regression tests пройдены;
+- 208/208 локальных regression tests пройдены;
 - controlled comparison на 4 calls только подготовлен и требует разрешения;
 - визуальная польза, latency и стоимость пока не подтверждены.
