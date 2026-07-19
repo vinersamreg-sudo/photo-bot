@@ -1,14 +1,14 @@
 # Current State
 
-Актуально на 17.07.2026 после повторной owner-only visual validation.
+Актуально на 19.07.2026 после deploy optional provider context с feature flags off.
 
 ## Подтверждено в production
 
-- deployed commit `0f91627d5bd532da24e21c49c2047545a43044f6`;
+- deployed commit атомарно фиксируется workflow в `data/deployed_commit.txt`; фактический SHA проверяется post-deploy audit;
 - `photo-bot.service` и MAX polling здоровы; `MAX_POLL_OBSERVE_ONLY=true`;
 - owner allowlist настроен, pilot limit 0, пользовательские handlers выключены;
 - OpenAI `gpt-image-2` — единственный production image provider; router/composite/segmentation выключены;
-- SQLite migration v6, `PRAGMA quick_check=ok`, pending/processing attempts 0, processing dialogs 0, processing GalleryVersions 0;
+- SQLite migration v7, `PRAGMA quick_check=ok`, pending/processing attempts 0, processing dialogs 0, processing GalleryVersions 0;
 - owner dialog восстановлен в `main_menu`;
 - encrypted backup/restore/off-site lifecycle подтверждён; public launch readiness остаётся false.
 
