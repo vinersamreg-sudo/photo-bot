@@ -62,6 +62,8 @@ Provider sandbox/real-payment evidence, operation-key refund reconciliation, о�
 - `PIXORA_SITE_DEPLOY_ENABLED` остаётся false до исправления DNS, trusted TLS и внешнего smoke;
 - подтверждённый ИНН владельца и рабочий e-mail отсутствуют в source of truth и не должны выдумываться.
 
+Production bootstrap выполнен на целевом VPS: Nginx 1.24 и Certbot 2.9 установлены, `certbot.timer` включён, UFW разрешает 80/443 без изменения SSH, release `6da02e3f1137145fa067e771692c8b71d75cdbfe` опубликован read-only и выбран через `/opt/pixora-site/current`. Два полных внешних HTTP smoke через `--resolve` прошли; secret-like пути дают 404, Nginx не читает `/opt/photo-bot`, backend health остался зелёным. Сертификатов и listener 443 пока нет намеренно: DNS всё ещё ведёт на legacy host. GitHub variable `PIXORA_SITE_DEPLOY_ENABLED` не установлена.
+
 ## 19.07.2026 — optional provider context
 
 - официальный API-аудит Responses/image tool выполнен;

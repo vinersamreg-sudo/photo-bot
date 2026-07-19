@@ -11,6 +11,7 @@
 - Robokassa official moderation checklist and site/TLS/legal runbooks added;
 - no real payment and no OpenAI image request performed;
 - public HTTPS remains blocked until owner changes apex and `www` DNS from the legacy IP to the Hetzner VPS and supplies confirmed INN/contact data.
+- target VPS bootstrap completed: immutable read-only release, Nginx/Certbot, UFW 80/443, isolated public root and two direct-IP external smoke passes; HSTS/TLS and automatic site deploy remain off until DNS cutover.
 
 ## 19.07.2026 — Commercial MVP payment boundary
 

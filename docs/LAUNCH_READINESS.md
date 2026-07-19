@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-Not public-ready. Owner image E2E is complete, and commercial architecture plus the official static site are ready as candidates with all payment flags off. Public HTTPS is still blocked because apex and `www` resolve to the legacy host instead of `116.203.24.102`; owner Robokassa sandbox also needs the public ResultURL, confirmed seller INN/contact data, legal/fiscal review and a supported five-user pilot.
+Not public-ready. Owner image E2E is complete, and commercial architecture plus the official static site are ready as candidates with all payment flags off. The target VPS now serves the isolated site successfully over the HTTP bootstrap when addressed directly, but public HTTPS is still blocked because apex and `www` resolve to the legacy host instead of `116.203.24.102`. Owner Robokassa sandbox also needs the public ResultURL, confirmed seller INN/contact data, legal/fiscal review and a supported five-user pilot.
 
 ## Automated evidence
 
