@@ -50,6 +50,18 @@ Commercial candidate расширяет regression suite до 230 pytest tests �
 
 Provider sandbox/real-payment evidence, operation-key refund reconciliation, окончательные legal/fiscal documents/operator details, support process, public deep link/site launch, внешний пилот 5 пользователей и 10/20-user evidence. Long polling допустим для малого allowlisted pilot, но не для сотен публичных пользователей. До платного публичного запуска нужен visual quality gate для identity/scene drift.
 
+## 19.07.2026 — официальный сайт
+
+- `site/public` — единственная реализация сайта; второй frontend не создаётся;
+- MAX deep link проверен: `https://max.ru/se13572368_bot`;
+- публичная цена синхронизирована с backend: 49 ₽ за одну выбранную версию без watermark;
+- добавлены оферта, privacy, согласие, правила, оплата/возврат и контакты;
+- оплата и публичный запуск честно обозначены как недоступные в закрытом тестировании;
+- CI проверяет mobile/desktop Lighthouse, ссылки, SEO, legal consistency, отсутствие секретов и atomic deploy;
+- HTTPS launch заблокирован DNS: apex и `www` указывают на legacy IP `95.163.244.138`, а целевой VPS — `116.203.24.102`;
+- `PIXORA_SITE_DEPLOY_ENABLED` остаётся false до исправления DNS, trusted TLS и внешнего smoke;
+- подтверждённый ИНН владельца и рабочий e-mail отсутствуют в source of truth и не должны выдумываться.
+
 ## 19.07.2026 — optional provider context
 
 - официальный API-аудит Responses/image tool выполнен;

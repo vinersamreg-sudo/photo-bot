@@ -22,7 +22,7 @@ Confirm demand, quality, correction depth and unit economics. Only then reassess
 
 ## Public launch
 
-Blocked by verified payment/refund reconciliation, final legal/operator/fiscal details, deep link/site publication decision, support, abuse controls and evidence from prior gates. No multi-provider, Redis/Celery, admin panel or large asset catalog before measured need.
+Blocked by verified payment/refund reconciliation, final legal/operator/fiscal details, support, abuse controls and evidence from prior gates. The MAX deep link and site implementation exist, but public HTTPS additionally requires DNS apex/www → `116.203.24.102`, trusted TLS, external smoke and only then enabling the gated site workflow. No multi-provider, Redis/Celery, admin panel or large asset catalog before measured need.
 
 ## Optional provider-memory gate
 

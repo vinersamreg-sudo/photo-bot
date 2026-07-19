@@ -422,7 +422,7 @@ class MaxApplicationTests(TestCase):
                 "SELECT original_path FROM gallery_versions WHERE id=?",
                 (order["version_id"],),
             ).fetchone()[0])
-        amount = "149.00"
+        amount = "49.00"
         base = f"{amount}:{order['provider_invoice_id']}:two:Shp_order={order['public_token']}"
         signature = hashlib.sha256(base.encode()).hexdigest()
         webhook = payments.process_webhook({

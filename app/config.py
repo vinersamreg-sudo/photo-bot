@@ -53,7 +53,7 @@ class Settings:
     max_source_file_size_mb: int = 15
     max_prompt_length: int = 1500
     generation_timeout_seconds: int = 300
-    unlock_original_price_rub: int = 149
+    unlock_original_price_rub: int = 49
     payments_enabled: bool = False
     payment_provider: str = "disabled"
     payment_currency: str = "RUB"
@@ -432,7 +432,7 @@ def load_settings(
         max_source_file_size_mb=_positive_int(values, "MAX_SOURCE_FILE_SIZE_MB", 15),
         max_prompt_length=_positive_int(values, "MAX_PROMPT_LENGTH", 1500),
         generation_timeout_seconds=_positive_int(values, "GENERATION_TIMEOUT_SECONDS", 300),
-        unlock_original_price_rub=_positive_int(values, "UNLOCK_ORIGINAL_PRICE_RUB", 149),
+        unlock_original_price_rub=_positive_int(values, "UNLOCK_ORIGINAL_PRICE_RUB", 49),
         payments_enabled=payments_enabled,
         payment_provider=payment_provider,
         payment_currency=payment_currency,

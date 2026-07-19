@@ -111,6 +111,12 @@ Push в `main` запускает тесты и деплой через GitHub A
 
 Systemd hardening template находится в `ops/photo-bot.service`. Ежедневный workflow создаёт encrypted SQLite backup, реально восстанавливает его, копирует off-site и только затем выполняет cleanup. Код backup без зелёного restore workflow не считается доказательством готовности.
 
+## Official website
+
+Официальный продуктовый сайт находится в `site/public` и развёртывается отдельно от бота в `/opt/pixora-site`. Он честно описывает закрытое тестирование, ведёт в проверенный MAX-бот и фиксирует цену 49 ₽ за одну выбранную версию без водяного знака. Платежи остаются выключенными.
+
+Site workflow закрыт переменной production environment `PIXORA_SITE_DEPLOY_ENABLED`. Её нельзя включать до переноса DNS на Hetzner, выпуска доверенного TLS-сертификата, внешнего HTTPS smoke и подтверждения неизменности backend. Начинать с [site README](site/README.md), [production runbook](docs/SITE_PRODUCTION_RUNBOOK.md), [TLS runbook](docs/TLS_CERTIFICATE_RUNBOOK.md) и [Robokassa checklist](docs/ROBOKASSA_SITE_MODERATION_CHECKLIST.md).
+
 ## Документация
 
 Главный источник истины — [docs/PROJECT_BIBLE.md](docs/PROJECT_BIBLE.md). Текущее состояние, архитектура, процесс поставки и решения описаны в остальных файлах каталога `docs/`.

@@ -82,7 +82,7 @@ class PaymentTests(TestCase):
             self.settings, self.database, clock=self.clock
         )
 
-    def signed_callback(self, order, *, amount="149.00", token=None):
+    def signed_callback(self, order, *, amount="49.00", token=None):
         token = order.public_token if token is None else token
         base = (
             f"{amount}:{order.provider_invoice_id}:password-two:Shp_order={token}"
@@ -100,7 +100,7 @@ class PaymentTests(TestCase):
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
         query = parse_qs(urlparse(order.payment_url).query)
         self.assertEqual(query["MerchantLogin"], ["pixora-test"])
-        self.assertEqual(query["OutSum"], ["149.00"])
+        self.assertEqual(query["OutSum"], ["49.00"])
         self.assertEqual(query["InvId"], [str(order.provider_invoice_id)])
         self.assertEqual(query["IsTest"], ["1"])
         self.assertEqual(query["Shp_order"], [order.public_token])
@@ -149,7 +149,7 @@ class PaymentTests(TestCase):
     def test_forged_wrong_amount_token_unknown_and_expired_callbacks_fail_closed(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
         wrong_amount = self.service.process_webhook(
-            self.signed_callback(order, amount="148.00"), method="POST",
+            self.signed_callback(order, amount="48.00"), method="POST",
             path="/payments/robokassa/result",
         )
         self.assertFalse(wrong_amount.accepted)
@@ -162,7 +162,7 @@ class PaymentTests(TestCase):
         self.assertEqual(wrong_token.reason, "order_token_mismatch")
         self.clock.advance(minutes=31)
         expired = self.service.process_webhook(
-            self.signed_callback(order, amount="149.000000"), method="POST",
+            self.signed_callback(order, amount="49.000000"), method="POST",
             path="/payments/robokassa/result",
         )
         self.assertFalse(expired.accepted)
@@ -210,7 +210,7 @@ class PaymentTests(TestCase):
         self.service.provider = original_provider
 
         invoice = order.provider_invoice_id + 1000
-        amount = "149.00"
+        amount = "49.00"
         token = "unknown-order"
         base = f"{amount}:{invoice}:password-two:Shp_order={token}"
         unknown = self.service.process_webhook(
@@ -244,7 +244,7 @@ class PaymentTests(TestCase):
         metrics = cost_status(self.settings, self.database)
         status = payment_status(self.settings, self.database)
         self.assertEqual(metrics["paid_orders"], 1)
-        self.assertEqual(metrics["recognized_revenue_rub"], 149.0)
+        self.assertEqual(metrics["recognized_revenue_rub"], 49.0)
         self.assertNotIn(self.user_id, str(metrics))
         self.assertEqual(status["orders"]["paid"]["count"], 1)
         with self.database.read() as connection:
@@ -284,7 +284,7 @@ class PaymentTests(TestCase):
             self.signed_callback(order), method="POST",
             path="/payments/robokassa/result",
         )
-        refund = self.service.prepare_refund(order.id, 14900, "customer_request", "refund-1")
+        refund = self.service.prepare_refund(order.id, 4900, "customer_request", "refund-1")
         self.assertEqual(refund.status.value, "draft")
         history = self.service.refund_history(refund.id)
         self.assertEqual(history.refund.reason, "customer_request")
@@ -321,7 +321,7 @@ class PaymentTests(TestCase):
         refund_provider = FakeRefundProvider()
         self.service.provider = refund_provider
         object.__setattr__(self.settings, "payment_refunds_enabled", True)
-        refund = self.service.prepare_refund(order.id, 14900, "customer_request", "refund-1")
+        refund = self.service.prepare_refund(order.id, 4900, "customer_request", "refund-1")
         submitted = self.service.submit_refund(refund.id)
         self.assertEqual(submitted.status.value, "pending")
         finished = self.service.refresh_refund(refund.id)
@@ -340,7 +340,7 @@ class PaymentTests(TestCase):
                 (self.versions[0]["id"],),
             ).fetchone()[0]
         self.assertEqual(paid["status"], "refunded")
-        self.assertEqual(paid["refunded_amount_minor"], 14900)
+        self.assertEqual(paid["refunded_amount_minor"], 4900)
         self.assertEqual(receipt_types, ["payment", "refund"])
         self.assertEqual(version_unlock, "refunded")
         with self.assertRaisesRegex(PaymentError, "not paid"):
@@ -379,11 +379,11 @@ class RobokassaSignatureTests(TestCase):
             hash_algorithm="sha256", mode="production",
         )
         self.addCleanup(provider.close)
-        raw = "149.000000:42:two:Shp_order=opaque"
+        raw = "49.000000:42:two:Shp_order=opaque"
         values = {
-            "OutSum": "149.000000", "InvId": "42", "Shp_order": "opaque",
+            "OutSum": "49.000000", "InvId": "42", "Shp_order": "opaque",
             "SignatureValue": hashlib.sha256(raw.encode()).hexdigest(),
         }
         notification = provider.parse_notification(values)
         self.assertTrue(notification.signature_valid)
-        self.assertEqual(notification.amount_minor, 14900)
+        self.assertEqual(notification.amount_minor, 4900)

@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-Not public-ready. Owner image E2E is complete, and commercial architecture is ready for deployment with all payment flags off. The next gates are a fresh migration-v8 backup/restore/off-site cycle, owner Robokassa sandbox through public HTTPS ResultURL, legal/fiscal review and a supported five-user pilot.
+Not public-ready. Owner image E2E is complete, and commercial architecture plus the official static site are ready as candidates with all payment flags off. Public HTTPS is still blocked because apex and `www` resolve to the legacy host instead of `116.203.24.102`; owner Robokassa sandbox also needs the public ResultURL, confirmed seller INN/contact data, legal/fiscal review and a supported five-user pilot.
 
 ## Automated evidence
 
@@ -12,7 +12,7 @@ Not public-ready. Owner image E2E is complete, and commercial architecture is re
 
 - no Robokassa sandbox or real-payment evidence through the production HTTPS ResultURL;
 - automatic refund cannot run without a reconciled provider operation key;
-- legal drafts lack verified operator details and specialist review;
+- site legal pages contain confirmed name/status/city but still lack verified INN, working e-mail and specialist review;
 - no evidence yet for ≥80% first-result completion and <5% delivery failure;
 - estimated OpenAI cost is not reconciled to invoice;
 - support and abuse response are manual;
@@ -20,7 +20,7 @@ Not public-ready. Owner image E2E is complete, and commercial architecture is re
 
 ## Public blockers
 
-Final legal/consent/transborder/fiscal position, verified payment and refunds, working MAX deep link/site decision, support contacts/SLA, abuse controls, pilot evidence and scale decision. Public readiness must remain false until these are explicitly closed.
+Final legal/consent/transborder/fiscal position, verified payment and refunds, corrected DNS, trusted TLS, external HTTPS smoke, support contacts/SLA, abuse controls, pilot evidence and scale decision. The MAX deep link is verified, but public readiness must remain false until the remaining gates are explicitly closed.
 
 ## Legal checklist requiring specialist review
 
@@ -36,4 +36,4 @@ Final legal/consent/transborder/fiscal position, verified payment and refunds, w
 - fiscal receipt nomenclature/tax, Robokassa merchant agreement and accounting retention;
 - support channel, response expectations and data-deletion requests.
 
-Current in-bot and site documents are drafts. They are not a substitute for a qualified legal review.
+Current in-bot and site documents are engineering-prepared launch candidates. They are not a substitute for a qualified legal review.

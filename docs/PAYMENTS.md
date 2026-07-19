@@ -2,7 +2,7 @@
 
 ## Scope
 
-Pixora sells access to the original of one exact `GalleryVersion`. A successful payment does not unlock the user, the gallery item, sibling versions, future corrections or repeats. Price and currency come from server configuration; the current product price is 149 RUB.
+Pixora sells access to the original of one exact `GalleryVersion`. A successful payment does not unlock the user, the gallery item, sibling versions, future corrections or repeats. Price and currency come from server configuration; the current product price is 49 RUB.
 
 Real payments are fail-closed. Every deploy sets `PAYMENTS_ENABLED=false`, `PAYMENT_PROVIDER=disabled`, `PAYMENT_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, `ROBOKASSA_MODE=sandbox` and `ROBOKASSA_PRODUCTION_APPROVED=false`. Enabling production requires a separate owner decision, credentials, HTTPS reverse proxy, provider sandbox evidence, legal/fiscal review and a controlled real-payment smoke.
 
@@ -15,7 +15,7 @@ Real payments are fail-closed. Every deploy sets `PAYMENTS_ENABLED=false`, `PAYM
 ```bash
 python -m app.main payment-status
 python -m app.main payment-history --order-id <opaque-order-id>
-python -m app.main refund-prepare --order-id <opaque-order-id> --amount-rub 149.00 --reason customer_request --idempotency-key <opaque-key>
+python -m app.main refund-prepare --order-id <opaque-order-id> --amount-rub 49.00 --reason customer_request --idempotency-key <opaque-key>
 python -m app.main refund-submit --refund-id <opaque-refund-id>
 python -m app.main refund-status --refund-id <opaque-refund-id> [--refresh]
 python -m app.main refund-history --refund-id <opaque-refund-id>

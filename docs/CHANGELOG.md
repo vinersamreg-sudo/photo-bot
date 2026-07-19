@@ -1,5 +1,17 @@
 # Changelog
 
+## 19.07.2026 — Official Pixora website launch candidate
+
+- existing static site upgraded without creating a competing frontend;
+- verified MAX bot deep link and exact 49 ₽ one-version commercial boundary published;
+- offer, privacy, personal-data consent, terms, payment/refund and seller contacts added;
+- closed testing and disabled payment state disclosed without fake reviews or fake availability;
+- SEO, FAQ JSON-LD, security headers, mobile layout and dual Lighthouse budgets hardened;
+- atomic site release, rollback and HTTP bootstrap/HTTPS Nginx configs added;
+- Robokassa official moderation checklist and site/TLS/legal runbooks added;
+- no real payment and no OpenAI image request performed;
+- public HTTPS remains blocked until owner changes apex and `www` DNS from the legacy IP to the Hetzner VPS and supplies confirmed INN/contact data.
+
 ## 19.07.2026 — Commercial MVP payment boundary
 
 - migration v8 adds version-scoped payment orders, attempts, events, webhooks, receipts, audit and refunds;
@@ -10,7 +22,7 @@
 - result/Gallery actions are shorter; delete is recoverable through trash/restore;
 - added privacy-safe payment/pilot/storage/backup/cleanup/cost/health reports and commercial runbooks;
 - regression suite is 230 pytest tests plus 26 subtests; no real OpenAI image request or money movement was performed in this sprint;
-- Robokassa sandbox, public HTTPS ResultURL, legal/fiscal review and first real 149 RUB payment remain unverified gates.
+- Robokassa sandbox, public HTTPS ResultURL, legal/fiscal review and first real 49 RUB payment remain unverified gates.
 
 ## 17.07.2026 — Повторная owner-only visual validation
 

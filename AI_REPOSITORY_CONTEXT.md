@@ -32,7 +32,9 @@ Operations:
 - `python -m app.main backup-create --passphrase-stdin`
 - `python -m app.main backup-restore-test --backup NAME --passphrase-stdin`
 
-Migration v6 contains privacy-minimal product events; migration v8 contains commercial audit state. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment architecture is implemented but no provider sandbox/real-payment evidence or final legal approval exists. Site must not be published until MAX deep link and legal/public-launch decision are ready.
+Migration v6 contains privacy-minimal product events; migration v8 contains commercial audit state. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment architecture is implemented but no provider sandbox/real-payment evidence or final legal approval exists.
+
+Official website context (19.07.2026): `site/public` is the only site implementation. The verified MAX deep link is `https://max.ru/se13572368_bot`; the price is 49 ₽ for one selected watermark-free GalleryVersion; the public copy truthfully says closed testing and unavailable payment. Site deploy is separate and atomic under `/opt/pixora-site`. `PIXORA_SITE_DEPLOY_ENABLED` must remain false until DNS points to `116.203.24.102`, trusted TLS and external HTTPS smoke pass, and backend health is unchanged. Never invent the owner's INN or e-mail; these remain owner-supplied blockers for Robokassa moderation.
 
 Commercial operations: `payment-status`, `pilot-status`, `storage-status`, `backup-status`, `cleanup-status`, `cost-status`, `health-report`, refund prepare/submit/status and payment history. Read `docs/PAYMENTS.md`, `ROBOKASSA.md`, `PAYMENT_SECURITY.md` and `COMMERCIAL_LAUNCH.md`. Never enable production or accept real money without a separate owner authorization.
 

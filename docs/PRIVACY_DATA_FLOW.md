@@ -1,29 +1,58 @@
-# Privacy data flow
+# Privacy and data flow
 
-## Pixora-owned data
+## Поток одного запроса
 
-Pixora stores the uploaded source, private generated originals, watermarked
-previews, GalleryItem/Version lineage, SceneIntent/EditPlan, legal consent, quota
-and minimal operational telemetry under its documented retention rules.
+```text
+пользователь MAX
+  -> MAX Bot API (MAX user/chat ID, фото, инструкция)
+  -> photo-bot на Hetzner, Германия
+  -> private storage + SQLite
+  -> OpenAI image processing (фото + technical prompt)
+  -> private original
+  -> server-side watermarked preview
+  -> MAX Bot API -> пользователь
+```
 
-## Optional OpenAI context
+После запуска оплаты отдельный поток добавляет Robokassa: order ID, сумма, статус, callback и refund events. Полные реквизиты карты в Pixora не поступают.
 
-When all three disabled-by-default flags are explicitly enabled, the selected
-parent private original and compact English technical prompt are sent to OpenAI
-Responses with the image-generation tool. OpenAI may store the Response because
-the chain requires `store=true`. Pixora stores only response/conversation/request
-IDs, provider/model/mode, usage, duration, status, depth and error class.
+## Что сохраняет Pixora
 
-Pixora does not store raw OpenAI Response payloads, data URLs, image bytes in
-SQLite, API keys, signed URLs or free-form prompt text in provider-context
-telemetry. IDs are not shown to users or public reports.
+- opaque MAX user/chat relation;
+- исходное фото, prompt, result и version lineage;
+- legal consent version/time;
+- demo quota, Gallery, favorites, collections и current best;
+- минимальные operational/payment events без отдельной копии фото, полного prompt, токенов или банковских реквизитов.
 
-## Deletion
+## Сроки
 
-Gallery purge removes local image files and deletes or schedules deletion of
-provider Responses. Provider outage leaves a retryable tombstone without blocking
-local erasure. Successful cleanup clears provider IDs from attempts and versions.
-A user-erasure service hook exists, but the product still needs a public
-account/data deletion workflow and legally reviewed retention language.
+- demo/source/result — 30 дней;
+- paid GalleryItem — 180 дней;
+- trash — 30 дней;
+- temp — 24 часа;
+- provider context — отключён в production; если будет включён отдельно, default 30 дней;
+- финансовый audit хранится отдельно от изображений и требует финального юридического срока.
 
-Official details: [OpenAI — Your data](https://developers.openai.com/api/docs/guides/your-data).
+## Третьи стороны и местонахождение
+
+- MAX — transport;
+- Hetzner, Германия — runtime/private storage;
+- OpenAI — image provider;
+- GitHub — зашифрованный off-site backup artifact;
+- Robokassa — payment/fiscal flow после отдельного запуска.
+
+Эта схема включает трансграничную обработку. До публичного коммерческого запуска нужны юридическая проверка основания/уведомлений/локализации и подтверждение текстов политики и согласия.
+
+## Удаление и безопасность
+
+Работа удаляется сначала логически, затем maintenance cleanup физически после trash TTL. Cleanup dry-run по умолчанию, не следует symlink и запускается после подтверждённой backup copy. Секреты находятся только в `/opt/photo-bot/.env` mode 600 и GitHub Environment, сайт публикует только `site/public`.
+
+## Публичные документы
+
+- `/legal/privacy.html`;
+- `/legal/personal-data.html`;
+- `/legal/offer.html`;
+- `/legal/payment-refund.html`;
+- `/legal/terms.html`;
+- `/contacts.html`.
+
+Engineering не заменяет юридическую экспертизу. Подтверждённый ИНН и рабочий контакт владельца пока отсутствуют в безопасных источниках и не должны быть выдуманы.

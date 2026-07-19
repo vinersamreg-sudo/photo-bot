@@ -4,43 +4,48 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pixora AI — ИИ-обработка фото в MAX</title>
-  <meta name="description" content="Pixora AI помогает улучшить фотографию, заменить фон, создать деловой портрет или восстановить старое фото. Бесплатное демо с водяным знаком в боте MAX.">
+  <meta name="description" content="Pixora AI помогает улучшить фотографию, заменить фон или одежду, создать деловой портрет и восстановить старое фото. Бесплатное демо с водяным знаком в MAX.">
   <meta name="keywords" content="ИИ обработка фото, обработка фото ИИ, ИИ фото, нейрофото, улучшить фотографию, заменить фон, фото на памятник, деловой портрет ИИ">
   <meta name="theme-color" content="#f5f1eb">
   <meta name="robots" content="index,follow,max-image-preview:large">
   <link rel="canonical" href="https://pixoraai.ru/">
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/site.webmanifest">
   <link rel="preload" href="/assets/hero-840.webp" as="image" type="image/webp" fetchpriority="high">
   <link rel="stylesheet" href="/styles.css">
   <meta property="og:type" content="website">
   <meta property="og:locale" content="ru_RU">
+  <meta property="og:site_name" content="Pixora AI">
   <meta property="og:title" content="Pixora AI — фотография, которую хочется сохранить">
-  <meta property="og:description" content="Изменяем фотографии с помощью искусственного интеллекта. Бесплатное демо с водяным знаком в MAX.">
+  <meta property="og:description" content="Опишите желаемое изменение и сначала посмотрите бесплатное демо с водяным знаком в MAX.">
   <meta property="og:url" content="https://pixoraai.ru/">
   <meta property="og:image" content="https://pixoraai.ru/assets/hero-1120.webp">
+  <meta property="og:image:width" content="1120">
+  <meta property="og:image:height" content="1400">
   <meta name="twitter:card" content="summary_large_image">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "WebApplication",
-    "name": "Pixora AI",
-    "url": "https://pixoraai.ru/",
-    "applicationCategory": "PhotographyApplication",
-    "operatingSystem": "MAX",
-    "description": "ИИ-обработка фотографий: фон, одежда, деловой портрет, восстановление и улучшение качества.",
-    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "RUB", "description": "Бесплатный демонстрационный результат с водяным знаком"}
-  }
-  </script>
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "FAQPage",
-    "mainEntity": [
-      {"@type":"Question","name":"Сохраняются ли фотографии?","acceptedAnswer":{"@type":"Answer","text":"Фото и результаты сохраняются приватно для истории работ; пользователь сможет удалить их из сервиса."}},
-      {"@type":"Question","name":"Что такое бесплатное демо?","acceptedAnswer":{"@type":"Answer","text":"Это готовый уменьшенный результат с водяным знаком для оценки обработки до покупки оригинала."}},
-      {"@type":"Question","name":"Почему есть водяной знак?","acceptedAnswer":{"@type":"Answer","text":"Бесплатный пример предназначен для оценки результата; версия без водяного знака разблокируется отдельно."}},
-      {"@type":"Question","name":"Можно ли исправить результат?","acceptedAnswer":{"@type":"Answer","text":"Да, пользователь может оставить конкретное замечание и получить новую версию."}},
-      {"@type":"Question","name":"Как оплачивается?","acceptedAnswer":{"@type":"Answer","text":"Оплата пока не подключена. До запуска стоимость будет показана до покупки, без подписки и автоматических списаний."}}
+    "@graph": [
+      {
+        "@type": "WebApplication",
+        "name": "Pixora AI",
+        "url": "https://pixoraai.ru/",
+        "applicationCategory": "PhotographyApplication",
+        "operatingSystem": "MAX",
+        "description": "ИИ-обработка фотографий: замена фона и одежды, деловой портрет, восстановление и улучшение качества.",
+        "isAccessibleForFree": true
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {"@type":"Question","name":"Сохраняются ли фотографии?","acceptedAnswer":{"@type":"Answer","text":"Исходные фотографии и демо-работы хранятся в приватном хранилище до 30 дней. Оплаченная версия хранится до 180 дней. Работу можно удалить через MAX; после удаления она находится в корзине до 30 дней."}},
+          {"@type":"Question","name":"Что такое бесплатное демо?","acceptedAnswer":{"@type":"Answer","text":"Это готовый уменьшенный результат с водяным знаком для оценки обработки до покупки выбранной версии."}},
+          {"@type":"Question","name":"Почему есть водяной знак?","acceptedAnswer":{"@type":"Answer","text":"Демо позволяет оценить результат бесплатно. После запуска оплаты оригинал выбранной версии без водяного знака будет доступен за 49 рублей."}},
+          {"@type":"Question","name":"Можно ли исправить результат?","acceptedAnswer":{"@type":"Answer","text":"Да. Можно описать конкретное исправление и получить новую версию. Результат создаётся автоматически, поэтому точное сохранение каждой детали не гарантируется."}},
+          {"@type":"Question","name":"Как оплачивается?","acceptedAnswer":{"@type":"Answer","text":"Оплата пока отключена на время закрытого тестирования и модерации. После запуска 49 рублей будут разблокировать оригинал одной выбранной версии; подписки и автоматических списаний нет."}}
+        ]
+      }
     ]
   }
   </script>
@@ -59,9 +64,7 @@
         <a href="#how">Как работает</a>
         <a href="#faq">Вопросы</a>
       </nav>
-      <a class="button button-small max-link" href="https://max.ru/" target="_blank" rel="noopener noreferrer" data-max-cta="header">
-        Открыть в MAX <span aria-hidden="true">↗</span>
-      </a>
+      <a class="button button-small max-link" href="https://max.ru/se13572368_bot" target="_blank" rel="noopener noreferrer" data-max-cta="header">Открыть в MAX <span aria-hidden="true">↗</span></a>
     </div>
   </header>
 
@@ -69,34 +72,29 @@
     <section class="hero" id="top">
       <div class="shell hero-grid">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="status-dot"></span> Фотографии, которые нравятся вам</p>
+          <p class="eyebrow"><span class="status-dot status-dot-closed"></span> Закрытое тестирование</p>
           <h1>Pixora AI</h1>
           <p class="hero-promise">Сделаем фотографию такой, какой вы хотите её видеть.</p>
           <p class="hero-description">Изменяем фотографии с помощью искусственного интеллекта. Фон, одежда, деловой портрет, восстановление старых фото, улучшение качества и многое другое.</p>
           <div class="hero-actions">
-            <a class="button button-primary max-link" href="https://max.ru/" target="_blank" rel="noopener noreferrer" data-max-cta="hero">
-              Открыть бота в MAX <span aria-hidden="true">↗</span>
-            </a>
+            <a class="button button-primary max-link" href="https://max.ru/se13572368_bot" target="_blank" rel="noopener noreferrer" data-max-cta="hero">Открыть Pixora в MAX <span aria-hidden="true">↗</span></a>
             <a class="button button-quiet" href="#examples">Посмотреть примеры <span aria-hidden="true">↓</span></a>
           </div>
-          <p class="hero-note"><span aria-hidden="true">✓</span> Демо с водяным знаком · без подписки</p>
+          <p class="hero-note"><span aria-hidden="true">✓</span> Демо с водяным знаком · без подписки · доступ пока только участникам тестирования</p>
         </div>
-        <div class="hero-visual" aria-label="Пример естественного портрета Pixora AI">
+        <div class="hero-visual" aria-label="Синтетический пример естественного портрета Pixora AI">
           <picture>
             <source srcset="/assets/hero-480.webp 480w, /assets/hero-840.webp 840w, /assets/hero-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 46vw">
-            <img src="/assets/hero-840.webp" width="840" height="1050" alt="Естественный студийный портрет, созданный как пример Pixora AI" fetchpriority="high" loading="eager" decoding="sync">
+            <img src="/assets/hero-840.webp" width="840" height="1050" alt="Синтетический студийный портрет — пример Pixora AI" fetchpriority="high" loading="eager" decoding="sync">
           </picture>
-          <div class="visual-caption"><span class="spark" aria-hidden="true">✦</span><span>Естественный результат<br><small>без лишней ретуши</small></span></div>
+          <div class="visual-caption"><span class="spark" aria-hidden="true">✦</span><span>Естественный результат<br><small>пример создан для Pixora</small></span></div>
         </div>
       </div>
     </section>
 
     <section class="trust-strip" aria-label="Ключевые особенности">
       <div class="shell trust-items">
-        <span>Демо с водяным знаком</span><i></i>
-        <span>Без подписки</span><i></i>
-        <span>Работает в MAX</span><i></i>
-        <span>История версий в MAX</span>
+        <span>Демо с водяным знаком</span><i></i><span>49 ₽ за выбранный оригинал</span><i></i><span>Без подписки</span><i></i><span>История версий в MAX</span>
       </div>
     </section>
 
@@ -104,107 +102,91 @@
       <div class="shell">
         <div class="section-heading split-heading reveal">
           <div><p class="eyebrow">Возможности</p><h2>Одна фотография.<br>Много вариантов.</h2></div>
-          <p>Загрузите фотографию и опишите своими словами, что хочется изменить. Готовые идеи — дополнительный раздел.</p>
+          <p>Загрузите фотографию и обычной фразой опишите желаемое изменение. Результат создаётся автоматически и может затронуть детали — сначала вы всегда видите демо.</p>
         </div>
         <div class="capability-grid">
-          <article class="capability featured reveal"><span class="cap-number">01</span><h3>Деловое фото</h3><p>Аккуратный профессиональный портрет для резюме и рабочих профилей.</p></article>
-          <article class="capability reveal"><span class="cap-number">02</span><h3>Замена фона</h3><p>Новый фон без повторной съёмки.</p></article>
-          <article class="capability reveal"><span class="cap-number">03</span><h3>Улучшение качества</h3><p>Чётче, чище и естественнее.</p></article>
-          <article class="capability reveal"><span class="cap-number">04</span><h3>Восстановление старых фотографий</h3><p>Бережно возвращаем детали снимка.</p></article>
+          <article class="capability featured reveal"><span class="cap-number">01</span><h3>Деловое фото</h3><p>Профессиональный портрет для резюме и рабочих профилей.</p></article>
+          <article class="capability reveal"><span class="cap-number">02</span><h3>Замена фона</h3><p>Новое окружение без повторной съёмки.</p></article>
+          <article class="capability reveal"><span class="cap-number">03</span><h3>Улучшение качества</h3><p>Больше чёткости и деталей.</p></article>
+          <article class="capability reveal"><span class="cap-number">04</span><h3>Восстановление старых фотографий</h3><p>Бережное восстановление повреждений и деталей.</p></article>
           <article class="capability reveal"><span class="cap-number">05</span><h3>Фото на памятник</h3><p>Деликатная подготовка портрета.</p></article>
-          <article class="capability reveal"><span class="cap-number">06</span><h3>ИИ-фотосессия</h3><p>Новый образ из одной фотографии.</p></article>
+          <article class="capability reveal"><span class="cap-number">06</span><h3>ИИ-фотосессия</h3><p>Новый реалистичный образ из одной фотографии.</p></article>
           <article class="capability reveal"><span class="cap-number">07</span><h3>Изменение одежды</h3><p>Примерьте подходящий стиль.</p></article>
-          <article class="capability reveal"><span class="cap-number">08</span><h3>Удаление объектов</h3><p>Убираем лишнее из кадра.</p></article>
-          <article class="capability reveal"><span class="cap-number">09</span><h3>Добавление объектов</h3><p>Дополняем фотографию деталями.</p></article>
-          <article class="capability reveal"><span class="cap-number">10</span><h3>Замена причёски</h3><p>Посмотрите на себя по-новому.</p></article>
-          <article class="capability custom reveal"><span class="cap-number">11</span><h3>Свой сценарий</h3><p>Просто напишите, какой результат хотите получить.</p><a href="https://max.ru/" class="text-link max-link" target="_blank" rel="noopener noreferrer" data-max-cta="scenario">Попробовать в MAX <span aria-hidden="true">→</span></a></article>
+          <article class="capability reveal"><span class="cap-number">08</span><h3>Удаление объектов</h3><p>Уберите лишнее из кадра.</p></article>
+          <article class="capability reveal"><span class="cap-number">09</span><h3>Добавление объектов</h3><p>Дополните фотографию нужными деталями.</p></article>
+          <article class="capability reveal"><span class="cap-number">10</span><h3>Замена причёски</h3><p>Посмотрите на новый образ до реальных изменений.</p></article>
+          <article class="capability custom reveal"><span class="cap-number">11</span><h3>Свой сценарий</h3><p>Напишите своими словами, какой результат хотите получить.</p><a href="https://max.ru/se13572368_bot" class="text-link max-link" target="_blank" rel="noopener noreferrer" data-max-cta="scenario">Открыть в MAX <span aria-hidden="true">→</span></a></article>
         </div>
       </div>
     </section>
 
     <section class="section examples-section" id="examples">
       <div class="shell">
-        <div class="section-heading centered reveal"><p class="eyebrow">До и после</p><h2>Результат говорит сам за себя</h2><p>Все изображения ниже созданы специально для Pixora. Мы не используем фотографии клиентов без разрешения.</p></div>
+        <div class="section-heading centered reveal"><p class="eyebrow">До и после</p><h2>Сначала посмотрите результат</h2><p>Примеры созданы специально для Pixora с вымышленными взрослыми людьми. Пользовательские фотографии без разрешения не публикуются.</p></div>
         <div class="examples-grid">
-          <article class="example-card example-wide reveal">
-            <div class="comparison-image">
-              <picture><source srcset="/assets/business-640.webp 640w, /assets/business-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 60vw"><img src="/assets/business-1120.webp" width="1120" height="747" alt="До и после: обычное фото превращено в деловой портрет" loading="lazy" decoding="async"></picture>
-              <span class="before-label">До</span><span class="after-label">После</span><span class="divider" aria-hidden="true"></span>
-            </div><div class="example-copy"><span>Деловой портрет</span><p>Изменили одежду и свет, стараясь сохранить узнаваемость.</p></div>
-          </article>
-          <article class="example-card reveal">
-            <div class="comparison-image">
-              <picture><source srcset="/assets/restore-640.webp 640w, /assets/restore-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 46vw"><img src="/assets/restore-1120.webp" width="1120" height="747" alt="До и после: восстановление старой чёрно-белой фотографии" loading="lazy" decoding="async"></picture>
-              <span class="before-label">До</span><span class="after-label">После</span><span class="divider" aria-hidden="true"></span>
-            </div><div class="example-copy"><span>Восстановление</span><p>Вернули снимку детали и аккуратный контраст.</p></div>
-          </article>
-          <article class="example-card reveal">
-            <div class="comparison-image">
-              <picture><source srcset="/assets/background-640.webp 640w, /assets/background-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 46vw"><img src="/assets/background-1120.webp" width="1120" height="747" alt="До и после: замена домашнего фона на спокойный интерьер" loading="lazy" decoding="async"></picture>
-              <span class="before-label">До</span><span class="after-label">После</span><span class="divider" aria-hidden="true"></span>
-            </div><div class="example-copy"><span>Замена фона</span><p>Изменили окружение. Как и любая AI-обработка, результат может затронуть детали.</p></div>
-          </article>
+          <article class="example-card example-wide reveal"><div class="comparison-image"><picture><source srcset="/assets/business-640.webp 640w, /assets/business-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 60vw"><img src="/assets/business-1120.webp" width="1120" height="747" alt="До и после: деловой портрет вымышленного взрослого человека" loading="lazy" decoding="async"></picture><span class="before-label">До</span><span class="after-label">После</span><span class="divider" aria-hidden="true"></span></div><div class="example-copy"><span>Деловой портрет</span><p>Изменили одежду и свет. Точное сохранение личности при AI-обработке не гарантируется.</p></div></article>
+          <article class="example-card reveal"><div class="comparison-image"><picture><source srcset="/assets/restore-640.webp 640w, /assets/restore-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 46vw"><img src="/assets/restore-1120.webp" width="1120" height="747" alt="До и после: восстановление синтетической старой фотографии" loading="lazy" decoding="async"></picture><span class="before-label">До</span><span class="after-label">После</span><span class="divider" aria-hidden="true"></span></div><div class="example-copy"><span>Восстановление</span><p>Вернули детали и аккуратный контраст.</p></div></article>
+          <article class="example-card reveal"><div class="comparison-image"><picture><source srcset="/assets/background-640.webp 640w, /assets/background-1120.webp 1120w" type="image/webp" sizes="(max-width: 760px) 94vw, 46vw"><img src="/assets/background-1120.webp" width="1120" height="747" alt="До и после: замена фона у вымышленного взрослого человека" loading="lazy" decoding="async"></picture><span class="before-label">До</span><span class="after-label">После</span><span class="divider" aria-hidden="true"></span></div><div class="example-copy"><span>Замена фона</span><p>Изменили окружение; AI мог затронуть отдельные детали.</p></div></article>
         </div>
       </div>
     </section>
 
     <section class="section benefits-section">
       <div class="shell benefits-grid">
-        <div class="section-heading reveal"><p class="eyebrow">Почему Pixora</p><h2>Всё, что нужно.<br>Ничего лишнего.</h2><p>Вы видите результат до покупки и решаете, подходит ли он вам.</p><a class="button button-dark max-link" href="https://max.ru/" target="_blank" rel="noopener noreferrer" data-max-cta="benefits">Открыть Pixora в MAX <span aria-hidden="true">↗</span></a></div>
-        <ul class="benefit-list">
-          <li class="reveal"><span>✓</span><div><strong>Первая обработка бесплатно</strong><p>Получите демонстрационный результат с водяным знаком.</p></div></li>
-          <li class="reveal"><span>✓</span><div><strong>Бережная обработка</strong><p>Стараемся сохранять узнаваемость, но AI может изменить лицо или другие детали.</p></div></li>
-          <li class="reveal"><span>✓</span><div><strong>История всех работ</strong><p>Результаты и их версии собраны в одном месте.</p></div></li>
-          <li class="reveal"><span>✓</span><div><strong>Исправление результата</strong><p>Оставьте конкретное замечание и получите новую версию.</p></div></li>
-          <li class="reveal"><span>✓</span><div><strong>Прозрачная стоимость</strong><p>Цена будет показана до разблокировки готового оригинала.</p></div></li>
-          <li class="reveal"><span>✓</span><div><strong>Без подписки</strong><p>После подключения оплаты можно будет выбрать конкретный результат.</p></div></li>
-          <li class="reveal"><span>✓</span><div><strong>Приватное хранение</strong><p>Работы не публикуются и могут быть удалены из сервиса.</p></div></li>
+        <div class="section-heading reveal"><p class="eyebrow">Почему Pixora</p><h2>Платите только за выбранный результат.</h2><p>Сначала демо, потом решение. Во время закрытого тестирования оплата отключена.</p><a class="button button-dark max-link" href="https://max.ru/se13572368_bot" target="_blank" rel="noopener noreferrer" data-max-cta="benefits">Открыть Pixora в MAX <span aria-hidden="true">↗</span></a></div>
+        <ul class="benefit-list reveal">
+          <li><span>✓</span><div><strong>Первая обработка бесплатно</strong><p>Демо приходит с водяным знаком для оценки результата.</p></div></li>
+          <li><span>✓</span><div><strong>Сохранение узнаваемости — приоритет</strong><p>Мы просим систему сохранять человека, но не обещаем неизменность каждой детали.</p></div></li>
+          <li><span>✓</span><div><strong>История всех работ</strong><p>Версии и выбранная основная работа доступны в MAX в пределах срока хранения.</p></div></li>
+          <li><span>✓</span><div><strong>Исправление результата</strong><p>Можно описать одно конкретное изменение и получить следующую версию.</p></div></li>
+          <li><span>✓</span><div><strong>Прозрачная стоимость</strong><p>49 ₽ за оригинал одной выбранной версии без водяного знака после запуска оплаты.</p></div></li>
+          <li><span>✓</span><div><strong>Без подписки</strong><p>Нет регулярных или автоматических списаний.</p></div></li>
+          <li><span>✓</span><div><strong>Приватное хранение</strong><p>Файлы не публикуются и удаляются по правилам сервиса.</p></div></li>
         </ul>
       </div>
     </section>
 
     <section class="section how-section" id="how">
-      <div class="shell">
-        <div class="section-heading centered reveal"><p class="eyebrow">Как работает</p><h2>От идеи до готового фото</h2><p>Четыре простых шага прямо в MAX.</p></div>
-        <ol class="steps">
-          <li class="reveal"><span>1</span><div><h3>Загрузите фото</h3><p>Подойдёт обычная фотография хорошего качества.</p></div></li>
-          <li class="reveal"><span>2</span><div><h3>Опишите изменение</h3><p>Напишите обычной фразой, какой результат хотите получить.</p></div></li>
-          <li class="reveal"><span>3</span><div><h3>Получите бесплатный пример</h3><p>Посмотрите результат с водяным знаком.</p></div></li>
-          <li class="reveal"><span>4</span><div><h3>Исправьте или сохраните</h3><p>Создайте новую версию или откройте результат в «Моих работах».</p></div></li>
+      <div class="shell"><div class="section-heading centered reveal"><p class="eyebrow">Как работает</p><h2>Фото → описание → результат</h2></div>
+        <ol class="steps reveal">
+          <li><span>01</span><div><h3>Загрузите фото</h3><p>JPEG, PNG или WEBP с понятным изображением.</p></div></li>
+          <li><span>02</span><div><h3>Опишите изменение</h3><p>Одно конкретное изменение обычной фразой.</p></div></li>
+          <li><span>03</span><div><h3>Получите демо</h3><p>Обычно обработка занимает 1–3 минуты, но при нагрузке может быть дольше.</p></div></li>
+          <li><span>04</span><div><h3>Выберите версию</h3><p>После запуска оплаты разблокируйте её оригинал за 49 ₽.</p></div></li>
         </ol>
       </div>
     </section>
 
     <section class="section faq-section" id="faq">
       <div class="shell faq-grid">
-        <div class="section-heading reveal"><p class="eyebrow">FAQ</p><h2>Частые вопросы</h2><p>Коротко о фотографиях, демо и оплате.</p></div>
-        <div class="faq-list">
-          <details class="reveal"><summary>Сохраняются ли фотографии?<span>+</span></summary><p>Фото и результаты сохраняются приватно, чтобы вы могли вернуться к истории работ. Их можно удалить из сервиса. Сроки хранения будут закреплены в политике до публичного запуска.</p></details>
-          <details class="reveal"><summary>Что такое бесплатное демо?<span>+</span></summary><p>Это готовый уменьшенный результат с водяным знаком. Он позволяет оценить обработку до решения о покупке оригинала.</p></details>
-          <details class="reveal"><summary>Почему есть водяной знак?<span>+</span></summary><p>Бесплатный пример предназначен для оценки результата. Версия без водяного знака открывается отдельно после подтверждённой оплаты.</p></details>
-          <details class="reveal"><summary>Можно ли исправить результат?<span>+</span></summary><p>Да. Напишите одно конкретное замечание — Pixora создаст новую версию, сохранив предыдущую в истории.</p></details>
-          <details class="reveal"><summary>Как оплачивается?<span>+</span></summary><p>Оплата пока не подключена. До её запуска стоимость будет показана до покупки, без подписки и автоматических списаний.</p></details>
+        <div class="section-heading reveal"><p class="eyebrow">Вопросы</p><h2>Коротко о важном.</h2></div>
+        <div class="faq-list reveal">
+          <details><summary>Сохраняются ли фотографии?<span>+</span></summary><p>Исходные фото и демо-работы хранятся приватно до 30 дней, оплаченная версия — до 180 дней. После удаления работа остаётся в корзине до 30 дней, затем очищается.</p></details>
+          <details><summary>Что такое бесплатное демо?<span>+</span></summary><p>Это уменьшенный готовый результат с водяным знаком. Он позволяет оценить обработку до покупки выбранного оригинала.</p></details>
+          <details><summary>Почему есть водяной знак?<span>+</span></summary><p>Он отделяет бесплатное демо от оригинала. После запуска оплаты оригинал одной выбранной версии без знака будет стоить 49 ₽.</p></details>
+          <details><summary>Можно ли исправить результат?<span>+</span></summary><p>Да. Напишите конкретное исправление — Pixora создаст следующую версию на основе выбранной работы. AI может затронуть детали даже при запрете.</p></details>
+          <details><summary>Как оплачивается?<span>+</span></summary><p>Сейчас никак: оплата отключена до завершения закрытого тестирования и модерации Robokassa. Затем 49 ₽ будут разблокировать оригинал одной выбранной версии. Подписки нет.</p></details>
+          <details><summary>Кто оказывает услугу?<span>+</span></summary><p>Самозанятый Нурмухамитов Винер Табризович, плательщик налога на профессиональный доход, г. Самара. Контакт для обращений — MAX.</p></details>
         </div>
       </div>
     </section>
 
     <section class="final-cta">
-      <div class="shell final-cta-inner reveal">
-        <div><p class="eyebrow">Первый шаг бесплатный</p><h2>Покажите, какой должна быть ваша фотография.</h2></div>
-        <div><a class="button button-light max-link" href="https://max.ru/" target="_blank" rel="noopener noreferrer" data-max-cta="footer">Открыть бота в MAX <span aria-hidden="true">↗</span></a><p>Бесплатное демо · без подписки</p></div>
-      </div>
+      <div class="shell final-cta-inner"><div><p class="eyebrow">Закрытый пилот</p><h2>Посмотрите Pixora в MAX. Новые пользователи пока получают сообщение о закрытом тестировании.</h2></div><div><a class="button button-light max-link" href="https://max.ru/se13572368_bot" target="_blank" rel="noopener noreferrer" data-max-cta="footer">Открыть в MAX <span aria-hidden="true">↗</span></a><p>Платежи отключены · без подписки</p></div></div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <div class="shell footer-grid">
-      <div><a class="brand footer-brand" href="#top"><svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M11 8h10.7C28 8 32 11.7 32 17.2s-4 9.2-10.3 9.2H17V33h-6V8Zm6 5v8.4h4.3c2.9 0 4.7-1.5 4.7-4.2S24.2 13 21.3 13H17Z"/></svg><span>Pixora AI</span></a><p>Фотографии, которые хочется сохранить.</p></div>
-      <nav aria-label="Юридические документы"><a href="/legal/privacy.html">Политика</a><a href="/legal/offer.html">Оферта</a><a href="/legal/personal-data.html">Обработка персональных данных</a></nav>
-      <div class="footer-contact"><span>Контакты</span><a href="mailto:hello@pixoraai.ru">hello@pixoraai.ru</a><a href="https://max.ru/" target="_blank" rel="noopener noreferrer">MAX ↗</a></div>
+    <div class="shell">
+      <div class="footer-grid">
+        <div class="footer-brand"><a class="brand" href="#top"><svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M11 8h10.7C28 8 32 11.7 32 17.2s-4 9.2-10.3 9.2H17V33h-6V8Zm6 5v8.4h4.3c2.9 0 4.7-1.5 4.7-4.2S24.2 13 21.3 13H17Z"/></svg><span>Pixora AI</span></a><p>ИИ-редактор фотографий в MAX.</p></div>
+        <nav aria-label="Юридические документы"><a href="/legal/offer.html">Публичная оферта</a><a href="/legal/privacy.html">Политика обработки персональных данных</a><a href="/legal/personal-data.html">Согласие на обработку данных</a><a href="/legal/payment-refund.html">Оплата и возврат</a><a href="/legal/terms.html">Правила сервиса</a></nav>
+        <div class="footer-contact"><span>Исполнитель</span><p>Самозанятый<br>Нурмухамитов Винер Табризович<br>НПД · г. Самара</p><a href="/contacts.html">Контакты и реквизиты</a><a href="https://max.ru/se13572368_bot" target="_blank" rel="noopener noreferrer">Написать в MAX ↗</a></div>
+      </div>
+      <div class="footer-bottom"><span>© <span data-year>2026</span> Pixora AI</span><span>Версия документов: 1.0 · 19.07.2026</span></div>
     </div>
-    <div class="shell footer-bottom"><span>© <span data-year>2026</span> Pixora AI</span><span>Публичный запуск готовится</span></div>
   </footer>
-
-  <div class="mobile-cta" aria-label="Быстрый переход в MAX"><a class="button button-primary max-link" href="https://max.ru/" target="_blank" rel="noopener noreferrer" data-max-cta="mobile">Открыть бота в MAX <span aria-hidden="true">↗</span></a></div>
+  <div class="mobile-cta" aria-label="Быстрый переход в MAX"><a class="button button-primary max-link" href="https://max.ru/se13572368_bot" target="_blank" rel="noopener noreferrer" data-max-cta="mobile">Открыть Pixora в MAX <span aria-hidden="true">↗</span></a></div>
+  <script src="/app.js" defer></script>
 </body>
 </html>

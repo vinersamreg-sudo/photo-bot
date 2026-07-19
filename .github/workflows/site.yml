@@ -20,6 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Stamp artifact version
+        shell: bash
+        run: printf '%s\n' "$GITHUB_SHA" > site/public/version.txt
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -55,10 +58,12 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: pixora-lighthouse-${{ github.sha }}
-          path: site/.lighthouse/report.json
+          path: site/.lighthouse/report-*.json
           if-no-files-found: warn
       - name: Enforce Lighthouse budgets
-        run: python site/scripts/assert_lighthouse.py site/.lighthouse/report.json
+        run: |
+          python site/scripts/assert_lighthouse.py site/.lighthouse/report-mobile.json
+          python site/scripts/assert_lighthouse.py site/.lighthouse/report-desktop.json
       - uses: actions/upload-artifact@v6
         with:
           name: pixora-site-${{ github.sha }}
@@ -72,6 +77,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v7
+      - name: Stamp release version
+        run: printf '%s\n' "$GITHUB_SHA" > site/public/version.txt
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
@@ -90,11 +97,34 @@ jobs:
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
           RELEASE="/opt/pixora-site/releases/$GITHUB_SHA"
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$RELEASE'"
-          rsync -az --delete -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$RELEASE/"
+          STAGING="/opt/pixora-site/releases/.${GITHUB_SHA}.staging"
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
-            test -f '$RELEASE/index.html'
-            test -f '$RELEASE/styles.css'
-            ln -sfn '$RELEASE' /opt/pixora-site/current.tmp
-            mv -Tf /opt/pixora-site/current.tmp /opt/pixora-site/current
-            printf '%s\n' '$GITHUB_SHA' > /opt/pixora-site/deployed_commit.txt"
+            mkdir -p /opt/pixora-site/releases /opt/pixora-site/shared/acme
+            rm -rf '$STAGING'
+            mkdir '$STAGING'"
+          rsync -az --delete --chmod=D755,F644 -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$STAGING/"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
+            BASE=/opt/pixora-site
+            test -f '$STAGING/index.html'
+            test -f '$STAGING/styles.css'
+            test \"\$(cat '$STAGING/version.txt')\" = '$GITHUB_SHA'
+            test -z \"\$(find '$STAGING' -type l -print -quit)\"
+            test -z \"\$(find '$STAGING' -type f \\( -name '.env' -o -name '*.sqlite*' -o -name '*.log' -o -name '*.map' -o -name '*.bak' \\) -print -quit)\"
+            chmod -R a-w '$STAGING'
+            if test -d '$RELEASE'; then
+              diff -qr '$STAGING' '$RELEASE' >/dev/null
+              chmod -R u+w '$STAGING'
+              rm -rf '$STAGING'
+            else
+              mv '$STAGING' '$RELEASE'
+            fi
+            OLD=\"\$(readlink -f \"\$BASE/current\" 2>/dev/null || true)\"
+            case \"\$OLD\" in \"\$BASE\"/releases/*) ln -sfn \"\$OLD\" \"\$BASE/previous.tmp\"; mv -Tf \"\$BASE/previous.tmp\" \"\$BASE/previous\" ;; '') ;; *) echo 'Unsafe current target' >&2; exit 1 ;; esac
+            ln -sfn '$RELEASE' \"\$BASE/current.tmp\"
+            mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"
+            printf '%s\n' '$GITHUB_SHA' > \"\$BASE/deployed_commit.txt\"
+            if ! curl --fail --silent --show-error --resolve pixoraai.ru:443:127.0.0.1 https://pixoraai.ru/ >/dev/null; then
+              if test -n \"\$OLD\"; then ln -sfn \"\$OLD\" \"\$BASE/current.tmp\"; mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"; fi
+              echo 'Release smoke failed; current restored' >&2
+              exit 1
+            fi"

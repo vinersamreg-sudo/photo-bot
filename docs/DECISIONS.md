@@ -1,5 +1,13 @@
 # Decisions
 
+## ADR-039 — Site deploy изолирован и открывается только после HTTPS gate
+
+Принято 19.07.2026. Официальный сайт публикуется из `site/public` в отдельные immutable releases `/opt/pixora-site/releases/<sha>` с atomic symlink и rollback. Nginx не имеет доступа к `/opt/photo-bot`. GitHub deploy остаётся выключенным, пока DNS, trusted TLS, внешний smoke и неизменность backend не доказаны.
+
+## ADR-038 — Публичная цена равна 49 ₽ за одну выбранную версию
+
+Принято 19.07.2026. Покупка относится только к одной выбранной `GalleryVersion` без водяного знака, не является подпиской и не разблокирует соседние версии. Пока платёжный контур не прошёл sandbox, модерацию и отдельное разрешение владельца, сайт не показывает кнопку оплаты и честно сообщает о закрытом тестировании.
+
 ## ADR-037 — Real payments are a separately approved rollout
 
 Принято 19.07.2026. Commercial code does not authorize money movement. Deploy всегда принудительно ставит payments/provider/webhook/refunds в disabled/sandbox и `ROBOKASSA_PRODUCTION_APPROVED=false`. Production mode требует отдельного решения владельца после sandbox, HTTPS, legal/fiscal и support gates.

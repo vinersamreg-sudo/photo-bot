@@ -25,7 +25,7 @@ Primary result CTA order: original, correction, repeat, works. Favorite, current
 
 ## Payment copy
 
-- Before redirect: `Оригинал без водяного знака — 149 ₽.` + link button `Оплатить в Robokassa`.
+- Before redirect: `Оригинал без водяного знака — 49 ₽.` + link button `Оплатить в Robokassa`.
 - Paid delivery failure: say that payment is confirmed, the original remains available in «Мои работы», and retry does not charge again.
 - Disabled payments: `Оплата оригинала пока недоступна.` Do not imply that money was accepted.
 - Never show merchant login, invoice, signature, operation key, provider payload or internal order/version IDs.

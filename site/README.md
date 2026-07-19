@@ -1,8 +1,20 @@
 # Pixora AI website
 
-Отдельный статический продуктовый лендинг `pixoraai.ru`. Сайт не импортирует `app/`, не обращается к SQLite и не меняет runtime `photo-bot`.
+Отдельный статический продуктовый сайт `pixoraai.ru`. Он не импортирует `app/`, не читает SQLite, не содержит пользовательские фотографии или секреты и не меняет runtime `photo-bot`.
 
-## Локальный запуск
+## Что опубликовано в коде
+
+- честный лендинг закрытого тестирования без имитации работающей оплаты;
+- подтверждённый MAX deep link `https://max.ru/se13572368_bot`;
+- цена 49 ₽ за оригинал одной выбранной `GalleryVersion` без водяного знака;
+- публичная оферта, политика конфиденциальности, согласие на обработку данных, правила сервиса, условия оплаты/возврата и контакты;
+- SEO metadata, Open Graph, FAQ JSON-LD, manifest, robots и sitemap;
+- синтетические примеры Pixora, описанные в `docs/VISUAL_ASSETS.md`;
+- отдельные Nginx-конфигурации для HTTP bootstrap и финального HTTPS.
+
+Реквизиты ограничены подтверждёнными данными: ФИО самозанятого и город. ИНН и e-mail нельзя публиковать до получения подтверждённых значений от владельца. Юридические тексты требуют проверки профильным специалистом до приёма реальных платежей.
+
+## Локальная проверка
 
 ```powershell
 python -m http.server 4173 --bind 127.0.0.1 --directory site/public
@@ -10,44 +22,33 @@ python -m http.server 4173 --bind 127.0.0.1 --directory site/public
 python -m unittest discover -s site/tests -v
 ```
 
-Lighthouse:
+Lighthouse проверяется отдельно в mobile и desktop режиме; все четыре категории должны быть не ниже 95:
 
 ```powershell
 cd site
 npm ci
 New-Item -ItemType Directory -Force .lighthouse | Out-Null
 npm run lighthouse
-python scripts/assert_lighthouse.py .lighthouse/report.json
+python scripts/assert_lighthouse.py .lighthouse/report-mobile.json
+python scripts/assert_lighthouse.py .lighthouse/report-desktop.json
 ```
 
-Порог CI — не ниже 95 для Performance, Accessibility, Best Practices и SEO. Внешних шрифтов, аналитики и runtime-зависимостей нет. Raster-изображения — собственные синтетические материалы Pixora в WebP; их происхождение описано в `docs/VISUAL_ASSETS.md`.
+## Production layout
 
-## MAX CTA
+```text
+/opt/pixora-site/releases/<commit-sha>
+/opt/pixora-site/current -> releases/<commit-sha>
+/opt/pixora-site/previous -> releases/<previous-sha>
+/opt/pixora-site/shared
+```
 
-Все CTA сейчас используют временный `https://max.ru/`. Перед публичным запуском нужно одной заменой установить подтверждённую ссылку бота и обновить тест `test_max_links_are_safe_placeholders_and_trackable`. Атрибут `data-max-cta` готов для privacy-friendly аналитики кликов; сам сайт ничего не отправляет наружу.
+Workflow `.github/workflows/site.yml` создаёт неизменяемый release, проверяет состав public tree, атомарно переключает symlink и возвращает `current` при неуспешном HTTPS smoke. Backend остаётся в `/opt/photo-bot` и не входит в root сайта.
 
-## CI и deploy
+Deploy намеренно закрыт GitHub Environment variable `PIXORA_SITE_DEPLOY_ENABLED`. Включать её можно только после прохождения DNS, Nginx, TLS и внешнего smoke. Пока домен указывает не на целевой VPS, разрешён только HTTP bootstrap без HSTS; это не считается публичным запуском.
 
-`.github/workflows/site.yml` всегда запускает structural tests, HTTP smoke, Lighthouse и публикует статический artifact. Deploy отделён от backend workflow и выполняется только при GitHub Environment variable `PIXORA_SITE_DEPLOY_ENABLED=true`.
+Операционные инструкции:
 
-Он использует существующие secret names `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_PORT`, `HETZNER_SSH_PRIVATE_KEY`, создаёт immutable release в `/opt/pixora-site/releases/<sha>` и атомарно меняет symlink `/opt/pixora-site/current`.
-
-До включения deploy администратор должен:
-
-1. направить DNS `A/AAAA` для `pixoraai.ru` и `www.pixoraai.ru` на Hetzner;
-2. создать `/opt/pixora-site/releases` и передать владение пользователю deploy (`photoapp`);
-3. установить `site/nginx/pixoraai.ru.conf` в Nginx и проверить `nginx -t`;
-4. открыть HTTP/HTTPS без изменения SSH-доступа;
-5. получить TLS certificate и включить redirect HTTP → HTTPS;
-6. выполнить `./site/scripts/smoke.ps1 https://pixoraai.ru`;
-7. заменить временную ссылку MAX и только после legal review разрешить индексацию документов.
-
-Административные действия не автоматизированы: домен, TLS и ownership требуют явного подтверждения владельца. Backend остаётся в `/opt/photo-bot` и не используется Nginx-конфигурацией сайта.
-
-## Перед публичным запуском
-
-- утвердить юридические тексты и реквизиты оператора;
-- подтвердить адрес `hello@pixoraai.ru`;
-- заменить MAX placeholder на deep link бота;
-- получить согласие на использование любых будущих пользовательских примеров;
-- подключать аналитику только после решения о consent/cookie policy.
+- `docs/SITE_PRODUCTION_RUNBOOK.md`;
+- `docs/TLS_CERTIFICATE_RUNBOOK.md`;
+- `docs/ROBOKASSA_SITE_MODERATION_CHECKLIST.md`;
+- `site/scripts/rollback_remote.sh`.
