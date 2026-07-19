@@ -171,9 +171,7 @@ def result_actions(remaining: int) -> View:
             Button("⬇ Получить оригинал", "result:unlock"),
             Button("✏️ Исправить", "result:correct"),
             Button("🎲 Другой вариант", "result:repeat"),
-            Button("⭐ В избранное", "result:favorite"),
             Button("📂 Мои работы", "studio:works"),
-            Button("🗑 Удалить", "result:delete"),
         )
     else:
         text = "Бесплатные варианты закончились."
@@ -187,7 +185,7 @@ def result_actions(remaining: int) -> View:
 
 def delete_confirmation_view() -> View:
     return View(
-        "Удалить работу со всеми версиями?\n\nЭто нельзя отменить.",
+        "Переместить работу в корзину?",
         (
             Button("🗑 Удалить", "delete:confirm"),
             Button("Отмена", "delete:cancel"),
@@ -198,14 +196,23 @@ def delete_confirmation_view() -> View:
 def gallery_item_actions() -> tuple[Button, ...]:
     return (
         Button("⬇ Получить оригинал", "result:unlock"),
-        Button("← Предыдущая", "work:previous"),
-        Button("Следующая →", "work:next"),
-        Button("Сделать основной", "work:main"),
         Button("✏️ Исправить", "result:correct"),
         Button("🎲 Другой вариант", "result:repeat"),
-        Button("⭐ В избранное", "result:favorite"),
-        Button("🗑 Удалить", "result:delete"),
+        Button("История версий", "work:history"),
+        Button("Ещё", "work:more"),
         Button("📂 К работам", "studio:works"),
+    )
+
+
+def gallery_more_actions() -> View:
+    return View(
+        "Действия с работой",
+        (
+            Button("⭐ В избранное", "result:favorite"),
+            Button("Сделать основной", "work:main"),
+            Button("🗑 В корзину", "result:delete"),
+            Button("← К работе", "work:open"),
+        ),
     )
 
 

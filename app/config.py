@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -53,6 +54,31 @@ class Settings:
     max_prompt_length: int = 1500
     generation_timeout_seconds: int = 300
     unlock_original_price_rub: int = 149
+    payments_enabled: bool = False
+    payment_provider: str = "disabled"
+    payment_currency: str = "RUB"
+    payment_order_ttl_minutes: int = 30
+    payment_webhook_enabled: bool = False
+    payment_webhook_host: str = "127.0.0.1"
+    payment_webhook_port: int = 8091
+    payment_webhook_path: str = "/payments/robokassa/result"
+    payment_refunds_enabled: bool = False
+    robokassa_mode: str = "sandbox"
+    robokassa_production_approved: bool = False
+    robokassa_commission_percent: float = 0.0
+    robokassa_merchant_login: str = ""
+    robokassa_password1: str = ""
+    robokassa_password2: str = ""
+    robokassa_password3: str = ""
+    robokassa_hash_algorithm: str = "sha256"
+    robokassa_payment_url: str = "https://auth.robokassa.ru/Merchant/Index.aspx"
+    robokassa_refund_url: str = "https://services.robokassa.ru/RefundService/Refund/Create"
+    robokassa_refund_status_url: str = "https://services.robokassa.ru/RefundService/Refund/GetState"
+    payment_result_url: str = ""
+    payment_success_url: str = ""
+    payment_fail_url: str = ""
+    payment_receipt_tax: str = "none"
+    payment_receipt_item_name: str = "Оригинал фотографии Pixora"
     demo_retention_days: int = 30
     paid_retention_days: int = 180
     trash_retention_days: int = 30
@@ -166,6 +192,14 @@ def _nonnegative_int(values: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
+def _nonnegative_float(values: Mapping[str, str], name: str, default: float) -> float:
+    raw = values.get(name, "").strip()
+    value = float(raw) if raw else default
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
 def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
     raw = values.get(name, "").strip().lower()
     if not raw:
@@ -263,6 +297,86 @@ def load_settings(
     image_model = values.get("OPENAI_IMAGE_MODEL", "").strip()
     if app_env == "production" and image_model and image_model != "gpt-image-2":
         raise ValueError("Pixora v1 production requires OPENAI_IMAGE_MODEL=gpt-image-2")
+    payment_provider = values.get("PAYMENT_PROVIDER", "disabled").strip().lower() or "disabled"
+    if payment_provider not in {"disabled", "robokassa"}:
+        raise ValueError("PAYMENT_PROVIDER must be disabled or robokassa")
+    payment_currency = values.get("PAYMENT_CURRENCY", "RUB").strip().upper() or "RUB"
+    if payment_currency != "RUB":
+        raise ValueError("Pixora payments currently support only RUB")
+    robokassa_mode = values.get("ROBOKASSA_MODE", "sandbox").strip().lower() or "sandbox"
+    if robokassa_mode not in {"sandbox", "production"}:
+        raise ValueError("ROBOKASSA_MODE must be sandbox or production")
+    robokassa_hash_algorithm = (
+        values.get("ROBOKASSA_HASH_ALGORITHM", "sha256").strip().lower() or "sha256"
+    )
+    if robokassa_hash_algorithm not in {"md5", "sha256", "sha512"}:
+        raise ValueError("ROBOKASSA_HASH_ALGORITHM must be md5, sha256 or sha512")
+    robokassa_commission_percent = _nonnegative_float(
+        values, "ROBOKASSA_COMMISSION_PERCENT", 0.0
+    )
+    if robokassa_commission_percent > 100:
+        raise ValueError("ROBOKASSA_COMMISSION_PERCENT must be at most 100")
+    payment_webhook_path = (
+        values.get("PAYMENT_WEBHOOK_PATH", "/payments/robokassa/result").strip()
+        or "/payments/robokassa/result"
+    )
+    if not payment_webhook_path.startswith("/") or "?" in payment_webhook_path:
+        raise ValueError("PAYMENT_WEBHOOK_PATH must be an absolute path without a query")
+    payment_webhook_port = _positive_int(values, "PAYMENT_WEBHOOK_PORT", 8091)
+    if payment_webhook_port > 65535:
+        raise ValueError("PAYMENT_WEBHOOK_PORT must be at most 65535")
+    payments_enabled = _boolean(values, "PAYMENTS_ENABLED", False)
+    webhook_enabled = _boolean(values, "PAYMENT_WEBHOOK_ENABLED", False)
+    refunds_enabled = _boolean(values, "PAYMENT_REFUNDS_ENABLED", False)
+    production_approved = _boolean(values, "ROBOKASSA_PRODUCTION_APPROVED", False)
+    if payments_enabled and payment_provider != "robokassa":
+        raise ValueError("Enabled payments require PAYMENT_PROVIDER=robokassa")
+    if robokassa_mode == "production" and payments_enabled and not production_approved:
+        raise ValueError("Production Robokassa requires explicit ROBOKASSA_PRODUCTION_APPROVED=true")
+    if refunds_enabled and not payments_enabled:
+        raise ValueError("Refunds cannot be enabled while payments are disabled")
+    if payments_enabled:
+        required = {
+            "ROBOKASSA_MERCHANT_LOGIN": values.get("ROBOKASSA_MERCHANT_LOGIN", "").strip(),
+            "ROBOKASSA_PASSWORD1": values.get("ROBOKASSA_PASSWORD1", "").strip(),
+            "ROBOKASSA_PASSWORD2": values.get("ROBOKASSA_PASSWORD2", "").strip(),
+            "PAYMENT_RESULT_URL": values.get("PAYMENT_RESULT_URL", "").strip(),
+        }
+        missing = sorted(name for name, value in required.items() if not value)
+        if missing:
+            raise ValueError("Enabled payments are missing: " + ", ".join(missing))
+        if not webhook_enabled:
+            raise ValueError("Enabled payments require PAYMENT_WEBHOOK_ENABLED=true")
+        if not required["PAYMENT_RESULT_URL"].startswith("https://"):
+            raise ValueError("PAYMENT_RESULT_URL must use HTTPS")
+        payment_provider_url = values.get(
+            "ROBOKASSA_PAYMENT_URL",
+            "https://auth.robokassa.ru/Merchant/Index.aspx",
+        ).strip()
+        parsed_payment_url = urlsplit(payment_provider_url)
+        if parsed_payment_url.scheme != "https" or parsed_payment_url.hostname != "auth.robokassa.ru":
+            raise ValueError("ROBOKASSA_PAYMENT_URL must use auth.robokassa.ru over HTTPS")
+        if app_env == "production" and (
+            values.get("PAYMENT_WEBHOOK_HOST", "127.0.0.1").strip()
+            not in {"127.0.0.1", "::1", "localhost"}
+        ):
+            raise ValueError("Production payment webhook must bind to loopback")
+    success_url = values.get("PAYMENT_SUCCESS_URL", "").strip()
+    fail_url = values.get("PAYMENT_FAIL_URL", "").strip()
+    if bool(success_url) != bool(fail_url):
+        raise ValueError("PAYMENT_SUCCESS_URL and PAYMENT_FAIL_URL must be configured together")
+    if any(url and not url.startswith("https://") for url in (success_url, fail_url)):
+        raise ValueError("Payment return URLs must use HTTPS")
+    if refunds_enabled and not values.get("ROBOKASSA_PASSWORD3", "").strip():
+        raise ValueError("Enabled refunds require ROBOKASSA_PASSWORD3")
+    if refunds_enabled:
+        for name, default in (
+            ("ROBOKASSA_REFUND_URL", "https://services.robokassa.ru/RefundService/Refund/Create"),
+            ("ROBOKASSA_REFUND_STATUS_URL", "https://services.robokassa.ru/RefundService/Refund/GetState"),
+        ):
+            parsed = urlsplit(values.get(name, default).strip())
+            if parsed.scheme != "https" or parsed.hostname != "services.robokassa.ru":
+                raise ValueError(f"{name} must use services.robokassa.ru over HTTPS")
 
     return Settings(
         openai_api_key=values.get("OPENAI_API_KEY", "").strip(),
@@ -319,6 +433,45 @@ def load_settings(
         max_prompt_length=_positive_int(values, "MAX_PROMPT_LENGTH", 1500),
         generation_timeout_seconds=_positive_int(values, "GENERATION_TIMEOUT_SECONDS", 300),
         unlock_original_price_rub=_positive_int(values, "UNLOCK_ORIGINAL_PRICE_RUB", 149),
+        payments_enabled=payments_enabled,
+        payment_provider=payment_provider,
+        payment_currency=payment_currency,
+        payment_order_ttl_minutes=_positive_int(values, "PAYMENT_ORDER_TTL_MINUTES", 30),
+        payment_webhook_enabled=webhook_enabled,
+        payment_webhook_host=(
+            values.get("PAYMENT_WEBHOOK_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        ),
+        payment_webhook_port=payment_webhook_port,
+        payment_webhook_path=payment_webhook_path,
+        payment_refunds_enabled=refunds_enabled,
+        robokassa_mode=robokassa_mode,
+        robokassa_production_approved=production_approved,
+        robokassa_commission_percent=robokassa_commission_percent,
+        robokassa_merchant_login=values.get("ROBOKASSA_MERCHANT_LOGIN", "").strip(),
+        robokassa_password1=values.get("ROBOKASSA_PASSWORD1", "").strip(),
+        robokassa_password2=values.get("ROBOKASSA_PASSWORD2", "").strip(),
+        robokassa_password3=values.get("ROBOKASSA_PASSWORD3", "").strip(),
+        robokassa_hash_algorithm=robokassa_hash_algorithm,
+        robokassa_payment_url=(
+            values.get("ROBOKASSA_PAYMENT_URL", "https://auth.robokassa.ru/Merchant/Index.aspx").strip()
+            or "https://auth.robokassa.ru/Merchant/Index.aspx"
+        ),
+        robokassa_refund_url=(
+            values.get("ROBOKASSA_REFUND_URL", "https://services.robokassa.ru/RefundService/Refund/Create").strip()
+            or "https://services.robokassa.ru/RefundService/Refund/Create"
+        ),
+        robokassa_refund_status_url=(
+            values.get("ROBOKASSA_REFUND_STATUS_URL", "https://services.robokassa.ru/RefundService/Refund/GetState").strip()
+            or "https://services.robokassa.ru/RefundService/Refund/GetState"
+        ),
+        payment_result_url=values.get("PAYMENT_RESULT_URL", "").strip(),
+        payment_success_url=success_url,
+        payment_fail_url=fail_url,
+        payment_receipt_tax=values.get("PAYMENT_RECEIPT_TAX", "none").strip() or "none",
+        payment_receipt_item_name=(
+            values.get("PAYMENT_RECEIPT_ITEM_NAME", "Оригинал фотографии Pixora").strip()
+            or "Оригинал фотографии Pixora"
+        ),
         demo_retention_days=_positive_int(values, "DEMO_RETENTION_DAYS", 30),
         paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),
         trash_retention_days=_positive_int(values, "TRASH_RETENTION_DAYS", 30),

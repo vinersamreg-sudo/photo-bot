@@ -151,7 +151,7 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         and bool(settings.max_bot_token)
         and bool(settings.max_owner_user_ids)
         and quick_check == "ok"
-        and int(migration) >= 6
+        and int(migration) >= 8
         and active_attempts == 0
         and active_dialogs == 0
         and usage.free >= settings.disk_min_free_mb * 1024 * 1024
@@ -186,6 +186,14 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
             "model": settings.openai_image_model,
             "configured": bool(settings.openai_api_key),
             "connected": openai_connected,
+        },
+        "payments": {
+            "enabled": settings.payments_enabled,
+            "provider": settings.payment_provider,
+            "mode": settings.robokassa_mode,
+            "webhook_enabled": settings.payment_webhook_enabled,
+            "refund_execution_enabled": settings.payment_refunds_enabled,
+            "production_approved": settings.robokassa_production_approved,
         },
         "database": {"quick_check": quick_check, "migration": int(migration)},
         "storage": {"free_mb": usage.free // (1024 * 1024), "minimum_free_mb": settings.disk_min_free_mb},

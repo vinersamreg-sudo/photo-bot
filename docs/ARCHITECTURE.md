@@ -22,15 +22,19 @@ Migration v6 adds `product_events`. It stores event category, internal session/a
 
 Gallery retention covers demo, paid and trash. `maintenance-cleanup` first reports due gallery items, stale temp and unreferenced private files; `--execute` deletes only scoped, non-symlink candidates after their grace period.
 
+Migration v8 adds commercial state without changing the image provider path. `PaymentOrder` binds one exact GalleryVersion to a numeric provider invoice and opaque token. ResultURL validation and version unlock commit in one SQLite transaction. Original delivery is a separate retriable attempt, so MAX failure cannot erase a confirmed payment. Payment audit stores no image, prompt, platform ID or secret.
+
+The ResultURL listener is part of the same process only when payment and webhook flags are enabled; production config requires loopback binding behind a public HTTPS reverse proxy. Normal deploy keeps the listener off. This bounded MVP topology is suitable for owner sandbox/small pilot, not high-volume public traffic.
+
 ## Backup and operations
 
 SQLite online backup API creates a consistent snapshot. OpenSSL encrypts it using AES-256-CBC + PBKDF2/200k iterations. The backup is decrypted into a temporary DB and passes `PRAGMA quick_check`; the encrypted file is copied to a GitHub Actions artifact with 14-day retention. Cleanup follows only after off-site confirmation.
 
-`launch-status` checks systemd, fresh polling, MAX connectivity, OpenAI auth/model, SQLite/migration, disk, backup age/restore/off-site, cleanup/orphans, active processing and daily duration/errors/delivery/cost. Output contains counts and booleans, not user IDs, secrets, prompts or paths.
+`launch-status` checks systemd, fresh polling, MAX connectivity, OpenAI auth/model, SQLite/migration, disk, backup age/restore/off-site, cleanup/orphans, active processing and daily duration/errors/delivery/cost. Commercial CLI adds payment/refund/delivery backlog, pilot, storage, backup, cleanup, unit economics and consolidated health. Output contains counts and booleans, not user IDs, secrets, prompts or paths.
 
 ## Deferred topology
 
-Webhook/queue/workers/object storage and horizontal scale are deferred. They become relevant only after pilot metrics show that one polling process + SQLite is insufficient. The static site is a separate artifact under `site/` and is not published automatically with backend deploy.
+MAX webhook, queue/workers, object storage and horizontal scale are deferred. The small Robokassa ResultURL listener is the only webhook exception and remains disabled until commercial rollout. Larger topology changes become relevant only after pilot metrics show that one polling process + SQLite is insufficient. The static site is a separate artifact under `site/` and is not published automatically with backend deploy.
 
 ## Optional OpenAI Responses context
 

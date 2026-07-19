@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Iterable, List
 from uuid import uuid4
@@ -36,6 +37,21 @@ from app.backup import BackupError, BackupManager
 from app.maintenance import run_maintenance
 from app.operations import print_launch_status
 from app.provider_context import OpenAIProviderContextGateway, ProviderContextService
+from app.commercial_operations import (
+    backup_status,
+    cleanup_status,
+    cost_status,
+    health_report,
+    payment_status,
+    pilot_status,
+    storage_status,
+)
+from app.payments import (
+    PaymentError,
+    PaymentUnavailable,
+    RefundReason,
+    build_payment_service,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -78,7 +94,14 @@ def configure_logging(settings: Settings) -> None:
         handlers.append(logging.FileHandler(settings.log_file, encoding="utf-8"))
 
     redaction_filter = SecretRedactionFilter(
-        [settings.openai_api_key, settings.max_bot_token]
+        [
+            settings.openai_api_key,
+            settings.max_bot_token,
+            settings.robokassa_merchant_login,
+            settings.robokassa_password1,
+            settings.robokassa_password2,
+            settings.robokassa_password3,
+        ]
     )
     for handler in handlers:
         handler.addFilter(redaction_filter)
@@ -484,6 +507,140 @@ def run_ai_inspect(settings: Settings, attempt_id: str) -> int:
     return 0
 
 
+def run_status_report(settings: Settings, command: str, *, online: bool = False) -> int:
+    database = Database(settings.database_path)
+    collectors = {
+        "pilot-status": lambda: pilot_status(settings, database),
+        "payment-status": lambda: payment_status(settings, database),
+        "storage-status": lambda: storage_status(settings, database),
+        "backup-status": lambda: backup_status(settings),
+        "cleanup-status": lambda: cleanup_status(settings),
+        "cost-status": lambda: cost_status(settings, database),
+        "health-report": lambda: health_report(settings, online=online),
+    }
+    print(json.dumps(collectors[command](), ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def run_refund_prepare(settings: Settings, args: argparse.Namespace) -> int:
+    try:
+        amount = Decimal(args.amount_rub).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if amount <= 0:
+            raise ValueError("Refund amount must be positive")
+        amount_minor = int(amount * 100)
+        refund = build_payment_service(settings, Database(settings.database_path)).prepare_refund(
+            args.order_id, amount_minor, args.reason, args.idempotency_key
+        )
+    except (InvalidOperation, ValueError, PaymentError) as exc:
+        LOGGER.error("Refund preparation rejected: %s", exc)
+        return 2
+    print(json.dumps({
+        "refund_id": refund.id,
+        "order_id": refund.order_id,
+        "amount_rub": refund.amount_minor / 100,
+        "status": refund.status.value,
+        "provider_called": False,
+    }, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_refund_submit(settings: Settings, refund_id: str) -> int:
+    try:
+        refund = build_payment_service(settings, Database(settings.database_path)).submit_refund(
+            refund_id
+        )
+    except PaymentUnavailable as exc:
+        LOGGER.error("Refund execution is disabled: %s", exc)
+        return 3
+    except PaymentError as exc:
+        LOGGER.error("Refund submission rejected: %s", exc)
+        return 2
+    print(json.dumps({
+        "refund_id": refund.id,
+        "status": refund.status.value,
+        "provider_request_created": bool(refund.provider_request_id),
+    }, sort_keys=True))
+    return 0
+
+
+def run_refund_status(settings: Settings, refund_id: str, refresh: bool) -> int:
+    service = build_payment_service(settings, Database(settings.database_path))
+    try:
+        if refresh:
+            refund = service.refresh_refund(refund_id)
+        else:
+            with service.database.read() as connection:
+                row = connection.execute(
+                    "SELECT * FROM refund_intents WHERE id=?", (refund_id,)
+                ).fetchone()
+            if row is None:
+                raise PaymentError("Refund was not found")
+            output = {
+                "refund_id": str(row["id"]),
+                "order_id": str(row["order_id"]),
+                "amount_rub": int(row["amount_minor"]) / 100,
+                "status": str(row["status"]),
+                "provider_request_created": bool(row["provider_request_id"]),
+                "provider_refreshed": False,
+            }
+            print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+            return 0
+    except PaymentUnavailable as exc:
+        LOGGER.error("Refund status refresh is disabled: %s", exc)
+        return 3
+    except PaymentError as exc:
+        LOGGER.error("Refund status unavailable: %s", exc)
+        return 2
+    print(json.dumps({
+        "refund_id": refund.id,
+        "order_id": refund.order_id,
+        "amount_rub": refund.amount_minor / 100,
+        "status": refund.status.value,
+        "provider_request_created": bool(refund.provider_request_id),
+        "provider_refreshed": True,
+    }, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_payment_history(settings: Settings, order_id: str) -> int:
+    try:
+        history = build_payment_service(
+            settings, Database(settings.database_path)
+        ).history(order_id)
+    except PaymentError as exc:
+        LOGGER.error("Payment history unavailable: %s", exc)
+        return 2
+    print(json.dumps({
+        "order_id": history.order.id,
+        "version_id": history.order.version_id,
+        "status": history.order.status.value,
+        "amount_rub": history.order.amount_minor / 100,
+        "currency": history.order.currency,
+        "events": [entry.__dict__ for entry in history.audit],
+    }, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def run_refund_history(settings: Settings, refund_id: str) -> int:
+    try:
+        history = build_payment_service(
+            settings, Database(settings.database_path)
+        ).refund_history(refund_id)
+    except PaymentError as exc:
+        LOGGER.error("Refund history unavailable: %s", exc)
+        return 2
+    print(json.dumps({
+        "refund_id": history.refund.id,
+        "order_id": history.refund.order_id,
+        "amount_rub": history.refund.amount_minor / 100,
+        "currency": history.refund.currency,
+        "reason": history.refund.reason,
+        "status": history.refund.status.value,
+        "events": [entry.__dict__ for entry in history.audit],
+    }, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-bot")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -505,6 +662,29 @@ def build_parser() -> argparse.ArgumentParser:
     backup_offsite.add_argument("--provider", required=True)
     launch_status = subparsers.add_parser("launch-status")
     launch_status.add_argument("--strict", action="store_true")
+    for command in (
+        "pilot-status", "payment-status", "storage-status", "backup-status",
+        "cleanup-status", "cost-status",
+    ):
+        subparsers.add_parser(command)
+    health_report_parser = subparsers.add_parser("health-report")
+    health_report_parser.add_argument("--online", action="store_true")
+    refund_prepare = subparsers.add_parser("refund-prepare")
+    refund_prepare.add_argument("--order-id", required=True)
+    refund_prepare.add_argument("--amount-rub", required=True)
+    refund_prepare.add_argument(
+        "--reason", required=True, choices=tuple(reason.value for reason in RefundReason)
+    )
+    refund_prepare.add_argument("--idempotency-key", required=True)
+    refund_submit = subparsers.add_parser("refund-submit")
+    refund_submit.add_argument("--refund-id", required=True)
+    refund_status_parser = subparsers.add_parser("refund-status")
+    refund_status_parser.add_argument("--refund-id", required=True)
+    refund_status_parser.add_argument("--refresh", action="store_true")
+    payment_history_parser = subparsers.add_parser("payment-history")
+    payment_history_parser.add_argument("--order-id", required=True)
+    refund_history_parser = subparsers.add_parser("refund-history")
+    refund_history_parser.add_argument("--refund-id", required=True)
     demo = subparsers.add_parser("demo-edit")
     demo.add_argument("--user-id", required=True)
     demo.add_argument("--image", required=True)
@@ -545,6 +725,23 @@ def main(argv: list[str] | None = None) -> int:
         return run_backup_mark_offsite(settings, args.backup, args.provider)
     if args.command == "launch-status":
         return print_launch_status(settings, strict=args.strict)
+    if args.command in {
+        "pilot-status", "payment-status", "storage-status", "backup-status",
+        "cleanup-status", "cost-status", "health-report",
+    }:
+        return run_status_report(
+            settings, args.command, online=getattr(args, "online", False)
+        )
+    if args.command == "refund-prepare":
+        return run_refund_prepare(settings, args)
+    if args.command == "refund-submit":
+        return run_refund_submit(settings, args.refund_id)
+    if args.command == "refund-status":
+        return run_refund_status(settings, args.refund_id, args.refresh)
+    if args.command == "payment-history":
+        return run_payment_history(settings, args.order_id)
+    if args.command == "refund-history":
+        return run_refund_history(settings, args.refund_id)
     if args.command == "ai-inspect":
         return run_ai_inspect(settings, args.attempt_id)
     return run_process(settings)

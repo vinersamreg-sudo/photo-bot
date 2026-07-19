@@ -14,6 +14,8 @@ Current v1 contract:
 - production defaults to observe-only and pilot limit 0;
 - never make real OpenAI image calls without explicit agreed maximum;
 - never expose user IDs, tokens, prompts, private paths or originals in reports/logs.
+- migration v8 contains a Robokassa sandbox/payment/refund architecture; all real-payment flags are forced off by deploy;
+- payment unlocks one exact GalleryVersion only; MAX delivery failure must preserve paid state and allow re-delivery;
 
 Latest production evidence (17.07.2026): owner-only E2E used exactly 5/5 approved
 real image requests; all succeeded and created GalleryVersions 11–15. Corrections,
@@ -30,7 +32,9 @@ Operations:
 - `python -m app.main backup-create --passphrase-stdin`
 - `python -m app.main backup-restore-test --backup NAME --passphrase-stdin`
 
-Migration v6 contains privacy-minimal product events. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment and final legal documents are not ready. Site must not be published until MAX deep link and legal/public-launch decision are ready.
+Migration v6 contains privacy-minimal product events; migration v8 contains commercial audit state. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment architecture is implemented but no provider sandbox/real-payment evidence or final legal approval exists. Site must not be published until MAX deep link and legal/public-launch decision are ready.
+
+Commercial operations: `payment-status`, `pilot-status`, `storage-status`, `backup-status`, `cleanup-status`, `cost-status`, `health-report`, refund prepare/submit/status and payment history. Read `docs/PAYMENTS.md`, `ROBOKASSA.md`, `PAYMENT_SECURITY.md` and `COMMERCIAL_LAUNCH.md`. Never enable production or accept real money without a separate owner authorization.
 
 AI quality limits: identity/background can drift, corrections accumulate changes, outputs are nondeterministic and not pixel-perfect Photoshop. Report these honestly.
 

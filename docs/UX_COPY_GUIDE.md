@@ -21,7 +21,15 @@ Allowed core symbols: ✨ 📷 ✏️ 🎲 ⭐ 📂 ⬇ 🗑 ℹ️ and the requ
 - Result status: `✨ Готово`
 - Result caption: `Демо с водяным знаком.`
 
-Primary result CTA order: original, correction, repeat, favorite, works, delete. Show remaining quota only at one remaining and zero.
+Primary result CTA order: original, correction, repeat, works. Favorite, current best and trash live under «Ещё» in Gallery. Show remaining quota only at one remaining and zero.
+
+## Payment copy
+
+- Before redirect: `Оригинал без водяного знака — 149 ₽.` + link button `Оплатить в Robokassa`.
+- Paid delivery failure: say that payment is confirmed, the original remains available in «Мои работы», and retry does not charge again.
+- Disabled payments: `Оплата оригинала пока недоступна.` Do not imply that money was accepted.
+- Never show merchant login, invoice, signature, operation key, provider payload or internal order/version IDs.
+- Refund messages must distinguish `подготовлен`, `отправлен` and `подтверждён`; a local draft is not a completed refund.
 
 ## Errors
 

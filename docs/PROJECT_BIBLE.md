@@ -14,7 +14,7 @@ Pixora — AI-редактор фотографий в MAX. `photo-bot` — то
 - quality `medium`, output `1024x1024` PNG, timeout 300 секунд, до двух SDK retries;
 - структурированный SceneIntent/EditPlan и English technical prompt;
 - correction от выбранной успешной версии, repeat в той же ветке;
-- preview с watermark, Gallery/versions/favorite/delete, placeholder оригинала;
+- preview с watermark, Gallery/versions/favorite/trash/restore и exact-version original unlock;
 - SQLite, private filesystem, один systemd process, MAX polling;
 - owner allowlist и закрытые этапы 5/10/20 пользователей;
 - privacy-minimal telemetry, backup/restore, cleanup и `launch-status`.
@@ -28,6 +28,8 @@ Pixora — AI-редактор фотографий в MAX. `photo-bot` — то
 Телеметрия хранит тип события, технические связи, duration/cost/error/fallback. Она не хранит отдельную копию prompt, изображения, MAX ID или биометрию.
 
 SQLite ежедневно копируется online-backup API, шифруется AES-256-CBC/PBKDF2, проходит реальное восстановление и копируется в GitHub Actions artifact. Cleanup запускается только после подтверждения off-site copy. Retention: backup 14 дней, demo 30, paid 180, trash 30.
+
+Migration v8 реализует коммерческий boundary: Robokassa sandbox, payment order/event/webhook/receipt/audit, exact-version unlock, delivery retry и refund intent. Реальные платежи не являются включённой функцией: deploy принудительно оставляет payments/webhook/refunds off, provider disabled, sandbox и production approval false. Первый настоящий платёж требует отдельного разрешения и выполнения `COMMERCIAL_LAUNCH.md`.
 
 ## Доступ и запуск
 

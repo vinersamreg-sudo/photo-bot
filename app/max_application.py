@@ -38,6 +38,7 @@ from app.max_adapter import (
     View,
     delete_confirmation_view,
     gallery_item_actions,
+    gallery_more_actions,
     ideas_catalog,
     legal_details_view,
     legal_view,
@@ -51,6 +52,13 @@ from app.max_adapter import (
 from app.max_conversation import MaxConversationStore, MaxDialog
 from app.max_transport import MaxIncomingEvent, MaxTransportError
 from app.telemetry import TelemetryRecorder
+from app.payments import (
+    PaymentError,
+    PaymentService,
+    PaymentStatus,
+    PaymentUnavailable,
+    build_payment_service,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -110,6 +118,7 @@ class MaxApplication:
         demo_service: DemoService,
         transport: LiveMaxTransport,
         store: Optional[MaxConversationStore] = None,
+        payment_service: Optional[PaymentService] = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -119,6 +128,7 @@ class MaxApplication:
         self.adapter = MaxDemoAdapter(demo_service, database, transport)
         self.gallery: GalleryService = demo_service.gallery
         self.telemetry = TelemetryRecorder(database)
+        self.payments = payment_service or build_payment_service(settings, database)
 
     def _track(self, event_type: str, **values: object) -> None:
         try:
@@ -494,7 +504,7 @@ class MaxApplication:
                 session_id=dialog.session_id,
                 gallery_item_id=dialog.current_gallery_item_id,
             )
-            self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
+            self._unlock_or_deliver(event, dialog)
         elif action == "result:correct":
             self._track(
                 "correction_started",
@@ -556,6 +566,8 @@ class MaxApplication:
             self._open_work(event, dialog, dialog.current_gallery_item_id)
         elif action == "work:history":
             self._show_version_history(event, dialog)
+        elif action == "work:more":
+            self._send_view(event.user_id, gallery_more_actions())
         elif action in {"work:previous", "work:next"}:
             self._navigate_version(event, dialog, -1 if action.endswith("previous") else 1)
         elif action == "work:main":
@@ -569,6 +581,8 @@ class MaxApplication:
                 self._show_main(event.user_id, dialog, event.event_key)
         elif action == "delete:confirm":
             self._delete_current(event, dialog)
+        elif action == "delete:restore":
+            self._restore_current(event, dialog)
         elif action == "catalog:photoshoot":
             self._send_view(event.user_id, photoshoot_catalog())
 
@@ -808,6 +822,11 @@ class MaxApplication:
             raise InvalidInputError("Prompt confirmation is missing")
         available = self._remaining(dialog.session_id)
         if available == 0:
+            self._track(
+                "demo_quota_exhausted",
+                session_id=dialog.session_id,
+                gallery_item_id=dialog.current_gallery_item_id,
+            )
             self.store.transition(
                 event.user_id, "demo_exhausted", event_key=event.event_key, force=True
             )
@@ -885,7 +904,86 @@ class MaxApplication:
         if not dialog.user_id or not dialog.current_version_id:
             raise InvalidInputError("No current version")
         self.gallery.set_version_favorite(dialog.user_id, dialog.current_version_id, True)
+        self._track(
+            "favorite_changed",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
         self.transport.send_message(platform_user_id, "Добавлено в избранное ⭐")
+
+    def _unlock_or_deliver(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        if not self.settings.payments_enabled:
+            self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
+            return
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No gallery version selected")
+        self._track(
+            "payment_clicked",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
+        try:
+            order = self.payments.create_order(
+                dialog.user_id, dialog.current_version_id, f"max:{event.event_key}"
+            )
+        except PaymentUnavailable:
+            self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
+            return
+        except PaymentError:
+            self.transport.send_message(
+                event.user_id,
+                "Не удалось подготовить оплату. Попробуйте позже.",
+            )
+            return
+        if order.status in {
+            PaymentStatus.PAID,
+            PaymentStatus.DELIVERY_PENDING,
+            PaymentStatus.DELIVERED,
+        }:
+            self.deliver_paid_original(order.id)
+            return
+        self.transport.send_message(
+            event.user_id,
+            f"Оригинал без водяного знака — {order.amount_minor // 100} ₽.",
+            (Button("Оплатить в Robokassa", order.payment_url or "result:unlock"),),
+        )
+
+    def deliver_paid_original(self, order_id: str) -> bool:
+        """Deliver an already-paid exact version; payment stays paid on MAX failure."""
+
+        with self.database.read() as connection:
+            row = connection.execute(
+                """SELECT o.user_id,u.platform_user_id
+                   FROM payment_orders o JOIN users u ON u.id=o.user_id
+                   WHERE o.id=?""",
+                (order_id,),
+            ).fetchone()
+        if row is None:
+            raise PaymentError("Payment order was not found")
+        original = self.payments.original_for_order(order_id, row["user_id"])
+        try:
+            delivered = self.transport.send_image(
+                row["platform_user_id"],
+                original,
+                "Оригинал без водяного знака.",
+                (Button("📂 Мои работы", "studio:works"),),
+            )
+        except MaxTransportError:
+            delivered = False
+        self.payments.mark_delivery(
+            order_id,
+            delivered=delivered,
+            error_code=None if delivered else "max_delivery_failed",
+        )
+        if not delivered:
+            try:
+                self.transport.send_message(
+                    row["platform_user_id"],
+                    "Оплата получена. Оригинал сохранён — нажмите «Получить оригинал» ещё раз.",
+                )
+            except MaxTransportError:
+                LOGGER.warning("Paid original delivery and fallback message both failed")
+        return delivered
 
     def _show_works(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         self._track(
@@ -1028,12 +1126,17 @@ class MaxApplication:
         self.gallery.set_current_best(
             dialog.user_id, dialog.current_gallery_item_id, dialog.current_version_id
         )
+        self._track(
+            "current_best_changed",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
         self.transport.send_message(platform_user_id, "Выбрано как основное.")
 
     def _delete_current(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id:
             raise InvalidInputError("No current gallery work")
-        # Ownership is verified before the irreversible purge.
+        # Ownership is verified before moving the work to the recoverable trash.
         self.gallery.open_item(dialog.user_id, dialog.current_gallery_item_id)
         self._track(
             "work_deleted",
@@ -1041,14 +1144,29 @@ class MaxApplication:
             gallery_item_id=dialog.current_gallery_item_id,
         )
         self.gallery.soft_delete(dialog.user_id, dialog.current_gallery_item_id)
-        self.gallery.purge_item(dialog.current_gallery_item_id)
         self.store.transition(
             event.user_id, "deleted", event_key=event.event_key, force=True,
-            session_id=None, current_gallery_item_id=None, current_version_id=None,
             pending_prompt=None, pending_action=None, status_message_id=None,
         )
         self.transport.send_message(
             event.user_id,
-            "Работа удалена.",
-            (Button("← В меню", "menu"),),
+            "Работа перемещена в корзину.",
+            (
+                Button("Восстановить", "delete:restore"),
+                Button("← В меню", "menu"),
+            ),
         )
+
+    def _restore_current(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        if not dialog.user_id or not dialog.current_gallery_item_id:
+            raise InvalidInputError("No deleted gallery work")
+        self.gallery.restore(dialog.user_id, dialog.current_gallery_item_id)
+        self._track(
+            "work_restored",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
+        self.store.transition(
+            event.user_id, "gallery", event_key=event.event_key, force=True,
+        )
+        self._open_work(event, self.store.get(event.user_id) or dialog, dialog.current_gallery_item_id)

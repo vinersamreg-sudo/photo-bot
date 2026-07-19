@@ -242,11 +242,19 @@ class MaxApiClient:
         return [{
             "type": "inline_keyboard",
             "payload": {
-                "buttons": [[{
-                    "type": "callback",
-                    "text": button.text,
-                    "payload": button.action,
-                }] for button in buttons]
+                "buttons": [[(
+                    {
+                        "type": "link",
+                        "text": button.text,
+                        "url": button.action,
+                    }
+                    if button.action.startswith("https://")
+                    else {
+                        "type": "callback",
+                        "text": button.text,
+                        "payload": button.action,
+                    }
+                )] for button in buttons]
             },
         }]
 

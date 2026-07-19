@@ -1,0 +1,274 @@
+"""Robokassa payment boundary with deterministic signatures and no secret logging."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Any, Mapping
+from urllib.parse import quote, urlencode
+
+import httpx
+
+
+class RobokassaError(RuntimeError):
+    """Safe integration error; provider payloads and credentials are never included."""
+
+
+@dataclass(frozen=True)
+class RobokassaPaymentRequest:
+    invoice_id: int
+    amount_minor: int
+    description: str
+    public_token: str
+    expires_at: datetime
+    receipt_name: str
+    receipt_tax: str
+
+
+@dataclass(frozen=True)
+class RobokassaNotification:
+    invoice_id: int | None
+    amount_minor: int | None
+    signature_valid: bool
+    public_token: str
+    payment_method: str | None
+    operation_key: str | None
+    event_digest: str
+
+
+@dataclass(frozen=True)
+class RobokassaRefundRequest:
+    operation_key: str
+    amount_minor: int
+    item_name: str
+    tax: str
+
+
+@dataclass(frozen=True)
+class RobokassaRefundResult:
+    accepted: bool
+    request_id: str | None
+    error_code: str | None
+    http_status: int
+
+
+def amount_text(amount_minor: int, *, decimals: int = 2) -> str:
+    if amount_minor <= 0:
+        raise ValueError("Payment amount must be positive")
+    return f"{Decimal(amount_minor) / Decimal(100):.{decimals}f}"
+
+
+def parse_amount_minor(raw: object) -> int | None:
+    try:
+        value = Decimal(str(raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return int(value * 100)
+
+
+def _compact_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _b64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+class RobokassaProvider:
+    """Classic payment form/ResultURL and the separate refund API."""
+
+    name = "robokassa"
+
+    def __init__(
+        self,
+        *,
+        merchant_login: str,
+        password1: str,
+        password2: str,
+        password3: str = "",
+        hash_algorithm: str = "sha256",
+        mode: str = "sandbox",
+        payment_url: str = "https://auth.robokassa.ru/Merchant/Index.aspx",
+        refund_url: str = "https://services.robokassa.ru/RefundService/Refund/Create",
+        refund_status_url: str = "https://services.robokassa.ru/RefundService/Refund/GetState",
+        success_url: str = "",
+        fail_url: str = "",
+        client: httpx.Client | None = None,
+    ) -> None:
+        if hash_algorithm not in {"md5", "sha256", "sha512"}:
+            raise ValueError("Unsupported Robokassa hash algorithm")
+        if mode not in {"sandbox", "production"}:
+            raise ValueError("Unsupported Robokassa mode")
+        self.merchant_login = merchant_login
+        self.password1 = password1
+        self.password2 = password2
+        self.password3 = password3
+        self.hash_algorithm = hash_algorithm
+        self.mode = mode
+        self.payment_url = payment_url
+        self.refund_url = refund_url
+        self.refund_status_url = refund_status_url
+        self.success_url = success_url
+        self.fail_url = fail_url
+        self.client = client or httpx.Client(timeout=30)
+        self._owns_client = client is None
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _digest(self, value: str) -> str:
+        return hashlib.new(self.hash_algorithm, value.encode("utf-8")).hexdigest().upper()
+
+    @staticmethod
+    def _receipt(request: RobokassaPaymentRequest) -> str:
+        return _compact_json({
+            "items": [{
+                "name": request.receipt_name,
+                "quantity": 1,
+                "sum": float(amount_text(request.amount_minor)),
+                "tax": request.receipt_tax,
+                "payment_method": "full_payment",
+                "payment_object": "service",
+            }]
+        })
+
+    @staticmethod
+    def _shp(params: Mapping[str, str]) -> str:
+        return "".join(f":{key}={params[key]}" for key in sorted(params))
+
+    def payment_link(self, request: RobokassaPaymentRequest) -> str:
+        receipt_encoded = quote(self._receipt(request), safe="")
+        shp = {"Shp_order": request.public_token}
+        modifiers = [receipt_encoded]
+        if self.success_url:
+            modifiers.extend((quote(self.success_url, safe=""), "GET"))
+        if self.fail_url:
+            modifiers.extend((quote(self.fail_url, safe=""), "GET"))
+        base = ":".join((
+            self.merchant_login,
+            amount_text(request.amount_minor),
+            str(request.invoice_id),
+            *modifiers,
+            self.password1,
+        )) + self._shp(shp)
+        params: dict[str, str] = {
+            "MerchantLogin": self.merchant_login,
+            "OutSum": amount_text(request.amount_minor),
+            "InvId": str(request.invoice_id),
+            "Description": request.description[:100],
+            "SignatureValue": self._digest(base),
+            "Receipt": receipt_encoded,
+            "Culture": "ru",
+            "Encoding": "utf-8",
+            "ExpirationDate": request.expires_at.strftime("%Y-%m-%dT%H:%M"),
+            **shp,
+        }
+        if self.mode == "sandbox":
+            params["IsTest"] = "1"
+        if self.success_url:
+            params["SuccessUrl2"] = self.success_url
+            params["SuccessUrl2Method"] = "GET"
+        if self.fail_url:
+            params["FailUrl2"] = self.fail_url
+            params["FailUrl2Method"] = "GET"
+        return f"{self.payment_url}?{urlencode(params)}"
+
+    def parse_notification(self, values: Mapping[str, str]) -> RobokassaNotification:
+        raw_invoice = values.get("InvId") or values.get("InvID") or ""
+        try:
+            invoice_id = int(raw_invoice)
+        except (TypeError, ValueError):
+            invoice_id = None
+        raw_amount = values.get("OutSum") or ""
+        public_token = values.get("Shp_order", "")
+        shp = {
+            key: str(value)
+            for key, value in values.items()
+            if key.startswith("Shp_")
+        }
+        base = f"{raw_amount}:{raw_invoice}:{self.password2}{self._shp(shp)}"
+        supplied = values.get("SignatureValue", "")
+        signature_valid = bool(supplied) and hmac.compare_digest(
+            supplied.upper(), self._digest(base)
+        )
+        canonical = _compact_json({
+            "amount": raw_amount,
+            "invoice": raw_invoice,
+            "public_token": public_token,
+            "signature": supplied.upper(),
+        })
+        return RobokassaNotification(
+            invoice_id=invoice_id,
+            amount_minor=parse_amount_minor(raw_amount),
+            signature_valid=signature_valid,
+            public_token=public_token,
+            payment_method=values.get("PaymentMethod"),
+            operation_key=values.get("OpKey") or values.get("opKey"),
+            event_digest=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        )
+
+    def _refund_jwt(self, request: RobokassaRefundRequest) -> str:
+        if not self.password3:
+            raise RobokassaError("Robokassa Password3 is not configured")
+        header = _b64url(_compact_json({"alg": "HS256", "typ": "JWT"}).encode("utf-8"))
+        payload = _b64url(_compact_json({
+            "OpKey": request.operation_key,
+            "RefundSum": float(amount_text(request.amount_minor)),
+            "InvoiceItems": [{
+                "Name": request.item_name,
+                "Quantity": 1,
+                "Cost": float(amount_text(request.amount_minor)),
+                "Tax": request.tax,
+                "PaymentMethod": "full_payment",
+                "PaymentObject": "service",
+            }],
+        }).encode("utf-8"))
+        signing_input = f"{header}.{payload}".encode("ascii")
+        signature = _b64url(hmac.new(
+            self.password3.encode("utf-8"), signing_input, hashlib.sha256
+        ).digest())
+        return f"{header}.{payload}.{signature}"
+
+    def create_refund(self, request: RobokassaRefundRequest) -> RobokassaRefundResult:
+        try:
+            response = self.client.post(
+                self.refund_url,
+                content=self._refund_jwt(request),
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+            )
+        except httpx.HTTPError as exc:
+            raise RobokassaError("Robokassa refund request failed") from exc
+        try:
+            payload: Any = response.json()
+        except ValueError as exc:
+            raise RobokassaError("Robokassa refund response was invalid") from exc
+        accepted = bool(isinstance(payload, dict) and payload.get("success") is True)
+        return RobokassaRefundResult(
+            accepted=accepted,
+            request_id=str(payload.get("requestId")) if accepted and payload.get("requestId") else None,
+            error_code=(
+                str(payload.get("message"))[:100]
+                if isinstance(payload, dict) and payload.get("message") else None
+            ),
+            http_status=response.status_code,
+        )
+
+    def refund_status(self, request_id: str) -> tuple[str, int]:
+        try:
+            response = self.client.get(self.refund_status_url, params={"id": request_id})
+        except httpx.HTTPError as exc:
+            raise RobokassaError("Robokassa refund status request failed") from exc
+        try:
+            payload: Any = response.json()
+        except ValueError as exc:
+            raise RobokassaError("Robokassa refund status response was invalid") from exc
+        label = str(payload.get("label", "unknown")) if isinstance(payload, dict) else "unknown"
+        return label, response.status_code

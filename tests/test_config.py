@@ -50,3 +50,43 @@ class SettingsTests(TestCase):
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]
         self.assertEqual(PROJECT_ROOT, expected)
+
+    def test_payments_are_fail_closed_and_production_requires_explicit_approval(self) -> None:
+        baseline = {
+            "APP_ENV": "production",
+            "BASE_DIR": str(PROJECT_ROOT),
+            "OPENAI_IMAGE_MODEL": "gpt-image-2",
+            "PAYMENTS_ENABLED": "true",
+            "PAYMENT_PROVIDER": "robokassa",
+            "PAYMENT_WEBHOOK_ENABLED": "true",
+            "PAYMENT_RESULT_URL": "https://pixora.example/payments/robokassa/result",
+            "ROBOKASSA_MERCHANT_LOGIN": "shop",
+            "ROBOKASSA_PASSWORD1": "one",
+            "ROBOKASSA_PASSWORD2": "two",
+            "ROBOKASSA_MODE": "production",
+        }
+        with self.assertRaisesRegex(ValueError, "explicit"):
+            load_settings(environ=baseline)
+        settings = load_settings(environ={**baseline, "ROBOKASSA_MODE": "sandbox"})
+        self.assertTrue(settings.payments_enabled)
+        self.assertEqual(settings.robokassa_mode, "sandbox")
+        with self.assertRaisesRegex(ValueError, "HTTPS"):
+            load_settings(environ={
+                **baseline,
+                "ROBOKASSA_MODE": "sandbox",
+                "PAYMENT_RESULT_URL": "http://pixora.example/result",
+            })
+        with self.assertRaisesRegex(ValueError, "auth.robokassa.ru"):
+            load_settings(environ={
+                **baseline,
+                "ROBOKASSA_MODE": "sandbox",
+                "ROBOKASSA_PAYMENT_URL": "https://payments.invalid/collect",
+            })
+
+    def test_refunds_require_payments(self) -> None:
+        with self.assertRaisesRegex(ValueError, "while payments are disabled"):
+            load_settings(environ={"PAYMENT_REFUNDS_ENABLED": "true"})
+
+    def test_robokassa_commission_cannot_be_negative(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be non-negative"):
+            load_settings(environ={"ROBOKASSA_COMMISSION_PERCENT": "-1"})

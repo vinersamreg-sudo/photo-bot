@@ -13,6 +13,7 @@ from app.max_adapter import (
     WELCOME_TEXT,
     delete_confirmation_view,
     gallery_item_actions,
+    gallery_more_actions,
     legal_details_view,
     legal_view,
     main_menu,
@@ -60,7 +61,8 @@ class MaxAdapterTests(TestCase):
         self.assertIn("Остался один бесплатный вариант", result_actions(1).text)
         self.assertIn("Бесплатные варианты закончились", result_actions(0).text)
         self.assertEqual(result_actions(4).buttons[0].text, "⬇ Получить оригинал")
-        self.assertEqual(len(gallery_item_actions()), 9)
+        self.assertEqual(len(gallery_item_actions()), 6)
+        self.assertEqual(len(gallery_more_actions().buttons), 4)
         self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])
         self.assertNotIn("👎 Не то", [button.text for button in gallery_item_actions()])
         self.assertEqual(len(version_history_actions()), 4)

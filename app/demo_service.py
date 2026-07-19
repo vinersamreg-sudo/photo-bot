@@ -750,6 +750,7 @@ class DemoService:
             )
 
     def unlock_original(self, attempt_id: str, idempotency_key: str) -> str:
+        """Legacy test seam; production MAX uses the version-scoped PaymentService."""
         now = iso(self.clock())
         with self.database.transaction() as connection:
             attempt = connection.execute(
@@ -763,10 +764,21 @@ class DemoService:
             if existing:
                 return existing["id"]
             intent_id = uuid4().hex
+            version = connection.execute(
+                "SELECT id FROM gallery_versions WHERE attempt_id=?", (attempt_id,)
+            ).fetchone()
+            expires_at = self.clock() + timedelta(minutes=self.settings.payment_order_ttl_minutes)
             connection.execute(
-                """INSERT INTO payment_intents(id,attempt_id,idempotency_key,amount_rub,status,created_at)
-                   VALUES(?,?,?,?,?,?)""",
-                (intent_id, attempt_id, idempotency_key, self.settings.unlock_original_price_rub, "pending", now),
+                """INSERT INTO payment_intents(
+                       id,attempt_id,idempotency_key,amount_rub,status,created_at,
+                       version_id,user_id,provider,currency,updated_at,expires_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    intent_id, attempt_id, idempotency_key,
+                    self.settings.unlock_original_price_rub, "pending", now,
+                    version["id"] if version else None, attempt["user_id"], "legacy",
+                    "RUB", now, iso(expires_at),
+                ),
             )
             return intent_id
 
@@ -784,8 +796,9 @@ class DemoService:
             if intent["status"] != "pending":
                 raise PaymentRequiredError("Payment intent cannot be confirmed")
             connection.execute(
-                "UPDATE payment_intents SET status='paid', confirmed_at=? WHERE id=? AND status='pending'",
-                (now, payment_intent_id),
+                """UPDATE payment_intents SET status='paid',confirmed_at=?,updated_at=?
+                   WHERE id=? AND status='pending'""",
+                (now, now, payment_intent_id),
             )
             connection.execute(
                 "UPDATE generation_attempts SET result_unlocked=1 WHERE id=?",
@@ -804,12 +817,14 @@ class DemoService:
             if version:
                 retention = self.clock() + timedelta(days=self.settings.paid_retention_days)
                 connection.execute(
-                    "UPDATE gallery_versions SET unlock_status='unlocked' WHERE attempt_id=?",
-                    (intent["attempt_id"],),
+                    """UPDATE gallery_versions SET unlock_status='unlocked',unlocked_at=?
+                       WHERE attempt_id=?""",
+                    (now, intent["attempt_id"]),
                 )
+                # Retention remains item-scoped for storage lifecycle, while access
+                # stays scoped to this exact GalleryVersion.
                 connection.execute(
-                    """UPDATE gallery_items SET unlock_status='unlocked',retention_until=?,updated_at=?
-                       WHERE id=?""",
+                    """UPDATE gallery_items SET retention_until=?,updated_at=? WHERE id=?""",
                     (iso(retention), now, version["gallery_item_id"]),
                 )
 

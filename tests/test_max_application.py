@@ -1,5 +1,7 @@
 import shutil
 import tempfile
+import hashlib
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
@@ -32,6 +34,7 @@ from app.max_conversation import MaxConversationStore
 from app.max_transport import MaxIncomingEvent, MaxTransportError
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
+from app.payments import build_payment_service
 
 
 class Clock:
@@ -390,6 +393,57 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
+    def test_owner_sandbox_payment_unlocks_and_redelivers_only_selected_original(self) -> None:
+        self.generate_first()
+        paid_settings = replace(
+            self.settings,
+            payments_enabled=True,
+            payment_provider="robokassa",
+            payment_webhook_enabled=True,
+            payment_result_url="https://example.test/payments/robokassa/result",
+            robokassa_merchant_login="pixora-test",
+            robokassa_password1="one",
+            robokassa_password2="two",
+        )
+        payments = build_payment_service(
+            paid_settings, self.database, clock=self.clock
+        )
+        paid_app = MaxApplication(
+            paid_settings, self.database, self.demo, self.transport, self.store,
+            payment_service=payments,
+        )
+        event = self.event("message_callback", action="result:unlock")
+        paid_app.handle(event)
+        pay_button = self.transport.messages[-1][2][0]
+        self.assertTrue(pay_button.action.startswith("https://auth.robokassa.ru/"))
+        with self.database.read() as connection:
+            order = connection.execute("SELECT * FROM payment_orders").fetchone()
+            original = Path(connection.execute(
+                "SELECT original_path FROM gallery_versions WHERE id=?",
+                (order["version_id"],),
+            ).fetchone()[0])
+        amount = "149.00"
+        base = f"{amount}:{order['provider_invoice_id']}:two:Shp_order={order['public_token']}"
+        signature = hashlib.sha256(base.encode()).hexdigest()
+        webhook = payments.process_webhook({
+            "OutSum": amount,
+            "InvId": str(order["provider_invoice_id"]),
+            "Shp_order": order["public_token"],
+            "SignatureValue": signature,
+        }, method="POST", path="/payments/robokassa/result")
+        self.assertTrue(webhook.accepted)
+        self.assertTrue(paid_app.deliver_paid_original(order["id"]))
+        self.assertEqual(self.transport.images[-1][1], original)
+        self.assertTrue(paid_app.deliver_paid_original(order["id"]))
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT delivery_count FROM gallery_versions WHERE id=?",
+                    (order["version_id"],),
+                ).fetchone()[0],
+                2,
+            )
+
     def test_true_intent_conflict_is_resolved_without_an_extra_question(self) -> None:
         self.onboard_to_prompt()
         self.app.handle(
@@ -478,17 +532,20 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(self.transport.images)
 
         self.callback("result:delete")
-        self.assertIn("Удалить работу", self.transport.messages[-1][1])
+        self.assertIn("Переместить работу", self.transport.messages[-1][1])
         self.callback("delete:confirm")
-        self.assertFalse(root.exists())
+        self.assertTrue(root.exists())
         with self.database.read() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM gallery_items").fetchone()[0], 0)
-            cleared = connection.execute(
-                "SELECT source_file_path,status FROM demo_sessions"
-            ).fetchone()
-        self.assertEqual(cleared["source_file_path"], "")
-        self.assertEqual(cleared["status"], "deleted")
+            self.assertEqual(
+                connection.execute("SELECT deleted FROM gallery_items").fetchone()[0], 1
+            )
         self.assertEqual(self.store.get("u1").state, "deleted")
+        self.callback("delete:restore")
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT deleted FROM gallery_items").fetchone()[0], 0
+            )
+        self.assertEqual(self.store.get("u1").state, "gallery")
 
     def test_send_failure_and_technical_failure_do_not_debit(self) -> None:
         self.onboard_to_prompt()

@@ -351,6 +351,142 @@ CREATE INDEX IF NOT EXISTS idx_product_events_session
 ON product_events(session_id, created_at DESC);
 """
 
+PAYMENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS payment_invoice_sequence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payment_orders (
+    id TEXT PRIMARY KEY,
+    public_token TEXT NOT NULL UNIQUE,
+    intent_id TEXT REFERENCES payment_intents(id) ON DELETE SET NULL,
+    attempt_id TEXT NOT NULL,
+    version_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    merchant_hash TEXT NOT NULL,
+    provider_invoice_id INTEGER NOT NULL UNIQUE,
+    provider_payment_id TEXT,
+    amount_minor INTEGER NOT NULL CHECK(amount_minor > 0),
+    currency TEXT NOT NULL CHECK(currency='RUB'),
+    status TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    paid_at TEXT,
+    delivered_at TEXT,
+    refunded_amount_minor INTEGER NOT NULL DEFAULT 0,
+    failure_code TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_status_time
+ON payment_orders(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_orders_user_time
+ON payment_orders(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS payment_attempts (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES payment_orders(id) ON DELETE CASCADE,
+    purpose TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    request_digest TEXT,
+    provider_request_id TEXT,
+    status TEXT NOT NULL,
+    http_status INTEGER,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    error_code TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_payment_attempts_order
+ON payment_attempts(order_id, started_at DESC);
+CREATE TABLE IF NOT EXISTS payment_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT REFERENCES payment_orders(id) ON DELETE SET NULL,
+    provider TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_digest TEXT NOT NULL UNIQUE,
+    provider_event_id TEXT,
+    received_at TEXT NOT NULL,
+    processed_at TEXT,
+    status TEXT NOT NULL,
+    reason TEXT,
+    payload_safe_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_payment_events_order
+ON payment_events(order_id, received_at DESC);
+CREATE TABLE IF NOT EXISTS payment_webhooks (
+    id TEXT PRIMARY KEY,
+    event_id INTEGER REFERENCES payment_events(id) ON DELETE SET NULL,
+    request_method TEXT NOT NULL,
+    request_path TEXT NOT NULL,
+    source_hash TEXT,
+    signature_valid INTEGER NOT NULL,
+    merchant_valid INTEGER NOT NULL,
+    invoice_valid INTEGER NOT NULL,
+    amount_valid INTEGER NOT NULL,
+    currency_valid INTEGER NOT NULL,
+    status_valid INTEGER NOT NULL,
+    timestamp_valid INTEGER NOT NULL,
+    replay_valid INTEGER NOT NULL,
+    body_hash TEXT NOT NULL,
+    http_status INTEGER NOT NULL,
+    response_code TEXT NOT NULL,
+    received_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payment_receipts (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES payment_orders(id) ON DELETE CASCADE,
+    receipt_type TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    tax TEXT NOT NULL,
+    payment_method TEXT NOT NULL,
+    payment_object TEXT NOT NULL,
+    provider_receipt_id TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payment_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT REFERENCES payment_orders(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    from_status TEXT,
+    to_status TEXT,
+    reason TEXT,
+    actor_type TEXT NOT NULL,
+    actor_ref_hash TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_payment_audit_order
+ON payment_audit(order_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS refund_intents (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL REFERENCES payment_orders(id),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor > 0),
+    currency TEXT NOT NULL CHECK(currency='RUB'),
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    provider_request_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_refund_intents_order
+ON refund_intents(order_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS refund_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    refund_id TEXT NOT NULL REFERENCES refund_intents(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    from_status TEXT,
+    to_status TEXT,
+    reason TEXT,
+    actor_type TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
 PROVIDER_CONTEXT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS provider_contexts (
     id TEXT PRIMARY KEY,
@@ -526,7 +662,36 @@ class Database:
                 )
             connection.executescript(MAX_SCHEMA)
             connection.executescript(TELEMETRY_SCHEMA)
+            connection.executescript(PAYMENT_SCHEMA)
             connection.executescript(PROVIDER_CONTEXT_SCHEMA)
+            payment_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(payment_intents)")
+            }
+            for name, declaration in (
+                ("version_id", "TEXT"),
+                ("user_id", "TEXT"),
+                ("provider", "TEXT NOT NULL DEFAULT 'legacy'"),
+                ("currency", "TEXT NOT NULL DEFAULT 'RUB'"),
+                ("updated_at", "TEXT"),
+                ("expires_at", "TEXT"),
+            ):
+                if name not in payment_columns:
+                    connection.execute(
+                        f"ALTER TABLE payment_intents ADD COLUMN {name} {declaration}"
+                    )
+            gallery_version_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(gallery_versions)")
+            }
+            for name, declaration in (
+                ("payment_order_id", "TEXT"),
+                ("unlocked_at", "TEXT"),
+                ("delivery_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("last_delivered_at", "TEXT"),
+            ):
+                if name not in gallery_version_columns:
+                    connection.execute(
+                        f"ALTER TABLE gallery_versions ADD COLUMN {name} {declaration}"
+                    )
             dialog_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(max_dialogs)")
             }
@@ -590,6 +755,26 @@ class Database:
                         "optional_openai_provider_context",
                         datetime.now(timezone.utc).isoformat(),
                     ),
+                )
+            payment_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=8"
+            ).fetchone()
+            if payment_migration is None:
+                now = datetime.now(timezone.utc).isoformat()
+                connection.execute(
+                    """UPDATE payment_intents
+                       SET version_id=(SELECT id FROM gallery_versions
+                                       WHERE gallery_versions.attempt_id=payment_intents.attempt_id),
+                           user_id=(SELECT user_id FROM generation_attempts
+                                    WHERE generation_attempts.id=payment_intents.attempt_id),
+                           updated_at=COALESCE(updated_at,confirmed_at,created_at),
+                           expires_at=COALESCE(expires_at,datetime(created_at,'+30 minutes'))
+                       WHERE version_id IS NULL OR user_id IS NULL OR updated_at IS NULL
+                          OR expires_at IS NULL"""
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(8,?,?)",
+                    ("version_scoped_commercial_payments", now),
                 )
         finally:
             connection.close()

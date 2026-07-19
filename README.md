@@ -67,13 +67,21 @@ python -m app.main gallery-cleanup           # dry-run
 python -m app.main gallery-cleanup --execute # физическая очистка
 python -m app.main maintenance-cleanup       # retention + temp + orphan dry-run
 python -m app.main launch-status              # privacy-safe readiness
+python -m app.main health-report              # consolidated commercial health
+python -m app.main payment-status             # no identifiers or secrets
+python -m app.main pilot-status
+python -m app.main cost-status
 ```
 
 Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `TRASH_RETENTION_DAYS=30`. MAX показывает последние работы как preview-карточки, версию, correction/repeat/current-best/favorite/delete. Collections, сложный поиск, before/after slider и экспорт не входят в основной v1 UX.
 
 ## MAX closed-test transport
 
-Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы owner allowlist, закрытый ответ для остальных и прямой UX `/start → фото → текст → результат`. Загрузка валидного source автоматически фиксирует согласие; отдельного Continue и prompt confirmation нет. Следующий текст после результата автоматически продолжает работу как correction. «✨ Идеи» — необязательный каталог. Processing, watermarked preview, correction/repeat, «Мои работы», favorite и физическое удаление сохранены.
+Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы owner allowlist, закрытый ответ для остальных и прямой UX `/start → фото → текст → результат`. Загрузка валидного source автоматически фиксирует согласие; отдельного Continue и prompt confirmation нет. Следующий текст после результата автоматически продолжает работу как correction. «✨ Идеи» — необязательный каталог. Processing, watermarked preview, correction/repeat, «Мои работы», favorite, корзина и restore сохранены.
+
+## Commercial payments
+
+Migration v8 implements Robokassa sandbox architecture, exact-`GalleryVersion` unlock, idempotent ResultURL processing, retriable original delivery and refund drafts/CLI. Real money is not enabled by this implementation: every deploy forces payment/webhook/refund flags off, sandbox mode and no production approval. Read [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
 
 ```powershell
 python -m app.main max-check

@@ -2,15 +2,16 @@
 
 ## Current verdict
 
-Not public-ready. Production deploy, encrypted restore/off-site backup, cleanup and strict operational readiness are green. The next gate is controlled owner validation: three required paths and five consecutive successful full E2E runs before any five-user pilot.
+Not public-ready. Owner image E2E is complete, and commercial architecture is ready for deployment with all payment flags off. The next gates are a fresh migration-v8 backup/restore/off-site cycle, owner Robokassa sandbox through public HTTPS ResultURL, legal/fiscal review and a supported five-user pilot.
 
 ## Automated evidence
 
-`python -m app.main launch-status --strict` requires: correct model, configured credentials/owner, active service, fresh polling, live MAX/OpenAI connectivity, SQLite quick_check + migration v6, disk reserve, no active processing, recent backup, matching restore test and off-site confirmation. It reports cleanup age/orphans and daily generation/duration/error/delivery/cost metrics.
+`python -m app.main launch-status --strict` requires: correct model, configured credentials/owner, active service, fresh polling, live MAX/OpenAI connectivity, SQLite quick_check + migration v8, disk reserve, no active processing, recent backup, matching restore test and off-site confirmation. `health-report` adds payment, refund, pilot, storage, cleanup and cost state without identifiers.
 
 ## Blockers beyond five users
 
-- no real payment/refund integration;
+- no Robokassa sandbox or real-payment evidence through the production HTTPS ResultURL;
+- automatic refund cannot run without a reconciled provider operation key;
 - legal drafts lack verified operator details and specialist review;
 - no evidence yet for ≥80% first-result completion and <5% delivery failure;
 - estimated OpenAI cost is not reconciled to invoice;
@@ -19,7 +20,7 @@ Not public-ready. Production deploy, encrypted restore/off-site backup, cleanup 
 
 ## Public blockers
 
-Final legal/consent/transborder processing position, payment and refunds, working MAX deep link/site decision, support contacts/SLA, abuse controls, pilot evidence and scale decision. Public readiness must remain false in CLI until these are explicitly closed.
+Final legal/consent/transborder/fiscal position, verified payment and refunds, working MAX deep link/site decision, support contacts/SLA, abuse controls, pilot evidence and scale decision. Public readiness must remain false until these are explicitly closed.
 
 ## Legal checklist requiring specialist review
 
@@ -32,6 +33,7 @@ Final legal/consent/transborder processing position, payment and refunds, workin
 - user warranty of rights to the photo and consent of depicted people;
 - rule for minors and age/guardian confirmation;
 - payment, failed delivery, cancellation and refund rules;
+- fiscal receipt nomenclature/tax, Robokassa merchant agreement and accounting retention;
 - support channel, response expectations and data-deletion requests.
 
 Current in-bot and site documents are drafts. They are not a substitute for a qualified legal review.

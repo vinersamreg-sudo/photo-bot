@@ -1,6 +1,6 @@
 # Current State
 
-Актуально на 19.07.2026 после deploy optional provider context с feature flags off.
+Актуально на 19.07.2026 для commercial MVP candidate. Production deployment обязан оставлять AI experiments и реальные платежи выключенными.
 
 ## Подтверждено в production
 
@@ -8,7 +8,7 @@
 - `photo-bot.service` и MAX polling здоровы; `MAX_POLL_OBSERVE_ONLY=true`;
 - owner allowlist настроен, pilot limit 0, пользовательские handlers выключены;
 - OpenAI `gpt-image-2` — единственный production image provider; router/composite/segmentation выключены;
-- SQLite migration v7, `PRAGMA quick_check=ok`, pending/processing attempts 0, processing dialogs 0, processing GalleryVersions 0;
+- SQLite migration v8, `PRAGMA quick_check=ok`, pending/processing attempts 0, processing dialogs 0, processing GalleryVersions 0 проверяются post-deploy audit;
 - owner dialog восстановлен в `main_menu`;
 - encrypted backup/restore/off-site lifecycle подтверждён; public launch readiness остаётся false.
 
@@ -32,11 +32,23 @@
 - исправлен ложный orphan: session `metadata.json` теперь считается referenced и не удаляется maintenance;
 - после deploy повторный аудит подтвердил orphan private files 0.
 
-Local/CI suite: 208 unittest tests, dependency check, secret scan, license audit и compile check зелёные.
+Commercial candidate расширяет regression suite до 230 pytest tests и 26 subtests без реальных OpenAI image calls и без платежей.
+
+## Commercial MVP candidate
+
+- migration v8 добавляет PaymentOrder/Attempt/Event/Webhook/Receipt/Audit и RefundIntent/Audit;
+- Robokassa payment link и classic ResultURL доступны только за fail-closed flags;
+- paid callback разблокирует одну точную GalleryVersion; GalleryItem и соседние версии не разблокируются;
+- MAX delivery failure сохраняет подтверждённую оплату и допускает повторную выдачу original;
+- refund draft/CLI реализованы; provider execution требует Password3, operation key и отдельного enable;
+- result и Gallery UX сокращены, удаление стало recoverable trash/restore;
+- добавлены privacy-safe `pilot/payment/storage/backup/cleanup/cost/health` отчёты;
+- каждый deploy принудительно возвращает payments/webhook/refunds off, provider disabled, sandbox и production approval false;
+- owner sandbox Robokassa, публичный HTTPS ResultURL и настоящий платёж ещё не проверены.
 
 ## Не готово
 
-Эквайринг, verified payment callback/refunds, окончательные legal documents/operator details, support process, public deep link/site launch, внешний пилот 5 пользователей и 10/20-user evidence. Long polling допустим для малого allowlisted pilot, но не для сотен публичных пользователей. До платного публичного запуска нужен visual quality gate для identity/scene drift.
+Provider sandbox/real-payment evidence, operation-key refund reconciliation, окончательные legal/fiscal documents/operator details, support process, public deep link/site launch, внешний пилот 5 пользователей и 10/20-user evidence. Long polling допустим для малого allowlisted pilot, но не для сотен публичных пользователей. До платного публичного запуска нужен visual quality gate для identity/scene drift.
 
 ## 19.07.2026 — optional provider context
 

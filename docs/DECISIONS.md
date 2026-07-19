@@ -1,5 +1,17 @@
 # Decisions
 
+## ADR-037 — Real payments are a separately approved rollout
+
+Принято 19.07.2026. Commercial code does not authorize money movement. Deploy всегда принудительно ставит payments/provider/webhook/refunds в disabled/sandbox и `ROBOKASSA_PRODUCTION_APPROVED=false`. Production mode требует отдельного решения владельца после sandbox, HTTPS, legal/fiscal и support gates.
+
+## ADR-036 — ResultURL commits payment before MAX delivery
+
+Принято 19.07.2026. Валидный ResultURL атомарно подтверждает оплату и exact-version unlock. MAX delivery выполняется после commit; ошибка доставки переводит order в `delivery_pending`, но не отменяет оплату и не требует повторного платежа. Classic ResultURL не маскируется под ResultURL2: merchant/currency/expiry привязаны к local order, а provider timestamp отсутствует.
+
+## ADR-035 — Покупается одна GalleryVersion
+
+Принято 19.07.2026. PaymentOrder связывает user/attempt/version и разблокирует только `gallery_versions.id`. Нельзя разблокировать пользователя, всю Gallery, GalleryItem, sibling versions, future corrections или repeats. Refund and delivery history сохраняют эту же связь.
+
 ## ADR-034 — Pilot readiness requires restore-tested off-site backup
 
 Принято 17.07.2026. Ежедневный SQLite snapshot шифруется и считается готовым только после фактической расшифровки, `quick_check` и внешней копии. Cleanup выполняется после off-site confirmation. `launch-status --strict` является автоматическим gate пилота, но не заменяет owner E2E.

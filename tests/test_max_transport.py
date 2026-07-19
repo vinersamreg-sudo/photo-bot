@@ -101,9 +101,19 @@ class MaxTransportTests(TestCase):
             token = client.upload_image(source)
             self.assertEqual(token, "media-token")
             mid = client.send_message(
-                "42", "result", (Button("OK", "ok"),), image_token=token
+                "42", "result",
+                (Button("OK", "ok"), Button("Оплатить", "https://pay.example/order")),
+                image_token=token,
             )
             self.assertEqual(mid, "sent-1")
+            message_request = next(
+                request for request in api_requests
+                if request.url.path == "/messages" and request.method == "POST"
+            )
+            keyboard = json.loads(message_request.content)["attachments"][-1]["payload"]["buttons"]
+            self.assertEqual(keyboard[0][0]["type"], "callback")
+            self.assertEqual(keyboard[1][0]["type"], "link")
+            self.assertEqual(keyboard[1][0]["url"], "https://pay.example/order")
             downloaded = Path(directory) / "incoming.bin"
             client.download_image("https://iu.oneme.ru/input", downloaded, 1024)
             self.assertEqual(downloaded.read_bytes(), image_bytes)

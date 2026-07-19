@@ -1,5 +1,17 @@
 # Changelog
 
+## 19.07.2026 — Commercial MVP payment boundary
+
+- migration v8 adds version-scoped payment orders, attempts, events, webhooks, receipts, audit and refunds;
+- added Robokassa sandbox/production provider with fail-closed flags and classic ResultURL signature/idempotency checks;
+- payment unlocks one exact GalleryVersion; delivery failure preserves paid state and supports re-delivery;
+- refund prepare/submit/status CLI is gated by Password3, operation key and an independent enable flag;
+- every deploy forces payments, webhook and refunds off, provider disabled, sandbox and production approval false;
+- result/Gallery actions are shorter; delete is recoverable through trash/restore;
+- added privacy-safe payment/pilot/storage/backup/cleanup/cost/health reports and commercial runbooks;
+- regression suite is 230 pytest tests plus 26 subtests; no real OpenAI image request or money movement was performed in this sprint;
+- Robokassa sandbox, public HTTPS ResultURL, legal/fiscal review and first real 149 RUB payment remain unverified gates.
+
 ## 17.07.2026 — Повторная owner-only visual validation
 
 - выполнено ровно 5/5 разрешённых реальных `gpt-image-2` запросов через production MAX flow;

@@ -16,6 +16,8 @@ from app.max_transport import (
     SingleInstanceLock,
     parse_update,
 )
+from app.payments import build_payment_service
+from app.payment_webhook import PaymentWebhookServer
 
 
 LOGGER = logging.getLogger(__name__)
@@ -39,7 +41,10 @@ def build_max_application(
     )
     demo = build_demo_service(settings, provider_name="openai")
     store = MaxConversationStore(database)
-    return MaxApplication(settings, database, demo, transport, store), transport, store
+    payments = build_payment_service(settings, database)
+    return MaxApplication(
+        settings, database, demo, transport, store, payment_service=payments
+    ), transport, store
 
 
 def run_polling(settings: Settings, stop_event: threading.Event) -> int:
@@ -55,6 +60,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
         media_host_suffixes=settings.max_media_host_suffixes,
     )
     application = None
+    payment_webhook = None
     if not settings.max_poll_observe_only:
         if not settings.max_owner_user_ids:
             client.close()
@@ -65,6 +71,23 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
         application, client, store = build_max_application(settings, client)
     try:
         with SingleInstanceLock(settings.max_poll_lock_path):
+            if settings.payments_enabled and settings.payment_webhook_enabled:
+                payment_service = (
+                    application.payments
+                    if application is not None
+                    else build_payment_service(settings, database)
+                )
+                payment_webhook = PaymentWebhookServer(
+                    payment_service,
+                    settings.payment_webhook_host,
+                    settings.payment_webhook_port,
+                    settings.payment_webhook_path,
+                    on_paid=(
+                        application.deliver_paid_original
+                        if application is not None else None
+                    ),
+                )
+                payment_webhook.start()
             runtime_database = application.database if application is not None else database
             crash_recovery = runtime_database.recover_interrupted_runtime()
             if any(crash_recovery.values()):
@@ -141,6 +164,8 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                     )
                     stop_event.wait(settings.max_poll_retry_seconds)
     finally:
+        if payment_webhook is not None:
+            payment_webhook.stop()
         client.close()
     LOGGER.info("MAX polling stopped")
     return 0

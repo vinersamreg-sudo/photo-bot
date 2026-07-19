@@ -4,9 +4,13 @@
 
 Five full E2E successes in a row; no stuck status, original leak, quota debit on technical failure or lost GalleryVersion; encrypted backup restored; cleanup and recovery verified. Real image requests are agreed before execution and counted.
 
+Owner image gate is complete. Before external users, deploy migration v8 with payments off, create/restore/off-site a fresh backup, verify no payment listener is public and complete owner sandbox separately. A five-user generation pilot does not require real payments.
+
 ## Five users
 
 Activate the first five entries of secret `MAX_PILOT_USER_IDS`; do not reveal IDs in reports. Review launch-status daily. Track start → upload → prompt → processing → delivery, first-result completion, corrections/repeats, feedback, errors, latency and estimate. Provide manual support.
+
+Keep `PAYMENTS_ENABLED=false` unless the owner explicitly starts the separate payment rollout. The closed-test message must remain the only response for users outside owner + active five-ID prefix, with no OpenAI request and no order creation.
 
 ## Ten users
 

@@ -313,6 +313,17 @@ jobs:
             ensure_env MAX_PROMPT_LENGTH 1500
             ensure_env GENERATION_TIMEOUT_SECONDS 300
             ensure_env UNLOCK_ORIGINAL_PRICE_RUB 149
+            ensure_env PAYMENT_CURRENCY RUB
+            ensure_env PAYMENT_ORDER_TTL_MINUTES 30
+            ensure_env PAYMENT_WEBHOOK_HOST 127.0.0.1
+            ensure_env PAYMENT_WEBHOOK_PORT 8091
+            ensure_env PAYMENT_WEBHOOK_PATH /payments/robokassa/result
+            ensure_env ROBOKASSA_HASH_ALGORITHM sha256
+            ensure_env ROBOKASSA_PAYMENT_URL https://auth.robokassa.ru/Merchant/Index.aspx
+            ensure_env ROBOKASSA_REFUND_URL https://services.robokassa.ru/RefundService/Refund/Create
+            ensure_env ROBOKASSA_REFUND_STATUS_URL https://services.robokassa.ru/RefundService/Refund/GetState
+            ensure_env PAYMENT_RECEIPT_TAX none
+            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Оригинал фотографии Pixora'
             ensure_env DEMO_RETENTION_DAYS 30
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
@@ -334,6 +345,14 @@ jobs:
             set_env OPENAI_CONVERSATION_MEMORY_ENABLED false
             set_env OPENAI_RESPONSES_IMAGE_ENABLED false
             set_env OPENAI_CONVERSATION_RETENTION_ENABLED false
+            # Commercial integrations require a separate, explicit rollout.
+            set_env PAYMENTS_ENABLED false
+            set_env PAYMENT_PROVIDER disabled
+            set_env PAYMENT_WEBHOOK_ENABLED false
+            set_env PAYMENT_REFUNDS_ENABLED false
+            set_env ROBOKASSA_MODE sandbox
+            set_env ROBOKASSA_PRODUCTION_APPROVED false
+            ensure_env ROBOKASSA_COMMISSION_PERCENT 0
             set_env APP_ENV production
             set_env BASE_DIR /opt/photo-bot
             if grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
@@ -474,11 +493,19 @@ jobs:
               migration_v7 = bool(connection.execute(
                   "SELECT 1 FROM schema_migrations WHERE version=7"
               ).fetchone())
+              migration_v8 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=8"
+              ).fetchone())
           finally:
               connection.close()
           assert quick_check == "ok"
           assert migration_v6
           assert migration_v7
+          assert migration_v8
+          assert settings.payments_enabled is False
+          assert settings.payment_webhook_enabled is False
+          assert settings.payment_refunds_enabled is False
+          assert settings.robokassa_mode == "sandbox"
           assert settings.openai_conversation_memory_enabled is False
           assert settings.openai_responses_image_enabled is False
           assert settings.openai_conversation_retention_enabled is False
@@ -525,6 +552,11 @@ jobs:
               "sqlite_quick_check": quick_check,
               "migration_v6": migration_v6,
               "migration_v7": migration_v7,
+              "migration_v8": migration_v8,
+              "payments_enabled": settings.payments_enabled,
+              "payment_webhook_enabled": settings.payment_webhook_enabled,
+              "payment_refunds_enabled": settings.payment_refunds_enabled,
+              "robokassa_mode": settings.robokassa_mode,
               "openai_conversation_memory_enabled": settings.openai_conversation_memory_enabled,
               "openai_responses_image_enabled": settings.openai_responses_image_enabled,
               "openai_conversation_retention_enabled": (

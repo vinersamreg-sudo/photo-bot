@@ -57,6 +57,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn('"migration_v6": migration_v6', self.workflow)
         self.assertIn("WHERE version=7", self.workflow)
         self.assertIn('"migration_v7": migration_v7', self.workflow)
+        self.assertIn("WHERE version=8", self.workflow)
+        self.assertIn('"migration_v8": migration_v8', self.workflow)
+        self.assertIn("assert migration_v8", self.workflow)
         self.assertIn('"stale_processing_orphans": stale_processing_orphans', self.workflow)
         self.assertIn("assert stale_processing_orphans == 0", self.workflow)
 
@@ -101,6 +104,12 @@ class DeployPolicyTests(TestCase):
         self.assertIn("ensure_env DEMO_RETENTION_DAYS 30", self.workflow)
         self.assertIn("ensure_env PAID_RETENTION_DAYS 180", self.workflow)
         self.assertIn("ensure_env TRASH_RETENTION_DAYS 30", self.workflow)
+        self.assertIn("set_env PAYMENTS_ENABLED false", self.workflow)
+        self.assertIn("set_env PAYMENT_PROVIDER disabled", self.workflow)
+        self.assertIn("set_env PAYMENT_WEBHOOK_ENABLED false", self.workflow)
+        self.assertIn("set_env PAYMENT_REFUNDS_ENABLED false", self.workflow)
+        self.assertIn("set_env ROBOKASSA_MODE sandbox", self.workflow)
+        self.assertIn("set_env ROBOKASSA_PRODUCTION_APPROVED false", self.workflow)
 
     def test_transfers_openai_key_via_stdin_and_checks_authorization(self) -> None:
         self.assertIn("Validate OpenAI credential from GitHub runner", self.workflow)
