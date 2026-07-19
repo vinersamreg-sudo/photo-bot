@@ -59,6 +59,7 @@ jobs:
         with:
           name: pixora-lighthouse-${{ github.sha }}
           path: site/.lighthouse/report-*.json
+          include-hidden-files: true
           if-no-files-found: warn
       - name: Enforce Lighthouse budgets
         run: |
