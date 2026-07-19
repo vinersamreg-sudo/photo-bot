@@ -1,7 +1,7 @@
 param([string]$BaseUrl = "http://127.0.0.1:4173")
 $ErrorActionPreference = "Stop"
 $paths = @(
-    "/", "/styles.css", "/app.js", "/robots.txt", "/sitemap.xml", "/site.webmanifest",
+    "/", "/styles.css", "/robots.txt", "/sitemap.xml", "/site.webmanifest",
     "/contacts.html", "/legal/privacy.html", "/legal/offer.html",
     "/legal/personal-data.html", "/legal/payment-refund.html", "/legal/terms.html"
 )

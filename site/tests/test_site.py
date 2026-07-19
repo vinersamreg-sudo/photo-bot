@@ -71,6 +71,10 @@ class PixoraSiteTests(unittest.TestCase):
         h1 = [text for level, text in self.parsers["index.html"].headings if level == "h1"]
         self.assertEqual(h1, ["Pixora AI"])
 
+    def test_public_home_has_no_runtime_javascript(self) -> None:
+        self.assertNotIn("<script src=", self.html)
+        self.assertFalse((PUBLIC / "app.js").exists())
+
     # 02
     def test_required_product_sections_exist(self) -> None:
         for section_id in ("possibilities", "examples", "how", "faq"):
