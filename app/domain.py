@@ -105,6 +105,28 @@ class ProviderResult:
     usage: Mapping[str, Any] = field(default_factory=dict)
     estimated_cost_rub: Optional[float] = None
     retries: int = 0
+    provider_name: Optional[str] = None
+    provider_model: Optional[str] = None
+    image_model: Optional[str] = None
+    provider_response_id: Optional[str] = None
+    provider_conversation_id: Optional[str] = None
+    provider_mode: str = "stateless"
+    context_depth: int = 0
+    context_fallback_used: bool = False
+    context_fallback_reason: Optional[str] = None
+    http_status: Optional[int] = None
+    provider_duration_ms: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class ProviderContextRequest:
+    """Non-authoritative provider context selected from Pixora lineage."""
+
+    context_id: str
+    previous_response_id: Optional[str]
+    conversation_id: Optional[str]
+    depth: int
+    reason: str
 
 
 @dataclass(frozen=True)

@@ -108,3 +108,19 @@ Systemd hardening template находится в `ops/photo-bot.service`. Еже
 Главный источник истины — [docs/PROJECT_BIBLE.md](docs/PROJECT_BIBLE.md). Текущее состояние, архитектура, процесс поставки и решения описаны в остальных файлах каталога `docs/`.
 
 Исторические hybrid-processing исследования сохранены в `docs/`, но не описывают production path v1. Повторная оценка provider/semantic parsing проводится только после данных закрытого пилота.
+
+## Optional OpenAI context (disabled)
+
+Pixora хранит память работы сама, а OpenAI conversation используется как
+дополнительный контекст для последовательных правок. Интеграция закрыта тремя
+feature flags; обычный deploy устанавливает их в `false`. Текущий production
+endpoint остаётся `/v1/images/edits`.
+
+Аудит и lifecycle: [OPENAI_CONVERSATION_MEMORY_AUDIT.md](docs/OPENAI_CONVERSATION_MEMORY_AUDIT.md),
+[OPENAI_CONVERSATION_MEMORY_ARCHITECTURE.md](docs/OPENAI_CONVERSATION_MEMORY_ARCHITECTURE.md),
+[PROVIDER_CONTEXT_LIFECYCLE.md](docs/PROVIDER_CONTEXT_LIFECYCLE.md).
+
+```bash
+python -m app.main provider-context-cleanup
+python -m app.main provider-context-cleanup --execute
+```

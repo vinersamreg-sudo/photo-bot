@@ -32,8 +32,20 @@
 - исправлен ложный orphan: session `metadata.json` теперь считается referenced и не удаляется maintenance;
 - после deploy повторный аудит подтвердил orphan private files 0.
 
-Local/CI suite: 147 unittest tests, secret scan и production healthcheck зелёные.
+Local/CI suite: 207 unittest tests, dependency check, secret scan, license audit и compile check зелёные.
 
 ## Не готово
 
 Эквайринг, verified payment callback/refunds, окончательные legal documents/operator details, support process, public deep link/site launch, внешний пилот 5 пользователей и 10/20-user evidence. Long polling допустим для малого allowlisted pilot, но не для сотен публичных пользователей. До платного публичного запуска нужен visual quality gate для identity/scene drift.
+
+## 19.07.2026 — optional provider context
+
+- официальный API-аудит Responses/image tool выполнен;
+- migration v7 и optional provider context реализованы;
+- source of truth не изменён: SQLite + Storage + GalleryVersion + SceneIntent;
+- production flow остаётся `/v1/images/edits`;
+- три OpenAI context flags по умолчанию и в deploy выключены;
+- реальные OpenAI image requests для этой работы: 0;
+- 207/207 локальных regression tests пройдены;
+- controlled comparison на 4 calls только подготовлен и требует разрешения;
+- визуальная польза, latency и стоимость пока не подтверждены.

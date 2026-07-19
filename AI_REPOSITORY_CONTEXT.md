@@ -33,3 +33,11 @@ Operations:
 Migration v6 contains privacy-minimal product events. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment and final legal documents are not ready. Site must not be published until MAX deep link and legal/public-launch decision are ready.
 
 AI quality limits: identity/background can drift, corrections accumulate changes, outputs are nondeterministic and not pixel-perfect Photoshop. Report these honestly.
+
+Optional OpenAI context (19.07.2026): migration v7 and adapters exist but all
+feature flags are false in production. Pixora memory remains SQLite + Storage +
+GalleryVersion + SceneIntent. `previous_response_id` is auxiliary per-version
+lineage; Repeat is stateless; failures fall back to `/v1/images/edits`. No real
+image request was made for this implementation. Before enabling anything, read
+`docs/OPENAI_CONVERSATION_MEMORY_AUDIT.md`, architecture and four-call runbook.
+New operation: `python -m app.main provider-context-cleanup [--execute]`.

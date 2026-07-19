@@ -149,3 +149,16 @@ SHA-256. Нет asset/model/mask — нет обработки. Silent fallback 
 Опциональный rembg CPU с pre-provisioned `u2net_human_seg` и pinned checksum
 остаётся disabled до VPS resource benchmark и owner visual approval. AI finishing
 также disabled.
+
+## ADR-028 — OpenAI memory is auxiliary and fail-open
+
+Принято 19.07.2026. Pixora SQLite, private Storage, GalleryVersion lineage и
+SceneIntent остаются источником истины. Для контролируемого эксперимента добавлен
+Responses image-tool adapter с `gpt-image-2` и `previous_response_id` конкретной
+parent version. Одна remote Conversation на всё дерево отклонена: она линейна и
+может смешать независимые ветви.
+
+Repeat остаётся stateless. Missing/invalid/expired context выполняет stateless
+fallback. Policy и exhausted quota не создают второй вызов. Feature flags по
+умолчанию выключены, deploy возвращает их в `false`. Решение о пилоте отложено до
+owner-only сравнения качества, latency и стоимости.

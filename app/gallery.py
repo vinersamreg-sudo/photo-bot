@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,7 @@ from app.domain import InvalidInputError
 from app.edit_intent import EditPlan
 from app.processing_modes import ProcessingPlan, legacy_processing_plan
 from app.storage import PrivateStorage
+from app.provider_context import ProviderContextService
 
 
 def _now() -> datetime:
@@ -62,6 +64,11 @@ class GalleryVersion:
     source_version_id: Optional[str]
     prompt_builder_version: str
     processing_plan: ProcessingPlan
+    provider_mode: str
+    provider_response_id: Optional[str]
+    provider_context_id: Optional[str]
+    context_depth: int
+    context_fallback_reason: Optional[str]
 
 
 class GalleryService:
@@ -71,11 +78,13 @@ class GalleryService:
         storage: PrivateStorage,
         settings: Settings,
         clock: Callable[[], datetime] = _now,
+        provider_context_service: Optional[ProviderContextService] = None,
     ) -> None:
         self.database = database
         self.storage = storage
         self.settings = settings
         self.clock = clock
+        self.provider_context_service = provider_context_service
 
     @staticmethod
     def _item(row: sqlite3.Row) -> GalleryItem:
@@ -114,6 +123,9 @@ class GalleryService:
             plan, row["provider_prompt"] or row["effective_prompt"],
             row["source_version_id"], row["prompt_builder_version"] or "legacy-concatenation",
             processing_plan,
+            row["provider_mode"] or "stateless", row["provider_response_id"],
+            row["provider_context_id"], int(row["context_depth"] or 0),
+            row["context_fallback_reason"],
         )
 
     def create_item(
@@ -246,7 +258,14 @@ class GalleryService:
                    ,selected_mode,mode_reason,mode_confidence,fallback_mode,
                    asset_source_type,asset_id,asset_checksum,mask_strategy,processing_provider,
                    processing_provider_model,processing_pipeline_version,processing_plan_json
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   ,provider_mode,provider_response_id,provider_conversation_id,
+                   provider_context_id,context_parent_response_id,context_depth,
+                   context_fallback_reason,provider_http_status,provider_duration_ms
+                   ,provider_parent_response_id,provider_context_used,
+                   provider_context_fallback_reason,input_version_id,
+                   effective_prompt_hash,scene_intent_hash,provider_request_id,
+                   provider_usage_json
+                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id, gallery_item_id, attempt_id, number,
                 attempt["parent_version_id"], attempt["source_path"], attempt["prompt"],
@@ -262,6 +281,19 @@ class GalleryService:
                 attempt["mask_strategy"], attempt["processing_provider"],
                 attempt["processing_provider_model"], attempt["processing_pipeline_version"],
                 attempt["processing_plan_json"],
+                attempt["provider_mode"], attempt["provider_response_id"],
+                attempt["provider_conversation_id"], attempt["provider_context_id"],
+                attempt["context_parent_response_id"], attempt["context_depth"],
+                attempt["context_fallback_reason"], attempt["provider_http_status"],
+                attempt["provider_duration_ms"],
+                attempt["context_parent_response_id"],
+                int(attempt["provider_mode"] == "responses"),
+                attempt["context_fallback_reason"], attempt["source_version_id"],
+                hashlib.sha256(
+                    (attempt["effective_prompt"] or attempt["prompt"]).encode("utf-8")
+                ).hexdigest(),
+                hashlib.sha256((attempt["edit_plan_json"] or "").encode("utf-8")).hexdigest(),
+                attempt["external_request_id"], attempt["usage_json"],
             ),
         )
         connection.execute(
@@ -593,6 +625,13 @@ class GalleryService:
         return [row["id"] for row in rows]
 
     def purge_item(self, item_id: str) -> None:
+        if (
+            self.provider_context_service is not None
+            and self.settings.openai_context_delete_on_gallery_delete
+        ):
+            # Remote cleanup is best-effort and leaves a retryable tombstone.
+            # User data purge must never be blocked by a provider outage.
+            self.provider_context_service.delete_for_gallery(item_id)
         with self.database.transaction() as connection:
             item = connection.execute("SELECT * FROM gallery_items WHERE id=?", (item_id,)).fetchone()
             if not item:

@@ -35,6 +35,7 @@ from app.prompt_builder import safe_prompt_inspection
 from app.backup import BackupError, BackupManager
 from app.maintenance import run_maintenance
 from app.operations import print_launch_status
+from app.provider_context import OpenAIProviderContextGateway, ProviderContextService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -423,6 +424,31 @@ def run_maintenance_command(settings: Settings, execute: bool) -> int:
     return 0
 
 
+def run_provider_context_cleanup(settings: Settings, execute: bool) -> int:
+    try:
+        database = Database(settings.database_path)
+        gateway = (
+            OpenAIProviderContextGateway(create_openai_client(settings))
+            if settings.openai_api_key
+            else None
+        )
+        service = ProviderContextService(settings, database, gateway)
+        due = service.cleanup_due(execute=execute)
+        with database.read() as connection:
+            pending = connection.execute(
+                "SELECT COUNT(*) FROM provider_contexts WHERE status='delete_pending'"
+            ).fetchone()[0]
+    except (OSError, sqlite3.Error, RuntimeError) as exc:
+        LOGGER.error("Provider context cleanup failed safely (error_type=%s)", type(exc).__name__)
+        return 1
+    print(json.dumps({
+        "mode": "execute" if execute else "dry-run",
+        "due_count": len(due),
+        "pending_count": pending,
+    }, sort_keys=True))
+    return 0
+
+
 def run_ai_inspect(settings: Settings, attempt_id: str) -> int:
     """Print provider intent without platform identity, paths or credentials."""
 
@@ -467,6 +493,8 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--execute", action="store_true")
     maintenance = subparsers.add_parser("maintenance-cleanup")
     maintenance.add_argument("--execute", action="store_true")
+    provider_cleanup = subparsers.add_parser("provider-context-cleanup")
+    provider_cleanup.add_argument("--execute", action="store_true")
     backup_create = subparsers.add_parser("backup-create")
     backup_create.add_argument("--passphrase-stdin", action="store_true")
     backup_restore = subparsers.add_parser("backup-restore-test")
@@ -507,6 +535,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_gallery_cleanup(settings, args.execute)
     if args.command == "maintenance-cleanup":
         return run_maintenance_command(settings, args.execute)
+    if args.command == "provider-context-cleanup":
+        return run_provider_context_cleanup(settings, args.execute)
     if args.command == "backup-create":
         return run_backup_create(settings, args.passphrase_stdin)
     if args.command == "backup-restore-test":

@@ -27,6 +27,15 @@ class Settings:
     image_edit_input_fidelity: str = "auto"
     image_edit_output_format: str = "png"
     openai_max_retries: int = 2
+    openai_conversation_memory_enabled: bool = False
+    openai_responses_image_enabled: bool = False
+    openai_conversation_retention_enabled: bool = False
+    openai_responses_model: str = "gpt-5.4-mini"
+    openai_context_retention_days: int = 30
+    openai_context_delete_on_gallery_delete: bool = True
+    openai_context_delete_on_user_delete: bool = True
+    openai_context_max_idle_days: int = 14
+    openai_context_max_depth: int = 8
     demo_max_successful_generations: int = 5
     demo_session_ttl_minutes: int = 60
     demo_watermark_text: str = "ОБРАЗЕЦ"
@@ -265,6 +274,34 @@ def load_settings(
         image_edit_input_fidelity=image_edit_input_fidelity,
         image_edit_output_format=image_edit_output_format,
         openai_max_retries=_nonnegative_int(values, "OPENAI_MAX_RETRIES", 2),
+        openai_conversation_memory_enabled=_boolean(
+            values, "OPENAI_CONVERSATION_MEMORY_ENABLED", False
+        ),
+        openai_responses_image_enabled=_boolean(
+            values, "OPENAI_RESPONSES_IMAGE_ENABLED", False
+        ),
+        openai_conversation_retention_enabled=_boolean(
+            values, "OPENAI_CONVERSATION_RETENTION_ENABLED", False
+        ),
+        openai_responses_model=(
+            values.get("OPENAI_RESPONSES_MODEL", "gpt-5.4-mini").strip()
+            or "gpt-5.4-mini"
+        ),
+        openai_context_retention_days=_positive_int(
+            values, "OPENAI_CONTEXT_RETENTION_DAYS", 30
+        ),
+        openai_context_delete_on_gallery_delete=_boolean(
+            values, "OPENAI_CONTEXT_DELETE_ON_GALLERY_DELETE", True
+        ),
+        openai_context_delete_on_user_delete=_boolean(
+            values, "OPENAI_CONTEXT_DELETE_ON_USER_DELETE", True
+        ),
+        openai_context_max_idle_days=_positive_int(
+            values, "OPENAI_CONTEXT_MAX_IDLE_DAYS", 14
+        ),
+        openai_context_max_depth=_positive_int(
+            values, "OPENAI_CONTEXT_MAX_DEPTH", 8
+        ),
         demo_max_successful_generations=_positive_int(values, "DEMO_MAX_SUCCESSFUL_GENERATIONS", 5),
         demo_session_ttl_minutes=_positive_int(values, "DEMO_SESSION_TTL_MINUTES", 60),
         demo_watermark_text=values.get("DEMO_WATERMARK_TEXT", "ОБРАЗЕЦ").strip() or "ОБРАЗЕЦ",

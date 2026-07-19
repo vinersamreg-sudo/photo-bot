@@ -146,3 +146,14 @@
 - corrections/repeat наследуют parent plan; failures не создают version и quota;
 - 131 tests, license audit и offline benchmark; OpenAI image requests: 0;
 - production flags закрыты до assets/model/VPS/visual gates.
+
+## 19.07.2026 — optional OpenAI provider context
+
+- официальный audit Responses/Conversation/Image APIs;
+- migration v7: provider contexts, per-version response lineage и telemetry;
+- Responses image adapter с pinned `gpt-image-2` и parent `previous_response_id`;
+- stateless fallback, branch isolation, depth/idle reset и cleanup tombstones;
+- CLI `provider-context-cleanup` и retention integration;
+- deploy принудительно оставляет три context flags выключенными;
+- 207/207 unittest tests, dependency check, secret scan, license audit и compile check;
+- comparison подготовлен, не запускался; реальные image requests: 0.

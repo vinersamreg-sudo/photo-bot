@@ -55,6 +55,8 @@ class DeployPolicyTests(TestCase):
         self.assertIn("scripts/benchmark_processing.py", self.workflow)
         self.assertIn("WHERE version=6", self.workflow)
         self.assertIn('"migration_v6": migration_v6', self.workflow)
+        self.assertIn("WHERE version=7", self.workflow)
+        self.assertIn('"migration_v7": migration_v7', self.workflow)
         self.assertIn('"stale_processing_orphans": stale_processing_orphans', self.workflow)
         self.assertIn("assert stale_processing_orphans == 0", self.workflow)
 
@@ -89,6 +91,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn('install -m 600 /dev/null "$ROOT/.env"', self.workflow)
         self.assertNotIn("'OPENAI_API_KEY=", self.workflow)
         self.assertIn("set_env OPENAI_IMAGE_MODEL gpt-image-2", self.workflow)
+        self.assertIn("set_env OPENAI_CONVERSATION_MEMORY_ENABLED false", self.workflow)
+        self.assertIn("set_env OPENAI_RESPONSES_IMAGE_ENABLED false", self.workflow)
+        self.assertIn("set_env OPENAI_CONVERSATION_RETENTION_ENABLED false", self.workflow)
         self.assertIn("set_env APP_ENV production", self.workflow)
         self.assertIn("set_env BASE_DIR /opt/photo-bot", self.workflow)
         self.assertIn("ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5", self.workflow)

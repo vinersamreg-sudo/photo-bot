@@ -48,6 +48,37 @@ def collect_demo_stats(database: Database) -> dict[str, Any]:
         version_count = connection.execute(
             "SELECT COUNT(*) FROM gallery_versions"
         ).fetchone()[0]
+        context_metrics = connection.execute(
+            """SELECT
+                   SUM(CASE WHEN provider_mode='responses' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN provider_mode!='responses' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN context_fallback_reason IS NOT NULL THEN 1 ELSE 0 END),
+                   AVG(CASE WHEN provider_mode='responses' THEN context_depth END),
+                   AVG(CASE WHEN provider_mode='responses' THEN provider_duration_ms END),
+                   AVG(CASE WHEN provider_mode!='responses' THEN provider_duration_ms END),
+                   SUM(CASE WHEN provider_mode='responses' THEN estimated_cost ELSE 0 END),
+                   SUM(CASE WHEN provider_mode!='responses' THEN estimated_cost ELSE 0 END)
+               FROM generation_attempts"""
+        ).fetchone()
+        context_creation_count = connection.execute(
+            "SELECT COUNT(*) FROM provider_contexts"
+        ).fetchone()[0]
+        context_reuse_count = connection.execute(
+            "SELECT COUNT(*) FROM gallery_versions WHERE provider_context_used=1 AND context_depth>1"
+        ).fetchone()[0]
+        branch_count = connection.execute(
+            """SELECT COUNT(*) FROM gallery_versions
+               WHERE provider_parent_response_id IS NOT NULL"""
+        ).fetchone()[0]
+        context_error_count = connection.execute(
+            "SELECT COUNT(*) FROM provider_context_events WHERE event_type='context_failed'"
+        ).fetchone()[0]
+        delete_success = connection.execute(
+            "SELECT COUNT(*) FROM provider_context_events WHERE event_type='context_delete_success'"
+        ).fetchone()[0]
+        delete_failure = connection.execute(
+            "SELECT COUNT(*) FROM provider_context_events WHERE event_type='context_delete_failure'"
+        ).fetchone()[0]
     intent_categories: Counter[str] = Counter()
     provider_statuses: Counter[str] = Counter()
     durations: list[int] = []
@@ -84,4 +115,26 @@ def collect_demo_stats(database: Database) -> dict[str, Any]:
         ),
         "gallery_versions": version_count,
         "provider_statuses": dict(provider_statuses),
+        "provider_context": {
+            "conversational_request_count": int(context_metrics[0] or 0),
+            "stateless_request_count": int(context_metrics[1] or 0),
+            "context_creation_count": int(context_creation_count),
+            "context_reuse_count": int(context_reuse_count),
+            "context_fallback_count": int(context_metrics[2] or 0),
+            "context_error_count": int(context_error_count),
+            "average_context_depth": (
+                round(float(context_metrics[3]), 3) if context_metrics[3] is not None else None
+            ),
+            "branch_count": int(branch_count),
+            "conversation_delete_success": int(delete_success),
+            "conversation_delete_failure": int(delete_failure),
+            "conversational_duration_ms": (
+                round(float(context_metrics[4]), 1) if context_metrics[4] is not None else None
+            ),
+            "stateless_duration_ms": (
+                round(float(context_metrics[5]), 1) if context_metrics[5] is not None else None
+            ),
+            "conversational_cost_estimate_rub": round(float(context_metrics[6] or 0), 4),
+            "stateless_cost_estimate_rub": round(float(context_metrics[7] or 0), 4),
+        },
     }

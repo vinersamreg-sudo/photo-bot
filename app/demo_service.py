@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -37,6 +38,7 @@ from app.prompt_builder import PROMPT_BUILDER_VERSION, build_provider_prompt
 from app.processing_modes import ProcessingMode, ProcessingPlan, legacy_processing_plan
 from app.processing_pipeline import ProcessingExecutor
 from app.processing_router import ModeRouter
+from app.provider_context import ContextPlan, ProviderContextService
 from app.scenarios import get_scenario
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
@@ -69,13 +71,21 @@ class DemoService:
         clock: Callable[[], datetime] = utc_now,
         processing_router: Optional[ModeRouter] = None,
         processing_executor: Optional[ProcessingExecutor] = None,
+        provider_context_service: Optional[ProviderContextService] = None,
     ) -> None:
         self.settings = settings
         self.database = database
         self.storage = storage
         self.watermarker = watermarker
         self.provider = provider
-        self.gallery = GalleryService(database, storage, settings, clock)
+        self.provider_context_service = provider_context_service
+        self.gallery = GalleryService(
+            database,
+            storage,
+            settings,
+            clock,
+            provider_context_service=provider_context_service,
+        )
         self.deliver_preview = deliver_preview or (lambda _path, _attempt: True)
         self.clock = clock
         self.processing_router = processing_router
@@ -255,6 +265,7 @@ class DemoService:
             raise InvalidInputError("Unknown or inactive scenario")
         now = self.clock()
         attempt_id = uuid4().hex
+        context_plan = ContextPlan("stateless", None, "context_service_unavailable")
 
         with self.database.transaction() as connection:
             replay = connection.execute(
@@ -380,6 +391,28 @@ class DemoService:
                     "No approved real background is available; AI fallback requires explicit consent"
                 )
             provider_prompt = build_provider_prompt(edit_plan, processing_plan)
+            contextual_modes = {
+                ProcessingMode.AI_GENERATION,
+                ProcessingMode.LOCAL_AI_EDIT,
+                ProcessingMode.RESTORATION,
+            }
+            if (
+                self.provider_context_service is not None
+                and processing_plan.selected_mode in contextual_modes
+                and hasattr(self.provider, "edit_with_context")
+            ):
+                context_plan = self.provider_context_service.prepare(
+                    connection,
+                    gallery_item_id=session["gallery_item_id"],
+                    user_id=session["user_id"],
+                    parent=parent,
+                    correction=correction,
+                    repeat=repeat,
+                )
+            elif processing_plan.selected_mode not in contextual_modes:
+                context_plan = ContextPlan("stateless", None, "local_processing_mode")
+            elif not hasattr(self.provider, "edit_with_context"):
+                context_plan = ContextPlan("stateless", None, "provider_has_no_context_adapter")
             correction_prompt = clean_prompt if correction else None
             effective_user_prompt = edit_plan.effective_user_text
             user = connection.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
@@ -498,25 +531,43 @@ class DemoService:
         )
         try:
             with self._global_semaphore:
-                provider_result = (
-                    self.processing_executor.execute(
-                        source_path, provider_prompt, processing_plan
+                if context_plan.request is not None:
+                    provider_result = self.provider.edit_with_context(
+                        source_path, provider_prompt, context_plan.request
                     )
-                    if self.processing_executor is not None
-                    else self.provider.edit(source_path, provider_prompt)
+                else:
+                    provider_result = (
+                        self.processing_executor.execute(
+                            source_path, provider_prompt, processing_plan
+                        )
+                        if self.processing_executor is not None
+                        else self.provider.edit(source_path, provider_prompt)
+                    )
+            if context_plan.request is not None and provider_result.context_fallback_used:
+                provider_result = replace(provider_result, context_depth=0)
+            elif context_plan.request is None and context_plan.fallback:
+                provider_result = replace(
+                    provider_result,
+                    context_fallback_used=True,
+                    context_fallback_reason=context_plan.reason,
+                    context_depth=0,
                 )
+            self._stage_provider_result(attempt_id, context_plan, provider_result)
             self.storage.write_private(original_path, provider_result.image_bytes)
             self.watermarker.create_preview(original_path, preview_path, attempt_id)
             delivery = delivery_override or self.deliver_preview
             if not delivery(preview_path, attempt_id):
                 raise DeliveryError("Demo preview delivery failed")
         except PolicyRejectedError as exc:
+            self._record_context_failure(context_plan, attempt_id, gallery_item_id, exc)
             self._fail_attempt(attempt_id, "rejected_policy", "policy_rejected", str(exc), False)
             raise
         except DeliveryError as exc:
+            self._record_context_failure(context_plan, attempt_id, gallery_item_id, exc)
             self._fail_attempt(attempt_id, "delivery_failed", "delivery_failed", str(exc), True)
             raise
         except OSError as exc:
+            self._record_context_failure(context_plan, attempt_id, gallery_item_id, exc)
             self._fail_attempt(
                 attempt_id,
                 "failed_technical",
@@ -526,6 +577,7 @@ class DemoService:
             )
             raise StorageFailureError("Private storage operation failed") from exc
         except Exception as exc:
+            self._record_context_failure(context_plan, attempt_id, gallery_item_id, exc)
             self._fail_attempt(attempt_id, "failed_technical", type(exc).__name__, "Technical generation failure", True)
             raise
 
@@ -541,7 +593,10 @@ class DemoService:
                 """UPDATE generation_attempts SET
                        status='succeeded', completed_at=?, original_result_path=?, demo_result_path=?,
                        estimated_cost=?, external_request_id=?, duration_ms=?, output_size_bytes=?,
-                       retries=?, usage_json=?
+                       retries=?, usage_json=?,provider=?,model=?,provider_mode=?,
+                       provider_response_id=?,provider_conversation_id=?,provider_context_id=?,
+                       context_parent_response_id=?,context_depth=?,context_fallback_reason=?,
+                       provider_http_status=?,provider_duration_ms=?
                    WHERE id=? AND status='processing'""",
                 (
                     iso(completed),
@@ -553,6 +608,20 @@ class DemoService:
                     len(provider_result.image_bytes),
                     provider_result.retries,
                     json.dumps(provider_result.usage, ensure_ascii=False),
+                    provider_result.provider_name or processing_plan.provider,
+                    provider_result.provider_model or processing_plan.provider_model,
+                    provider_result.provider_mode,
+                    provider_result.provider_response_id,
+                    provider_result.provider_conversation_id,
+                    context_plan.request.context_id if context_plan.request else None,
+                    (
+                        context_plan.request.previous_response_id
+                        if context_plan.request else None
+                    ),
+                    provider_result.context_depth,
+                    provider_result.context_fallback_reason,
+                    provider_result.http_status,
+                    provider_result.provider_duration_ms,
                     attempt_id,
                 ),
             ).rowcount
@@ -573,6 +642,14 @@ class DemoService:
                 connection.execute(
                     "UPDATE demo_sessions SET status='completed', completed_at=?, updated_at=? WHERE id=?",
                     (iso(completed), iso(completed), session_id),
+                )
+            if self.provider_context_service is not None:
+                self.provider_context_service.finalize(
+                    connection,
+                    plan=context_plan,
+                    result=provider_result,
+                    attempt_id=attempt_id,
+                    gallery_item_id=gallery_item_id,
                 )
             self.gallery.record_attempt_version(connection, attempt_id, gallery_item_id)
         self.storage.append_attempt_metadata(
@@ -600,6 +677,55 @@ class DemoService:
             },
         )
         return DemoGenerationResult(attempt_id, preview_path, remaining)
+
+    def _stage_provider_result(
+        self,
+        attempt_id: str,
+        plan: ContextPlan,
+        result,
+    ) -> None:
+        """Persist remote ids before storage/delivery so cleanup cannot lose them."""
+
+        with self.database.transaction() as connection:
+            connection.execute(
+                """UPDATE generation_attempts SET external_request_id=?,provider=?,model=?,
+                          provider_mode=?,provider_response_id=?,provider_conversation_id=?,
+                          provider_context_id=?,context_parent_response_id=?,context_depth=?,
+                          context_fallback_reason=?,provider_http_status=?,provider_duration_ms=?,
+                          retries=?,usage_json=? WHERE id=? AND status='processing'""",
+                (
+                    result.request_id,
+                    result.provider_name or self.provider.name,
+                    result.provider_model or self.provider.model,
+                    result.provider_mode,
+                    result.provider_response_id,
+                    result.provider_conversation_id,
+                    plan.request.context_id if plan.request else None,
+                    plan.request.previous_response_id if plan.request else None,
+                    result.context_depth,
+                    result.context_fallback_reason,
+                    result.http_status,
+                    result.provider_duration_ms,
+                    result.retries,
+                    json.dumps(result.usage, ensure_ascii=False),
+                    attempt_id,
+                ),
+            )
+
+    def _record_context_failure(
+        self,
+        plan: ContextPlan,
+        attempt_id: str,
+        gallery_item_id: str,
+        error: Exception,
+    ) -> None:
+        if self.provider_context_service is not None:
+            self.provider_context_service.record_failure(
+                plan,
+                attempt_id=attempt_id,
+                gallery_item_id=gallery_item_id,
+                error=error,
+            )
 
     def _fail_attempt(self, attempt_id: str, status: str, error_type: str, message: str, refund: bool) -> None:
         with self.database.transaction() as connection:

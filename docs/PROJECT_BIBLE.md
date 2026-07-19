@@ -42,3 +42,11 @@ Production: Hetzner Ubuntu, `/opt/photo-bot`, user `photoapp`, `photo-bot.servic
 ## Definition of done
 
 Tests/secret scan/pip check/health зелёные; backup реально восстановлен; orphan cleanup проверен; `launch-status` не раскрывает секреты; commit, Actions run и production SHA совпадают; реальные image requests заранее согласованы и посчитаны; документация разделяет «реализовано» и «подтверждено live».
+
+## Optional provider memory
+
+Pixora хранит память работы сама, а OpenAI conversation используется как
+дополнительный контекст для последовательных правок. Migration v7 и Responses
+adapter не меняют production v1: все flags выключены и основной endpoint —
+`/v1/images/edits`. Включение возможно только после отдельного owner approval и
+контролируемого сравнения; identity и visual drift не считаются решёнными.

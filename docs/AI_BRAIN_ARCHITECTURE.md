@@ -115,3 +115,12 @@ For a real photographic location the preferred mode is a local licensed-asset
 composite. If the catalog or segmenter is unavailable, execution stops instead of
 quietly generating a different background. Enhancement is local and conservative.
 See `PROCESSING_MODES_ARCHITECTURE.md`.
+
+## Optional provider context (v4, disabled)
+
+`SceneIntent`, merged `EditPlan`, selected parent `GalleryVersion` and its private
+original remain authoritative. With three explicitly enabled flags, an auxiliary
+Responses chain can accompany image edits. Every version stores its own response
+ID, so Correction follows the selected branch; Repeat remains stateless. Broken
+context fails open to the complete deterministic prompt and parent original. See
+`OPENAI_CONVERSATION_MEMORY_ARCHITECTURE.md`.

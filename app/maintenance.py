@@ -12,6 +12,8 @@ from app.config import Settings
 from app.database import Database
 from app.gallery import GalleryService
 from app.storage import PrivateStorage
+from app.openai_client import create_openai_client
+from app.provider_context import OpenAIProviderContextGateway, ProviderContextService
 
 
 def _inside(root: Path, candidate: Path) -> bool:
@@ -50,7 +52,19 @@ def run_maintenance(settings: Settings, *, execute: bool) -> dict[str, Any]:
     storage = PrivateStorage(
         settings.users_dir, settings.max_source_file_size_mb * 1024 * 1024
     )
-    gallery = GalleryService(database, storage, settings)
+    gateway = (
+        OpenAIProviderContextGateway(create_openai_client(settings))
+        if settings.openai_api_key
+        else None
+    )
+    provider_contexts = ProviderContextService(settings, database, gateway)
+    context_due = provider_contexts.cleanup_due(execute=execute)
+    gallery = GalleryService(
+        database,
+        storage,
+        settings,
+        provider_context_service=provider_contexts,
+    )
     due = gallery.purge_due(execute=execute)
     now = time.time()
     temp_cutoff = now - settings.cleanup_temp_retention_hours * 3600
@@ -91,6 +105,7 @@ def run_maintenance(settings: Settings, *, execute: bool) -> dict[str, Any]:
         "mode": "execute" if execute else "dry-run",
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "gallery_due_count": len(due),
+        "provider_context_due_count": len(context_due),
         "temp_candidate_count": len(temp_candidates),
         "orphan_candidate_count": len(orphan_candidates),
         "remaining_orphan_count": 0 if execute else len(orphan_candidates),

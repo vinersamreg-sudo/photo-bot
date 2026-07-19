@@ -31,3 +31,12 @@ SQLite online backup API creates a consistent snapshot. OpenSSL encrypts it usin
 ## Deferred topology
 
 Webhook/queue/workers/object storage and horizontal scale are deferred. They become relevant only after pilot metrics show that one polling process + SQLite is insufficient. The static site is a separate artifact under `site/` and is not published automatically with backend deploy.
+
+## Optional OpenAI Responses context
+
+Migration v7 adds provider-context metadata and privacy-safe events.
+`ContextAwareImageProvider` exposes stateless Images API and optional Responses
+image-tool modes behind three disabled flags. `ProviderContextService` owns
+branch selection, depth/idle reset, fallback and remote deletion. Parent response
+comes from the selected version, never from a global latest pointer. Production
+deploy forcibly disables the experiment.

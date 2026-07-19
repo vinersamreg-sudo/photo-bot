@@ -23,3 +23,10 @@ Confirm demand, quality, correction depth and unit economics. Only then reassess
 ## Public launch
 
 Blocked by payment/refunds, final legal/operator details, deep link/site publication decision, support, abuse controls and evidence from prior gates. No multi-provider, Redis/Celery, admin panel or large asset catalog before measured need.
+
+## Optional provider-memory gate
+
+До pilot 5 выполнить отдельное owner-only сравнение максимум на 4 approved image
+requests. Memory включать в пилоте только если corrections визуально лучше,
+provider errors не растут, fallback доказан, а latency/cost приемлемы. Наличие
+response ID само по себе не является успехом.

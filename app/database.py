@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL,
     demo_used INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
+    context_version INTEGER NOT NULL DEFAULT 1,
     risk_score INTEGER NOT NULL DEFAULT 0,
     blocked_until TEXT,
     UNIQUE(platform, platform_user_id)
@@ -85,6 +86,15 @@ CREATE TABLE IF NOT EXISTS generation_attempts (
     processing_provider_model TEXT,
     processing_pipeline_version TEXT,
     processing_plan_json TEXT,
+    provider_mode TEXT NOT NULL DEFAULT 'stateless',
+    provider_response_id TEXT,
+    provider_conversation_id TEXT,
+    provider_context_id TEXT,
+    context_parent_response_id TEXT,
+    context_depth INTEGER NOT NULL DEFAULT 0,
+    context_fallback_reason TEXT,
+    provider_http_status INTEGER,
+    provider_duration_ms INTEGER,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_user_started ON generation_attempts(user_id, started_at);
@@ -198,6 +208,23 @@ CREATE TABLE IF NOT EXISTS gallery_versions (
     processing_provider_model TEXT,
     processing_pipeline_version TEXT,
     processing_plan_json TEXT,
+    provider_mode TEXT NOT NULL DEFAULT 'stateless',
+    provider_response_id TEXT,
+    provider_conversation_id TEXT,
+    provider_context_id TEXT,
+    context_parent_response_id TEXT,
+    context_depth INTEGER NOT NULL DEFAULT 0,
+    context_fallback_reason TEXT,
+    provider_http_status INTEGER,
+    provider_duration_ms INTEGER,
+    provider_parent_response_id TEXT,
+    provider_context_used INTEGER NOT NULL DEFAULT 0,
+    provider_context_fallback_reason TEXT,
+    input_version_id TEXT,
+    effective_prompt_hash TEXT,
+    scene_intent_hash TEXT,
+    provider_request_id TEXT,
+    provider_usage_json TEXT,
     UNIQUE(gallery_item_id, version_number)
 );
 CREATE INDEX IF NOT EXISTS idx_versions_item_number ON gallery_versions(gallery_item_id, version_number DESC);
@@ -324,6 +351,50 @@ CREATE INDEX IF NOT EXISTS idx_product_events_session
 ON product_events(session_id, created_at DESC);
 """
 
+PROVIDER_CONTEXT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS provider_contexts (
+    id TEXT PRIMARY KEY,
+    gallery_item_id TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
+    provider_name TEXT NOT NULL,
+    provider_model TEXT NOT NULL,
+    image_model TEXT NOT NULL,
+    provider_conversation_id TEXT,
+    last_response_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    depth INTEGER NOT NULL DEFAULT 0,
+    reset_count INTEGER NOT NULL DEFAULT 0,
+    fallback_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_used_at TEXT,
+    expires_at TEXT NOT NULL,
+    deletion_requested_at TEXT,
+    deleted_at TEXT,
+    delete_attempts INTEGER NOT NULL DEFAULT 0,
+    last_error_class TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_provider_context_cleanup
+ON provider_contexts(status, expires_at, updated_at);
+CREATE INDEX IF NOT EXISTS idx_provider_context_user
+ON provider_contexts(user_id, status);
+CREATE TABLE IF NOT EXISTS provider_context_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    context_id TEXT,
+    attempt_id TEXT,
+    gallery_item_id TEXT,
+    event_type TEXT NOT NULL,
+    provider_mode TEXT NOT NULL,
+    context_depth INTEGER NOT NULL DEFAULT 0,
+    fallback_reason TEXT,
+    error_class TEXT,
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_provider_context_events_time
+ON provider_context_events(event_type, created_at DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -372,6 +443,23 @@ class Database:
                 ("processing_provider_model", "TEXT"),
                 ("processing_pipeline_version", "TEXT"),
                 ("processing_plan_json", "TEXT"),
+                ("provider_mode", "TEXT NOT NULL DEFAULT 'stateless'"),
+                ("provider_response_id", "TEXT"),
+                ("provider_conversation_id", "TEXT"),
+                ("provider_context_id", "TEXT"),
+                ("context_parent_response_id", "TEXT"),
+                ("context_depth", "INTEGER NOT NULL DEFAULT 0"),
+                ("context_fallback_reason", "TEXT"),
+                ("provider_http_status", "INTEGER"),
+                ("provider_duration_ms", "INTEGER"),
+                ("provider_parent_response_id", "TEXT"),
+                ("provider_context_used", "INTEGER NOT NULL DEFAULT 0"),
+                ("provider_context_fallback_reason", "TEXT"),
+                ("input_version_id", "TEXT"),
+                ("effective_prompt_hash", "TEXT"),
+                ("scene_intent_hash", "TEXT"),
+                ("provider_request_id", "TEXT"),
+                ("provider_usage_json", "TEXT"),
             ):
                 if name not in existing:
                     connection.execute(
@@ -405,6 +493,23 @@ class Database:
                 ("processing_provider_model", "TEXT"),
                 ("processing_pipeline_version", "TEXT"),
                 ("processing_plan_json", "TEXT"),
+                ("provider_mode", "TEXT NOT NULL DEFAULT 'stateless'"),
+                ("provider_response_id", "TEXT"),
+                ("provider_conversation_id", "TEXT"),
+                ("provider_context_id", "TEXT"),
+                ("context_parent_response_id", "TEXT"),
+                ("context_depth", "INTEGER NOT NULL DEFAULT 0"),
+                ("context_fallback_reason", "TEXT"),
+                ("provider_http_status", "INTEGER"),
+                ("provider_duration_ms", "INTEGER"),
+                ("provider_parent_response_id", "TEXT"),
+                ("provider_context_used", "INTEGER NOT NULL DEFAULT 0"),
+                ("provider_context_fallback_reason", "TEXT"),
+                ("input_version_id", "TEXT"),
+                ("effective_prompt_hash", "TEXT"),
+                ("scene_intent_hash", "TEXT"),
+                ("provider_request_id", "TEXT"),
+                ("provider_usage_json", "TEXT"),
             ):
                 if name not in version_columns:
                     connection.execute(
@@ -421,6 +526,7 @@ class Database:
                 )
             connection.executescript(MAX_SCHEMA)
             connection.executescript(TELEMETRY_SCHEMA)
+            connection.executescript(PROVIDER_CONTEXT_SCHEMA)
             dialog_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(max_dialogs)")
             }
@@ -471,6 +577,17 @@ class Database:
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(6,?,?)",
                     (
                         "privacy_safe_product_events",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+            context_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=7"
+            ).fetchone()
+            if context_migration is None:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(7,?,?)",
+                    (
+                        "optional_openai_provider_context",
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
