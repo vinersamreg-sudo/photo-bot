@@ -2,7 +2,7 @@
 
 ## Current verdict
 
-Not public-ready. Owner image E2E is complete, and commercial architecture plus the official static site are ready as candidates with all payment flags off. The target VPS now serves the isolated site successfully over the HTTP bootstrap when addressed directly, but public HTTPS is still blocked because apex and `www` resolve to the legacy host instead of `116.203.24.102`. Owner Robokassa sandbox also needs the public ResultURL, confirmed seller INN/contact data, legal/fiscal review and a supported five-user pilot.
+The public website is ready for Robokassa moderation: DNS, trusted HTTPS, canonical redirects, HSTS, seller INN/contact data, legal routes and the exact 49 ₽ price are live and externally verified. The bot is not public-sales-ready: every payment flag remains off, observe-only is true and pilot limit is 0. Robokassa sandbox/ResultURL, specialist legal/fiscal review and a supported five-user pilot remain separate gates before accepting money.
 
 ## Automated evidence
 
@@ -12,7 +12,7 @@ Not public-ready. Owner image E2E is complete, and commercial architecture plus 
 
 - no Robokassa sandbox or real-payment evidence through the production HTTPS ResultURL;
 - automatic refund cannot run without a reconciled provider operation key;
-- site legal pages contain confirmed name/status/city but still lack verified INN, working e-mail and specialist review;
+- site legal pages contain confirmed name/status/city, owner-supplied INN and working e-mail; specialist legal review remains;
 - no evidence yet for ≥80% first-result completion and <5% delivery failure;
 - estimated OpenAI cost is not reconciled to invoice;
 - support and abuse response are manual;
@@ -20,7 +20,7 @@ Not public-ready. Owner image E2E is complete, and commercial architecture plus 
 
 ## Public blockers
 
-Final legal/consent/transborder/fiscal position, verified payment and refunds, corrected DNS, trusted TLS, external HTTPS smoke, support contacts/SLA, abuse controls, pilot evidence and scale decision. The MAX deep link is verified, but public readiness must remain false until the remaining gates are explicitly closed.
+Final legal/consent/transborder/fiscal position, verified sandbox payment/refunds, support SLA, abuse controls, pilot evidence and scale decision. DNS, trusted TLS, external HTTPS smoke, seller data and the MAX deep link are verified and are no longer blockers.
 
 ## Legal checklist requiring specialist review
 

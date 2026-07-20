@@ -12,6 +12,15 @@
 - UFW разрешает 80 и 443;
 - HTTP bootstrap проходит `nginx -t`.
 
+## Фактическое завершение 20.07.2026
+
+- Google, Cloudflare и Quad9 возвращают `116.203.24.102` для apex и `www`; AAAA отсутствуют, NS — `ns1.reg.ru` и `ns2.reg.ru`;
+- выпущен ECDSA-сертификат Let's Encrypt для `pixoraai.ru` и `www.pixoraai.ru`, срок действия — до 18.10.2026;
+- OpenSSL verification, обычный curl и реальный browser chain успешны;
+- HTTP и HTTPS `www` дают 301 на canonical apex с сохранением пути и query;
+- CSP и security headers проверены; после полного smoke включён HSTS `max-age=31536000; includeSubDomains`;
+- `certbot renew --dry-run --no-random-sleep-on-renew` завершён успешно.
+
 ## Выпуск
 
 ```bash

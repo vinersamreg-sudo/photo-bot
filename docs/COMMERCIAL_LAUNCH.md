@@ -4,7 +4,7 @@
 
 The codebase contains a sandbox-capable, exact-version payment architecture, but real sales remain disabled. This is a commercial MVP candidate for closed technical validation, not permission to accept money.
 
-The official site is also a launch candidate, not evidence of commercial readiness. Before Robokassa moderation or any payment, DNS and trusted HTTPS must work publicly, the seller's confirmed INN and contact must be published, every legal page must receive specialist review, and `PIXORA_SITE_DEPLOY_ENABLED` may be enabled only after the site runbook gate passes.
+The official site engineering gate for Robokassa moderation passed on 20.07.2026: public DNS/HTTPS, seller INN/contact, legal routes, 49 ₽ pricing, redirects and security headers are verified. This is not permission to accept money. Specialist legal/fiscal review, Robokassa sandbox/ResultURL and a separate owner approval remain mandatory before any payment.
 
 ## Gate A — owner sandbox
 

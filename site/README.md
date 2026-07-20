@@ -12,7 +12,7 @@
 - синтетические примеры Pixora, описанные в `docs/VISUAL_ASSETS.md`;
 - отдельные Nginx-конфигурации для HTTP bootstrap и финального HTTPS.
 
-Реквизиты ограничены подтверждёнными данными: ФИО самозанятого и город. ИНН и e-mail нельзя публиковать до получения подтверждённых значений от владельца. Юридические тексты требуют проверки профильным специалистом до приёма реальных платежей.
+Опубликованы подтверждённые владельцем реквизиты: ФИО и статус самозанятого, город, ИНН `631937938795` и e-mail `viner-89@mail.ru`. Юридические тексты требуют проверки профильным специалистом до приёма реальных платежей.
 
 ## Локальная проверка
 
@@ -44,7 +44,7 @@ python scripts/assert_lighthouse.py .lighthouse/report-desktop.json
 
 Workflow `.github/workflows/site.yml` создаёт неизменяемый release, проверяет состав public tree, атомарно переключает symlink и возвращает `current` при неуспешном HTTPS smoke. Backend остаётся в `/opt/photo-bot` и не входит в root сайта.
 
-Deploy намеренно закрыт GitHub Environment variable `PIXORA_SITE_DEPLOY_ENABLED`. Включать её можно только после прохождения DNS, Nginx, TLS и внешнего smoke. Пока домен указывает не на целевой VPS, разрешён только HTTP bootstrap без HSTS; это не считается публичным запуском.
+Deploy был закрыт GitHub Environment variable `PIXORA_SITE_DEPLOY_ENABLED` до прохождения DNS, Nginx, TLS и внешнего smoke. На 20.07.2026 этот gate пройден и variable установлена в `true`: apex и `www` указывают на целевой VPS, HTTPS/HSTS и canonical redirects работают, browser/curl/OpenSSL smoke и Certbot renew dry-run успешны. Это разрешает автоматический deploy сайта, но не включает платежи или пользовательские handlers бота.
 
 Операционные инструкции:
 

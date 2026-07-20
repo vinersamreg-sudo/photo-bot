@@ -50,7 +50,7 @@ Commercial candidate расширяет regression suite до 230 pytest tests �
 
 Provider sandbox/real-payment evidence, operation-key refund reconciliation, окончательные legal/fiscal documents/operator details, support process, public deep link/site launch, внешний пилот 5 пользователей и 10/20-user evidence. Long polling допустим для малого allowlisted pilot, но не для сотен публичных пользователей. До платного публичного запуска нужен visual quality gate для identity/scene drift.
 
-## 19.07.2026 — официальный сайт
+## 20.07.2026 — официальный сайт опубликован
 
 - `site/public` — единственная реализация сайта; второй frontend не создаётся;
 - MAX deep link проверен: `https://max.ru/se13572368_bot`;
@@ -58,11 +58,13 @@ Provider sandbox/real-payment evidence, operation-key refund reconciliation, о�
 - добавлены оферта, privacy, согласие, правила, оплата/возврат и контакты;
 - оплата и публичный запуск честно обозначены как недоступные в закрытом тестировании;
 - CI проверяет mobile/desktop Lighthouse, ссылки, SEO, legal consistency, отсутствие секретов и atomic deploy;
-- HTTPS launch заблокирован DNS: apex и `www` указывают на legacy IP `95.163.244.138`, а целевой VPS — `116.203.24.102`;
-- `PIXORA_SITE_DEPLOY_ENABLED` остаётся false до исправления DNS, trusted TLS и внешнего smoke;
-- подтверждённый ИНН владельца и рабочий e-mail отсутствуют в source of truth и не должны выдумываться.
+- Google, Cloudflare и Quad9 возвращают `116.203.24.102` для apex и `www`; лишних AAAA-записей нет, NS — `ns1.reg.ru` и `ns2.reg.ru`;
+- Let's Encrypt ECDSA-сертификат покрывает apex и `www`, OpenSSL verification и browser chain успешны, `certbot renew --dry-run` проходит;
+- HTTP и `www` дают 301 на `https://pixoraai.ru`, финальный HTTPS включает CSP, HSTS и security headers;
+- подтверждённые владельцем ИНН `631937938795` и e-mail `viner-89@mail.ru` опубликованы на главной, в контактах и legal-документах;
+- публичные маршруты, 404, robots, sitemap, favicon, ссылки и W3C HTML validation проверены; цена везде 49 ₽, 149 ₽ отсутствует.
 
-Production bootstrap выполнен на целевом VPS: Nginx 1.24 и Certbot 2.9 установлены, `certbot.timer` включён, UFW разрешает 80/443 без изменения SSH, release `6da02e3f1137145fa067e771692c8b71d75cdbfe` опубликован read-only и выбран через `/opt/pixora-site/current`. Два полных внешних HTTP smoke через `--resolve` прошли; secret-like пути дают 404, Nginx не читает `/opt/photo-bot`, backend health остался зелёным. Сертификатов и listener 443 пока нет намеренно: DNS всё ещё ведёт на legacy host. GitHub variable `PIXORA_SITE_DEPLOY_ENABLED` не установлена.
+Production HTTPS завершён на целевом VPS: Nginx 1.24 и Certbot 2.9 активны, immutable read-only release опубликован через `/opt/pixora-site/current`, 80/443 доступны, backend изолирован и health остаётся зелёным. После закрытия launch gate GitHub Environment variable `PIXORA_SITE_DEPLOY_ENABLED` установлена в `true`. Инженерный gate сайта для отправки на модерацию Robokassa закрыт. Sandbox, ResultURL, реальные платежи, pilot и пользовательские handlers не включались.
 
 ## 19.07.2026 — optional provider context
 
