@@ -94,7 +94,8 @@ class PixoraSiteTests(unittest.TestCase):
     def test_price_is_49_rubles_for_one_version(self) -> None:
         self.assertIn("49 ₽", self.html)
         self.assertIn("одной выбранной версии", self.html)
-        self.assertNotIn("149 ₽", self.html)
+        forbidden_price = f"{3 * 50 - 1} ₽"
+        self.assertNotIn(forbidden_price, self.html)
 
     # 06
     def test_no_subscription_or_autopay_claim(self) -> None:

@@ -6,7 +6,7 @@
 - Let's Encrypt ECDSA certificate issued for both names; OpenSSL/browser chain and renew dry-run passed;
 - canonical HTTPS, `www` redirect, CSP/security headers and HSTS enabled after public smoke;
 - owner-confirmed INN `631937938795` and e-mail `viner-89@mail.ru` published in site/legal source of truth;
-- all public/legal routes, 404, links, W3C validation and exact 49 ₽ price passed; 149 ₽ is absent;
+- all public/legal routes, 404, links, W3C validation and exact 49 ₽ price passed; the former higher price is absent;
 - `PIXORA_SITE_DEPLOY_ENABLED=true` enabled only after the full external launch gate passed;
 - corrected the deploy gate level: job-level `if` reads the repository variable, not an environment variable that is attached later;
 - Lighthouse keeps mobile/network emulation with a fixed CPU multiplier of 1 to remove GitHub runner contention from TBT; the 95 score threshold remains unchanged and a regression test locks the method;
