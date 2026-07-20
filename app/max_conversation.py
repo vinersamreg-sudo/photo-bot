@@ -32,7 +32,10 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
         "demo_exhausted", "deleted",
     },
     "waiting_for_correction": {"confirmation", "result_ready", "deleted"},
-    "demo_exhausted": {"gallery", "main_menu", "deleted"},
+    "demo_exhausted": {
+        "waiting_for_source", "waiting_for_prompt", "waiting_for_correction",
+        "processing", "gallery", "main_menu", "deleted"
+    },
     "gallery": {
         "gallery", "result_ready", "waiting_for_correction", "processing",
         "main_menu", "deleted",

@@ -6,7 +6,7 @@ Exact activation, rollback, budget and tester copy are in [PILOT_5_USERS_RUNBOOK
 
 Five full E2E successes in a row; no stuck status, original leak, quota debit on technical failure or lost GalleryVersion; encrypted backup restored; cleanup and recovery verified. Real image requests are agreed before execution and counted.
 
-Owner image gate is complete. Before external users, deploy migration v8 with payments off, create/restore/off-site a fresh backup, verify no payment listener is public and complete owner sandbox separately. A five-user generation pilot does not require real payments.
+Owner image gate is complete. Before external users, deploy migration v9 with payments off, create/restore/off-site a fresh backup, verify no payment listener is public and complete owner sandbox separately. A five-user generation pilot does not require real payments. Measure the permanent two-generation global balance, package click intent and exhaustion UX; do not grant a second free pack through new photos or `/start`.
 
 ## Five users
 

@@ -6,7 +6,7 @@ Legend: `PASS` verified by code/tests/read-only production evidence; `SANDBOX TE
 
 | Control | Status | Evidence / remaining gate |
 |---|---|---|
-| PaymentIntent/Order/Attempt/Event/Audit/Receipt schema | PASS | migration v8, SQLite constraints and test suite |
+| PaymentIntent/Order/Attempt/Event/Audit/Receipt plus credit/entitlement schema | PASS | migrations v8/v9, SQLite constraints and test suite |
 | RefundIntent/audit | PASS | prepare/preview/idempotency tests; provider execution remains off |
 | Price source of truth | PASS | integer `UNLOCK_ORIGINAL_PRICE_RUB=49`, DB minor units 4900; no float money |
 | Provider request/signature | PASS | SHA-256, Password1, server amount, opaque `Shp_order`, receipt |
@@ -45,4 +45,3 @@ Legend: `PASS` verified by code/tests/read-only production evidence; `SANDBOX TE
 ## Go-live condition
 
 Production payment readiness becomes true only after recorded sandbox evidence, provider approval, production credentials/mode, public ResultURL, verified receipt settings, enabled refund recovery and a separate owner authorization. Until then all payment flags remain false.
-

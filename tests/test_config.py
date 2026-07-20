@@ -31,7 +31,7 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.openai_context_retention_days, 30)
         self.assertEqual(settings.openai_context_max_idle_days, 14)
         self.assertEqual(settings.openai_context_max_depth, 8)
-        self.assertEqual(settings.demo_max_successful_generations, 5)
+        self.assertEqual(settings.demo_max_successful_generations, 2)
         self.assertEqual(settings.demo_watermark_text, "ОБРАЗЕЦ")
         self.assertEqual(settings.global_max_concurrent_generations, 2)
         self.assertEqual(settings.demo_retention_days, 30)

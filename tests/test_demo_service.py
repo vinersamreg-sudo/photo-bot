@@ -21,7 +21,6 @@ from app.domain import (
     InvalidInputError,
     PaymentRequiredError,
     PolicyRejectedError,
-    SourceReplacementError,
 )
 from app.image_provider import FakeImageProvider
 from app.storage import PrivateStorage
@@ -88,15 +87,32 @@ class DemoServiceTests(TestCase):
             clock=self.clock,
         )
 
-    def test_one_session_per_user_and_source_cannot_be_replaced(self) -> None:
+    def test_one_account_can_use_different_photos_without_new_free_credits(self) -> None:
         service = self.service()
         first = service.start_session("max", "user-1", self.source)
         same = service.start_session("max", "user-1", self.source)
         self.assertEqual(first.session_id, same.session_id)
         other = self.base / "other.png"
         Image.new("RGB", (200, 200), "red").save(other)
-        with self.assertRaises(SourceReplacementError):
-            service.start_session("max", "user-1", other)
+        changed = service.start_session("max", "user-1", other)
+        self.assertEqual(changed.session_id, first.session_id)
+        self.assertNotEqual(changed.source_path.read_bytes(), self.source.read_bytes())
+        self.assertEqual(service.commerce.balance(changed.user_id).available, 2)
+        with service.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM generation_credit_lots WHERE user_id=?",
+                    (changed.user_id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM gallery_items WHERE user_id=?",
+                    (changed.user_id,),
+                ).fetchone()[0],
+                2,
+            )
 
     def test_same_source_reupload_reactivates_expired_session_without_new_quota(self) -> None:
         settings = replace(self.settings, demo_session_ttl_minutes=1)
@@ -140,18 +156,18 @@ class DemoServiceTests(TestCase):
         self.assertGreater(datetime.fromisoformat(row["expires_at"]), self.clock())
         self.assertIsNone(service.resume_session("max", "unknown-user"))
 
-    def test_five_successes_only_and_successful_delivery_debits_once(self) -> None:
+    def test_two_successes_only_and_successful_delivery_debits_once(self) -> None:
         service = self.service()
         session = service.start_session("max", "user-2", self.source)
-        for index in range(5):
+        for index in range(2):
             result = service.generate(session.session_id, "Светлый фон", f"event-{index}")
-            self.assertEqual(result.remaining_generations, 4 - index)
+            self.assertEqual(result.remaining_generations, 1 - index)
             self.clock.advance(2)
-        replay = service.generate(session.session_id, "Светлый фон", "event-4")
+        replay = service.generate(session.session_id, "Светлый фон", "event-1")
         self.assertTrue(replay.idempotent_replay)
         self.assertEqual(replay.remaining_generations, 0)
         with self.assertRaises(DemoLimitError):
-            service.generate(session.session_id, "Ещё", "event-6")
+            service.generate(session.session_id, "Ещё", "event-3")
 
     def test_technical_and_policy_failures_do_not_debit(self) -> None:
         for user, failure, expected_status in (

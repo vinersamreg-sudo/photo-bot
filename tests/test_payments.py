@@ -112,7 +112,7 @@ class PaymentTests(TestCase):
         again = self.service.create_order(self.user_id, self.versions[0]["id"], "event-2")
         self.assertEqual(again.id, order.id)
 
-    def test_paid_webhook_unlocks_only_exact_version_and_is_idempotent(self) -> None:
+    def test_paid_webhook_grants_pack_without_auto_unlock_and_is_idempotent(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
         result = self.service.process_webhook(
             self.signed_callback(order), method="POST",
@@ -128,17 +128,24 @@ class PaymentTests(TestCase):
                 "SELECT unlock_status,retention_until FROM gallery_items"
             ).fetchone()
             events = connection.execute(
-                "SELECT COUNT(*) FROM product_events WHERE event_type='payment_confirmed'"
+                "SELECT COUNT(*) FROM product_events WHERE event_type='continuation_pack_paid'"
             ).fetchone()[0]
-        self.assertEqual(versions[0]["unlock_status"], "unlocked")
-        self.assertEqual(versions[0]["payment_order_id"], order.id)
+        self.assertEqual(versions[0]["unlock_status"], "demo")
+        self.assertIsNone(versions[0]["payment_order_id"])
         self.assertEqual(versions[1]["unlock_status"], "demo")
         self.assertEqual(item_status["unlock_status"], "demo")
-        self.assertGreater(
-            datetime.fromisoformat(item_status["retention_until"]),
-            self.clock.value + timedelta(days=179),
-        )
         self.assertEqual(events, 1)
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available, 2)
+        self.assertEqual(self.demo.commerce.entitlement_balance(self.user_id).available, 1)
+        unlocked = self.demo.commerce.unlock_version(
+            self.user_id, self.versions[1]["id"]
+        )
+        self.assertTrue(unlocked.consumed_now)
+        with self.database.read() as connection:
+            statuses = connection.execute(
+                "SELECT unlock_status FROM gallery_versions ORDER BY version_number"
+            ).fetchall()
+        self.assertEqual([row[0] for row in statuses], ["demo", "unlocked"])
         duplicate = self.service.process_webhook(
             self.signed_callback(order), method="POST",
             path="/payments/robokassa/result", source="127.0.0.1",
@@ -149,7 +156,7 @@ class PaymentTests(TestCase):
             self.service.history(order.id).order.status, PaymentStatus.PAID
         )
 
-    def test_forged_wrong_amount_token_unknown_and_expired_callbacks_fail_closed(self) -> None:
+    def test_forged_wrong_amount_and_token_fail_closed_but_late_signed_payment_is_honored(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
         wrong_amount = self.service.process_webhook(
             self.signed_callback(order, amount="48.00"), method="POST",
@@ -168,8 +175,7 @@ class PaymentTests(TestCase):
             self.signed_callback(order, amount="49.000000"), method="POST",
             path="/payments/robokassa/result",
         )
-        self.assertFalse(expired.accepted)
-        self.assertEqual(expired.reason, "expired_invoice")
+        self.assertTrue(expired.accepted)
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute(
@@ -177,6 +183,13 @@ class PaymentTests(TestCase):
                     (self.versions[0]["id"],),
                 ).fetchone()[0],
                 "demo",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
             )
 
     def test_invalid_signature_unknown_invoice_and_replay_are_rejected(self) -> None:
@@ -262,6 +275,7 @@ class PaymentTests(TestCase):
             self.signed_callback(order), method="POST",
             path="/payments/robokassa/result",
         )
+        self.demo.commerce.unlock_version(self.user_id, self.versions[0]["id"])
         original = self.service.original_for_order(order.id, self.user_id)
         self.assertTrue(original.is_file())
         self.service.mark_delivery(order.id, delivered=False, error_code="max_failed")
@@ -297,6 +311,7 @@ class PaymentTests(TestCase):
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM refund_intents").fetchone()[0], 0
             )
+        self.demo.commerce.unlock_version(self.user_id, self.versions[0]["id"])
         self.service.mark_delivery(order.id, delivered=False, error_code="max_failed")
         scheduled = self.service.schedule_delivery_retry(order.id)
         self.assertEqual(scheduled.status, PaymentStatus.DELIVERY_PENDING)
@@ -356,6 +371,7 @@ class PaymentTests(TestCase):
         self.service.process_webhook(
             self.signed_callback(order), method="POST", path="/payments/robokassa/result"
         )
+        self.demo.commerce.unlock_version(self.user_id, self.versions[0]["id"])
         self.service.mark_delivery(order.id, delivered=False, error_code="max_unavailable")
         restarted = build_payment_service(self.settings, Database(self.settings.database_path))
         self.addCleanup(restarted.provider.close)
@@ -439,10 +455,21 @@ class PaymentTests(TestCase):
                 "SELECT unlock_status FROM gallery_versions WHERE id=?",
                 (self.versions[0]["id"],),
             ).fetchone()[0]
+            grant = connection.execute(
+                "SELECT status FROM continuation_pack_grants WHERE payment_order_id=?",
+                (order.id,),
+            ).fetchone()[0]
+            entitlement = connection.execute(
+                "SELECT status FROM unlock_entitlements WHERE source_payment_order_id=?",
+                (order.id,),
+            ).fetchone()[0]
         self.assertEqual(paid["status"], "refunded")
         self.assertEqual(paid["refunded_amount_minor"], 4900)
         self.assertEqual(receipt_types, ["payment", "refund"])
-        self.assertEqual(version_unlock, "refunded")
+        self.assertEqual(version_unlock, "demo")
+        self.assertEqual(grant, "refunded")
+        self.assertEqual(entitlement, "refunded")
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available, 0)
         with self.assertRaisesRegex(PaymentError, "not paid"):
             self.service.original_for_order(order.id, self.user_id)
 

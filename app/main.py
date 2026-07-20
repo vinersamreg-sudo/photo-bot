@@ -19,6 +19,7 @@ from typing import Iterable, List
 from uuid import uuid4
 
 from app.config import Settings, load_settings
+from app.commerce import CommerceService, PRODUCT_CODE
 from app.openai_client import (
     OpenAICheckError,
     OpenAIConfigurationError,
@@ -415,6 +416,229 @@ def run_gallery_cleanup(settings: Settings, execute: bool) -> int:
     due = service.purge_due(execute=execute)
     print(json.dumps({"mode": "execute" if execute else "dry-run", "count": len(due)}))
     return 0
+
+
+def _commerce_user(database: Database, platform_user_id: str) -> sqlite3.Row:
+    with database.read() as connection:
+        row = connection.execute(
+            "SELECT id FROM users WHERE platform='max' AND platform_user_id=?",
+            (platform_user_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("MAX user was not found")
+    return row
+
+
+def run_credit_report(
+    settings: Settings, platform_user_id: str, *, history: bool, output_format: str
+) -> int:
+    try:
+        database = Database(settings.database_path)
+        user = _commerce_user(database, platform_user_id)
+        balance = CommerceService(database).balance(user["id"])
+        result: dict[str, object] = {
+            "user_ref": mask_reference(platform_user_id, prefix="max"),
+            "available_variants": balance.available,
+            "reserved_variants": balance.reserved,
+            "total_granted": balance.total_granted,
+            "total_consumed": balance.total_consumed,
+            "total_refunded": balance.total_refunded,
+        }
+        if history:
+            with database.read() as connection:
+                rows = connection.execute(
+                    """SELECT delta,event_type,reference_type,reference_id,balance_after,
+                              reserved_after,created_at FROM credit_ledger
+                       WHERE user_id=? ORDER BY id DESC LIMIT 100""",
+                    (user["id"],),
+                ).fetchall()
+            result["history"] = [
+                {
+                    "delta": row["delta"],
+                    "event": row["event_type"],
+                    "reference_type": row["reference_type"],
+                    "reference_ref": mask_reference(row["reference_id"]),
+                    "available_after": row["balance_after"],
+                    "reserved_after": row["reserved_after"],
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ]
+        _print_operator(result, output_format)
+        return 0
+    except (ValueError, sqlite3.Error) as exc:
+        LOGGER.error("Credit report failed: %s", exc)
+        return 2
+
+
+def run_entitlement_report(
+    settings: Settings, platform_user_id: str, *, history: bool, output_format: str
+) -> int:
+    try:
+        database = Database(settings.database_path)
+        user = _commerce_user(database, platform_user_id)
+        balance = CommerceService(database).entitlement_balance(user["id"])
+        result: dict[str, object] = {
+            "user_ref": mask_reference(platform_user_id, prefix="max"),
+            "available_originals": balance.available,
+            "consumed_originals": balance.consumed,
+            "refunded_originals": balance.refunded,
+        }
+        if history:
+            with database.read() as connection:
+                rows = connection.execute(
+                    """SELECT status,source_payment_order_id,gallery_version_id,
+                              created_at,reserved_at,consumed_at,updated_at
+                       FROM unlock_entitlements WHERE user_id=?
+                       ORDER BY created_at DESC LIMIT 100""",
+                    (user["id"],),
+                ).fetchall()
+            result["history"] = [
+                {
+                    "status": row["status"],
+                    "order_ref": mask_reference(row["source_payment_order_id"], prefix="ord"),
+                    "version_ref": mask_reference(row["gallery_version_id"], prefix="ver"),
+                    "created_at": row["created_at"],
+                    "consumed_at": row["consumed_at"],
+                }
+                for row in rows
+            ]
+        _print_operator(result, output_format)
+        return 0
+    except (ValueError, sqlite3.Error) as exc:
+        LOGGER.error("Entitlement report failed: %s", exc)
+        return 2
+
+
+def run_commerce_adjust(
+    settings: Settings,
+    args: argparse.Namespace,
+    *,
+    entity: str,
+) -> int:
+    try:
+        if not args.reason.strip():
+            raise ValueError("Non-empty audit reason is required")
+        database = Database(settings.database_path)
+        user = _commerce_user(database, args.platform_user_id)
+        service = CommerceService(database)
+        if entity == "generation_credit":
+            current = service.balance(user["id"]).available
+        else:
+            current = service.entitlement_balance(user["id"]).available
+        proposed = current + args.delta
+        if proposed < 0:
+            raise ValueError("Adjustment would make the balance negative")
+        if not args.apply:
+            _print_operator(
+                {
+                    "mode": "dry-run",
+                    "user_ref": mask_reference(args.platform_user_id, prefix="max"),
+                    "entity": entity,
+                    "delta": args.delta,
+                    "available_before": current,
+                    "available_after": proposed,
+                    "reason": args.reason,
+                    "database_mutated": False,
+                },
+                args.format,
+            )
+            return 0
+        if not args.idempotency_key:
+            raise ValueError("--idempotency-key is required with --apply")
+        with database.transaction() as connection:
+            if entity == "generation_credit":
+                updated = service.adjust_generation_credits(
+                    connection,
+                    user_id=user["id"],
+                    delta=args.delta,
+                    reason=args.reason,
+                    idempotency_key=args.idempotency_key,
+                )
+                available = updated.available
+            else:
+                updated = service.adjust_unlock_entitlements(
+                    connection,
+                    user_id=user["id"],
+                    delta=args.delta,
+                    reason=args.reason,
+                    idempotency_key=args.idempotency_key,
+                )
+                available = updated.available
+        _print_operator(
+            {
+                "mode": "apply",
+                "user_ref": mask_reference(args.platform_user_id, prefix="max"),
+                "entity": entity,
+                "delta": args.delta,
+                "available_after": available,
+                "reason": args.reason,
+                "audit_written": True,
+            },
+            args.format,
+        )
+        return 0
+    except (ValueError, sqlite3.Error, DemoError) as exc:
+        LOGGER.error("Commerce adjustment failed: %s", exc)
+        return 2
+
+
+def run_package_status(
+    settings: Settings,
+    platform_user_id: str | None,
+    invoice: int | None,
+    output_format: str,
+) -> int:
+    try:
+        database = Database(settings.database_path)
+        clauses = ["o.product_code=?"]
+        values: list[object] = [PRODUCT_CODE]
+        user_ref = None
+        if platform_user_id:
+            user = _commerce_user(database, platform_user_id)
+            clauses.append("o.user_id=?")
+            values.append(user["id"])
+            user_ref = mask_reference(platform_user_id, prefix="max")
+        if invoice:
+            clauses.append("o.provider_invoice_id=?")
+            values.append(invoice)
+        with database.read() as connection:
+            rows = connection.execute(
+                f"""SELECT o.provider_invoice_id,o.status,o.amount_minor,o.created_at,
+                            g.status AS grant_status,l.available_credits,l.reserved_credits,
+                            l.consumed_credits,e.status AS entitlement_status
+                     FROM payment_orders o
+                     LEFT JOIN continuation_pack_grants g ON g.payment_order_id=o.id
+                     LEFT JOIN generation_credit_lots l ON l.id=g.credit_lot_id
+                     LEFT JOIN unlock_entitlements e ON e.id=g.entitlement_id
+                     WHERE {' AND '.join(clauses)} ORDER BY o.created_at DESC LIMIT 100""",
+                values,
+            ).fetchall()
+        _print_operator(
+            {
+                "product_code": PRODUCT_CODE,
+                "user_ref": user_ref,
+                "packages": [
+                    {
+                        "invoice_ref": mask_reference(row["provider_invoice_id"], prefix="inv"),
+                        "payment_status": row["status"],
+                        "grant_status": row["grant_status"],
+                        "price_rub": row["amount_minor"] / 100,
+                        "variants_available": row["available_credits"],
+                        "variants_reserved": row["reserved_credits"],
+                        "variants_consumed": row["consumed_credits"],
+                        "original_status": row["entitlement_status"],
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ],
+            },
+            output_format,
+        )
+        return 0
+    except (ValueError, sqlite3.Error) as exc:
+        LOGGER.error("Package status failed: %s", exc)
+        return 2
 
 
 def _backup_manager(settings: Settings) -> BackupManager:
@@ -937,6 +1161,22 @@ def build_parser() -> argparse.ArgumentParser:
     health_report_parser = subparsers.add_parser("health-report")
     health_report_parser.add_argument("--online", action="store_true")
     add_format(health_report_parser)
+    for command in ("credit-status", "credit-history", "entitlement-status", "entitlement-history"):
+        report_parser = subparsers.add_parser(command)
+        report_parser.add_argument("--platform-user-id", required=True)
+        add_format(report_parser)
+    for command in ("credit-adjust", "entitlement-adjust"):
+        adjust_parser = subparsers.add_parser(command)
+        adjust_parser.add_argument("--platform-user-id", required=True)
+        adjust_parser.add_argument("--delta", required=True, type=int)
+        adjust_parser.add_argument("--reason", required=True)
+        adjust_parser.add_argument("--idempotency-key")
+        adjust_parser.add_argument("--apply", action="store_true")
+        add_format(adjust_parser)
+    package_parser = subparsers.add_parser("package-status")
+    package_parser.add_argument("--platform-user-id")
+    package_parser.add_argument("--invoice", type=int)
+    add_format(package_parser)
     refund_prepare = subparsers.add_parser("refund-prepare")
     refund_prepare.add_argument("--order-id", required=True)
     refund_prepare.add_argument("--amount-rub", required=True)
@@ -1039,6 +1279,33 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "refund-prepare":
         return run_refund_prepare(settings, args)
+    if args.command in {"credit-status", "credit-history"}:
+        return run_credit_report(
+            settings,
+            args.platform_user_id,
+            history=args.command == "credit-history",
+            output_format=args.format,
+        )
+    if args.command in {"entitlement-status", "entitlement-history"}:
+        return run_entitlement_report(
+            settings,
+            args.platform_user_id,
+            history=args.command == "entitlement-history",
+            output_format=args.format,
+        )
+    if args.command in {"credit-adjust", "entitlement-adjust"}:
+        return run_commerce_adjust(
+            settings,
+            args,
+            entity=(
+                "generation_credit" if args.command == "credit-adjust"
+                else "unlock_entitlement"
+            ),
+        )
+    if args.command == "package-status":
+        return run_package_status(
+            settings, args.platform_user_id, args.invoice, args.format
+        )
     if args.command == "refund-submit":
         return run_refund_submit(
             settings, args.refund_id, apply=args.apply, output_format=args.format

@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.database import Database
+from app.commerce import PRODUCT_CODE
 from app.payments import PaymentError, PaymentStatus
 
 
@@ -39,12 +40,17 @@ def _order_row(database: Database, invoice: int):
             """SELECT o.*,v.unlock_status,v.original_path,v.delivery_count,
                       v.attempt_id AS version_attempt_id,i.user_id AS item_user_id,
                       a.user_id AS attempt_user_id,
-                      r.amount_minor AS receipt_amount_minor,r.status AS receipt_status
+                      r.amount_minor AS receipt_amount_minor,r.status AS receipt_status,
+                      g.status AS grant_status,l.available_credits,l.reserved_credits,
+                      l.consumed_credits,e.status AS entitlement_status
                FROM payment_orders o
                LEFT JOIN gallery_versions v ON v.id=o.version_id
                LEFT JOIN gallery_items i ON i.id=v.gallery_item_id
                LEFT JOIN generation_attempts a ON a.id=o.attempt_id
                LEFT JOIN payment_receipts r ON r.order_id=o.id AND r.receipt_type='payment'
+               LEFT JOIN continuation_pack_grants g ON g.payment_order_id=o.id
+               LEFT JOIN generation_credit_lots l ON l.id=g.credit_lot_id
+               LEFT JOIN unlock_entitlements e ON e.id=g.entitlement_id
                WHERE o.provider_invoice_id=?""",
             (invoice,),
         ).fetchone()
@@ -80,7 +86,22 @@ def payment_show(database: Database, invoice: int) -> dict[str, Any]:
         and int(row["receipt_amount_minor"]) == int(row["amount_minor"])
         and row["currency"] == "RUB"
     )
-    if status in PAID_STATES:
+    is_pack = row["product_code"] == PRODUCT_CODE
+    if is_pack and status in PAID_STATES:
+        unlock_consistent = bool(
+            row["grant_status"] == "active"
+            and row["entitlement_status"] in {"available", "reserved", "consumed"}
+            and int(row["available_credits"] or 0)
+            + int(row["reserved_credits"] or 0)
+            + int(row["consumed_credits"] or 0)
+            == 2
+        )
+    elif is_pack and status == PaymentStatus.REFUNDED.value:
+        unlock_consistent = bool(
+            row["grant_status"] == "refunded"
+            and row["entitlement_status"] == "refunded"
+        )
+    elif status in PAID_STATES:
         unlock_consistent = row["unlock_status"] == "unlocked"
     elif status == PaymentStatus.REFUNDED.value:
         unlock_consistent = row["unlock_status"] == "refunded"
@@ -91,9 +112,10 @@ def payment_show(database: Database, invoice: int) -> dict[str, Any]:
         "exact_version_consistent": exact_version_consistent,
         "receipt_consistent": receipt_consistent,
         "unlock_consistent": bool(unlock_consistent),
-        "original_available": original_available,
         "audit_present": bool(audit),
     }
+    if not is_pack:
+        checks["original_available"] = original_available
     return {
         "invoice_ref": mask_reference(invoice, prefix="inv"),
         "order_ref": mask_reference(row["id"], prefix="ord"),
@@ -102,12 +124,20 @@ def payment_show(database: Database, invoice: int) -> dict[str, Any]:
         "amount_rub": int(row["amount_minor"]) / 100,
         "currency": str(row["currency"]),
         "provider": str(row["provider"]),
+        "product_code": str(row["product_code"]),
         "created_at": str(row["created_at"]),
         "expires_at": str(row["expires_at"]),
         "paid_at": row["paid_at"],
         "delivered_at": row["delivered_at"],
         "failure_code": row["failure_code"],
         "delivery_count": int(row["delivery_count"] or 0),
+        "package": {
+            "grant_status": row["grant_status"],
+            "variants_available": row["available_credits"],
+            "variants_reserved": row["reserved_credits"],
+            "variants_consumed": row["consumed_credits"],
+            "original_status": row["entitlement_status"],
+        } if is_pack else None,
         "receipt_status": row["receipt_status"],
         "refunded_rub": int(row["refunded_amount_minor"] or 0) / 100,
         "refunds": {
@@ -180,7 +210,11 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
         "listener_loopback": settings.payment_webhook_host in {"127.0.0.1", "::1", "localhost"},
         "webhook_path_exact": settings.payment_webhook_path == "/payments/robokassa/result",
         "currency_rub": settings.payment_currency == "RUB",
-        "price_49_rub": settings.unlock_original_price_rub == 49,
+        "price_49_rub": settings.continuation_pack_price_rub == 49,
+        "receipt_describes_2_plus_1": (
+            "2" in settings.payment_receipt_item_name
+            and "1" in settings.payment_receipt_item_name
+        ),
         "receipt_tax_configured": settings.payment_receipt_tax in {
             "none", "vat0", "vat5", "vat7", "vat10", "vat20", "vat105", "vat107", "vat110", "vat120"
         },
@@ -218,7 +252,7 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
             and settings.robokassa_mode == "production"
             and settings.robokassa_production_approved
         ),
-        "pending_original_deliveries": pending_delivery,
+        "pending_legacy_original_deliveries": pending_delivery,
         "rejected_callback_events": rejected,
         "notes": [
             "This command does not create a payment or call the refund API.",

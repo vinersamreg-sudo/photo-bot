@@ -233,7 +233,7 @@ class ProcessingModeTests(TestCase):
             "Замени фон на реалистичные скалистые горы",
             "mode-persistence",
         )
-        self.assertEqual(result.remaining_generations, 4)
+        self.assertEqual(result.remaining_generations, 1)
         with service.database.read() as connection:
             attempt = connection.execute(
                 "SELECT * FROM generation_attempts WHERE id=?", (result.attempt_id,)

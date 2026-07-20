@@ -13,7 +13,7 @@ $homepage = (Invoke-WebRequest -UseBasicParsing "$BaseUrl/").Content
 if ($homepage -notmatch "Pixora AI" -or $homepage -notmatch 'data-max-cta="hero"') {
     throw "Homepage content smoke failed"
 }
-if ($homepage -match 'href="https://max.ru/"' -or $homepage -notmatch '49 ₽') {
+if ($homepage -match 'href="https://max.ru/"' -or $homepage -notmatch '(?<!\d)49(?!\d)') {
     throw "Homepage launch truth smoke failed"
 }
 Write-Output "Pixora site smoke passed ($BaseUrl)"

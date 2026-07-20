@@ -174,14 +174,17 @@ class GalleryService:
     ) -> str:
         gallery_id = self._ensure_gallery(connection, user_id, now)
         item_id = uuid4().hex
-        root = source_path.parent.parent
+        stored_source, _digest, _size = self.storage.create_gallery_item_source(
+            user_id, item_id, source_path
+        )
+        root = self.storage.gallery_item_root(user_id, item_id)
         connection.execute(
             """INSERT INTO gallery_items(
                    id,gallery_id,user_id,title,created_at,updated_at,original_source_path,storage_root_path,
                    last_opened_at,retention_until
                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (
-                item_id, gallery_id, user_id, "Моя работа", _iso(now), _iso(now), str(source_path),
+                item_id, gallery_id, user_id, "Моя работа", _iso(now), _iso(now), str(stored_source),
                 str(root), _iso(now),
                 _iso(now + timedelta(days=self.settings.demo_retention_days)),
             ),

@@ -83,7 +83,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                     settings.payment_webhook_port,
                     settings.payment_webhook_path,
                     on_paid=(
-                        application.deliver_paid_original
+                        application.notify_continuation_pack_paid
                         if application is not None else None
                     ),
                 )

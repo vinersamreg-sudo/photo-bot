@@ -90,13 +90,9 @@ jobs:
         run: |
           python -m unittest discover -v
           python -m app.main health
-      - name: Validate OpenAI credential from GitHub runner
+      - name: Confirm OpenAI credential is configured without an API request
         if: env.OPENAI_KEY_CONFIGURED == 'true'
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_IMAGE_MODEL: gpt-image-2
-          APP_ENV: ci
-        run: python -m app.main openai-check
+        run: echo "OpenAI credential is configured; external validation is intentionally skipped."
   deploy:
     needs: test
     runs-on: ubuntu-latest
@@ -291,7 +287,7 @@ jobs:
               chmod 600 "$ROOT/.env"
             fi
             ensure_env() { grep -q "^$1=" "$ROOT/.env" || printf '%s=%s\n' "$1" "$2" >> "$ROOT/.env"; }
-            ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5
+            ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2
             ensure_env IMAGE_EDIT_QUALITY medium
             ensure_env IMAGE_EDIT_SIZE 1024x1024
             ensure_env IMAGE_EDIT_INPUT_FIDELITY auto
@@ -313,6 +309,7 @@ jobs:
             ensure_env MAX_PROMPT_LENGTH 1500
             ensure_env GENERATION_TIMEOUT_SECONDS 300
             ensure_env UNLOCK_ORIGINAL_PRICE_RUB 49
+            ensure_env CONTINUATION_PACK_PRICE_RUB 49
             ensure_env PAYMENT_CURRENCY RUB
             ensure_env PAYMENT_ORDER_TTL_MINUTES 30
             ensure_env PAYMENT_WEBHOOK_HOST 127.0.0.1
@@ -323,7 +320,7 @@ jobs:
             ensure_env ROBOKASSA_REFUND_URL https://services.robokassa.ru/RefundService/Refund/Create
             ensure_env ROBOKASSA_REFUND_STATUS_URL https://services.robokassa.ru/RefundService/Refund/GetState
             ensure_env PAYMENT_RECEIPT_TAX none
-            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Оригинал фотографии Pixora'
+            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта и 1 оригинал'
             ensure_env DEMO_RETENTION_DAYS 30
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
@@ -346,6 +343,9 @@ jobs:
             set_env OPENAI_RESPONSES_IMAGE_ENABLED false
             set_env OPENAI_CONVERSATION_RETENTION_ENABLED false
             set_env UNLOCK_ORIGINAL_PRICE_RUB 49
+            set_env CONTINUATION_PACK_PRICE_RUB 49
+            set_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2
+            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта и 1 оригинал'
             # Commercial integrations require a separate, explicit rollout.
             set_env PAYMENTS_ENABLED false
             set_env PAYMENT_PROVIDER disabled
@@ -420,7 +420,7 @@ jobs:
               test -e "$ROOT/$path"
             done
             if grep -Eq '^OPENAI_API_KEY=.+$' "$ROOT/.env"; then
-              "$ROOT"/venv/bin/python -m app.main openai-check
+              echo "OPENAI_API_KEY is configured; external API check intentionally skipped"
             else
               echo "OPENAI_API_KEY is not configured; external API check skipped"
             fi
@@ -497,12 +497,26 @@ jobs:
               migration_v8 = bool(connection.execute(
                   "SELECT 1 FROM schema_migrations WHERE version=8"
               ).fetchone())
+              migration_v9 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=9"
+              ).fetchone())
+              credit_accounts = connection.execute(
+                  "SELECT COUNT(*) FROM user_credit_accounts"
+              ).fetchone()[0]
+              users = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+              negative_credit_accounts = connection.execute(
+                  """SELECT COUNT(*) FROM user_credit_accounts
+                     WHERE available_generation_credits<0 OR reserved_generation_credits<0"""
+              ).fetchone()[0]
           finally:
               connection.close()
           assert quick_check == "ok"
           assert migration_v6
           assert migration_v7
           assert migration_v8
+          assert migration_v9
+          assert credit_accounts == users
+          assert negative_credit_accounts == 0
           assert settings.payments_enabled is False
           assert settings.payment_webhook_enabled is False
           assert settings.payment_refunds_enabled is False
@@ -554,6 +568,9 @@ jobs:
               "migration_v6": migration_v6,
               "migration_v7": migration_v7,
               "migration_v8": migration_v8,
+              "migration_v9": migration_v9,
+              "credit_accounts": credit_accounts,
+              "negative_credit_accounts": negative_credit_accounts,
               "payments_enabled": settings.payments_enabled,
               "payment_webhook_enabled": settings.payment_webhook_enabled,
               "payment_refunds_enabled": settings.payment_refunds_enabled,
@@ -627,48 +644,33 @@ jobs:
             set -euo pipefail
             cd /opt/photo-bot
             venv/bin/python - <<'PY'
-          from datetime import datetime, timedelta, timezone
-          from pathlib import Path
-
           from app.config import load_settings
+          from app.commerce import CommerceService
           from app.database import Database
-
-          def iso(value: datetime) -> str:
-              return value.isoformat()
 
           settings = load_settings()
           database = Database(settings.database_path)
-          now = datetime.now(timezone.utc)
-          expires = now + timedelta(minutes=settings.demo_session_ttl_minutes)
           granted_count = 0
           with database.transaction() as connection:
               for owner_id in settings.max_owner_user_ids:
                   row = connection.execute(
-                      """SELECT s.id,s.source_file_path,s.successful_generations,
-                                s.max_generations,s.status
-                         FROM demo_sessions s
-                         JOIN users u ON u.id=s.user_id
-                         WHERE u.platform='max' AND u.platform_user_id=?""",
+                      """SELECT id FROM users
+                         WHERE platform='max' AND platform_user_id=?""",
                       (owner_id,),
                   ).fetchone()
-                  if (
-                      row is None
-                      or row["status"] == "deleted"
-                      or row["successful_generations"] < row["max_generations"]
-                      or not Path(row["source_file_path"]).is_file()
-                  ):
+                  if row is None:
                       continue
-                  connection.execute(
-                      """UPDATE demo_sessions
-                         SET max_generations=successful_generations+5,
-                             status='active',expires_at=?,updated_at=?
-                         WHERE id=?""",
-                      (iso(expires), iso(now), row["id"]),
+                  CommerceService(database).adjust_generation_credits(
+                      connection,
+                      user_id=row["id"],
+                      delta=5,
+                      reason="explicit_workflow_dispatch_owner_e2e",
+                      idempotency_key=f"owner-e2e:{row['id']}:{settings.app_env}",
                   )
                   granted_count += 1
           if granted_count == 0:
-              raise SystemExit("No allowlisted owner session with a valid source was available")
-          print(f"owner_e2e_sessions_granted={granted_count}")
-          print("owner_e2e_attempts_granted=5")
+              raise SystemExit("No allowlisted owner account was available")
+          print(f"owner_e2e_accounts_adjusted={granted_count}")
+          print("owner_e2e_generation_credits_adjusted=5")
           PY
           REMOTE

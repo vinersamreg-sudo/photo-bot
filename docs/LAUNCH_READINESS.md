@@ -6,7 +6,7 @@ The public website is ready for Robokassa moderation: DNS, trusted HTTPS, canoni
 
 ## Automated evidence
 
-`python -m app.main launch-status --strict` requires: correct model, configured credentials/owner, active service, fresh polling, live MAX/OpenAI connectivity, SQLite quick_check + migration v8, disk reserve, no active processing, recent backup, matching restore test and off-site confirmation. `health-report` adds payment, refund, pilot, storage, cleanup and cost state without identifiers.
+`python -m app.main launch-status --strict` requires: correct model, configured credentials/owner, active service, fresh polling, live MAX connectivity, SQLite quick_check + migration v9, disk reserve, no active processing, recent backup, matching restore test and off-site confirmation. OpenAI connectivity is not called during this deploy because real OpenAI requests were explicitly prohibited. `health-report` adds payment, refund, pilot, storage, cleanup and cost state without identifiers.
 
 The report exposes six separate gates: `site_moderation_ready`, `robokassa_sandbox_ready`, `robokassa_production_ready`, `owner_e2e_ready`, `pilot_5_ready`, and the deliberately false `public_launch_ready`. They must not be collapsed into one “ready” statement. Site readiness checks public HTTPS routes, 49 ₽/no 149 ₽, redirects and HSTS; owner E2E is derived without exposing owner ID.
 

@@ -54,7 +54,7 @@ python -m app.main demo-stats
 
 Без `--provider fake` команда использует настроенный OpenAI `images.edit`. Она выводит только путь к уменьшенному watermarked preview. Оригинал хранится отдельно в `data/users/<opaque-id>/demo_sessions/<session-id>/originals` и не входит в пользовательский ответ.
 
-Одна demo-сессия закрепляется за одной исходной фотографией и допускает до `DEMO_MAX_SUCCESSFUL_GENERATIONS` успешно доставленных preview. Технические и policy-ошибки, а также ошибка доставки лимит не расходуют.
+Начальный баланс относится к MAX user ID, а не к demo-сессии или фотографии: пользователь однократно получает две успешно доставленные генерации и может распределить их между разными снимками. Технические и policy-ошибки, отмена и ошибка доставки баланс не расходуют.
 
 ## Personal studio API
 
@@ -81,7 +81,7 @@ Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `T
 
 ## Commercial payments
 
-Migration v8 implements Robokassa sandbox architecture, exact-`GalleryVersion` unlock, idempotent ResultURL processing, retriable original delivery and refund drafts/CLI. Real money is not enabled by this implementation: every deploy forces payment/webhook/refund flags off, sandbox mode and no production approval. Read [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
+Migration v9 фиксирует постоянный продукт `Pixora Continuation Pack`: 49 ₽ дают ещё две успешные генерации и одно независимое право получить выбранный original без водяного знака. Платёж не выбирает версию автоматически; entitlement можно применить к любой доступной собственной версии, созданной до или после покупки. Повторные пакеты складываются. ResultURL атомарно начисляет обе части пакета и остаётся идемпотентным. Реальные деньги не включены: каждый deploy принудительно оставляет payment/webhook/refund flags off, sandbox mode и no production approval. Read [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
 
 Read-only and dry-run-first operator tools:
 
@@ -93,6 +93,11 @@ python -m app.main payment-mark-delivery-retry --invoice <invoice> [--apply]
 python -m app.main refund-create --invoice <invoice> --amount-rub 49 --reason customer_request --idempotency-key <ticket> --dry-run
 python -m app.main robokassa-health --format human
 python -m app.main pilot-report --format human
+python -m app.main credit-status --platform-user-id <MAX-ID>
+python -m app.main credit-history --platform-user-id <MAX-ID>
+python -m app.main entitlement-status --platform-user-id <MAX-ID>
+python -m app.main package-status --platform-user-id <MAX-ID>
+python -m app.main credit-adjust --platform-user-id <MAX-ID> --delta 1 --reason <ticket> --idempotency-key <key> # dry-run
 ```
 
 Owner procedures: [moderation package](docs/ROBOKASSA_SUBMISSION_PACKAGE.md), [payment audit](docs/PAYMENT_GO_LIVE_AUDIT.md), [cabinet map](docs/ROBOKASSA_CABINET_SETUP.md), [sandbox E2E](docs/ROBOKASSA_SANDBOX_E2E.md), [payment support](docs/PAYMENT_SUPPORT_RUNBOOK.md), [five-user pilot](docs/PILOT_5_USERS_RUNBOOK.md), [unit economics](docs/PILOT_UNIT_ECONOMICS.md).
@@ -127,7 +132,7 @@ Systemd hardening template находится в `ops/photo-bot.service`. Еже
 
 ## Official website
 
-Официальный продуктовый сайт находится в `site/public` и развёртывается отдельно от бота в `/opt/pixora-site`. Он честно описывает закрытое тестирование, ведёт в проверенный MAX-бот и фиксирует цену 49 ₽ за одну выбранную версию без водяного знака. Платежи остаются выключенными.
+Официальный продуктовый сайт находится в `site/public` и развёртывается отдельно от бота в `/opt/pixora-site`. Он честно описывает закрытое тестирование, ведёт в проверенный MAX-бот и фиксирует единый пакет: 49 ₽ за ещё два варианта и один выбранный original без водяного знака. Платежи остаются выключенными.
 
 Site workflow закрыт переменной production environment `PIXORA_SITE_DEPLOY_ENABLED`. Её нельзя включать до переноса DNS на Hetzner, выпуска доверенного TLS-сертификата, внешнего HTTPS smoke и подтверждения неизменности backend. Начинать с [site README](site/README.md), [production runbook](docs/SITE_PRODUCTION_RUNBOOK.md), [TLS runbook](docs/TLS_CERTIFICATE_RUNBOOK.md) и [Robokassa checklist](docs/ROBOKASSA_SITE_MODERATION_CHECKLIST.md).
 

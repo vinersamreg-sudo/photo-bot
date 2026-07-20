@@ -28,7 +28,6 @@ from app.max_application import (
     PHOTO_ACCEPTED_TEXT,
     PHOTO_REUSED_TEXT,
     PROCESSING_TEXT,
-    UNLOCK_PLACEHOLDER,
 )
 from app.max_conversation import MaxConversationStore
 from app.max_transport import MaxIncomingEvent, MaxTransportError
@@ -296,7 +295,7 @@ class MaxApplicationTests(TestCase):
         self.assertIn("Отправьте фотографию и напишите", self.transport.messages[-1][1])
         self.assertEqual(self.provider.calls, 0)
 
-    def test_photoshoot_catalog_and_source_replacement_have_product_copy(self) -> None:
+    def test_photoshoot_catalog_and_new_source_share_global_balance(self) -> None:
         self.generate_first()
         calls_before = self.provider.calls
         self.app.handle(self.event("message_created", text="/start"))
@@ -304,7 +303,7 @@ class MaxApplicationTests(TestCase):
         self.assertIn("выберите категорию", self.transport.messages[-1][1].lower())
         self.clock.advance(2)
         self.callback("scenario:cafe")
-        self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertEqual(self.store.get("u1").state, "demo_exhausted")
         self.assertEqual(self.provider.calls, calls_before + 1)
 
         other = self.base / "other.png"
@@ -313,9 +312,9 @@ class MaxApplicationTests(TestCase):
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/other")
         )
-        message = self.transport.messages[-1]
-        self.assertIn("Бесплатное демо уже связано с первой фотографией", message[1])
-        self.assertEqual(message[2][1].text, "📂 Мои работы")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
+        self.assertEqual(self.demo.commerce.balance(self.store.get("u1").user_id).available, 0)
         self.assertEqual(self.provider.calls, calls_before + 1)
 
     def test_image_outside_waiting_for_source_is_saved_and_not_silently_ignored(self) -> None:
@@ -371,7 +370,10 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(self.transport.edits)
         delivered_path = self.transport.images[-1][1]
         self.assertTrue(delivered_path.is_file())
-        self.assertEqual(self.transport.images[-1][2], "Демо с водяным знаком.")
+        self.assertEqual(
+            self.transport.images[-1][2],
+            "Демо с водяным знаком.\n\nОстался один бесплатный вариант.",
+        )
         self.assertEqual(self.transport.edits[-1][1], "✨ Готово")
         with self.database.read() as connection:
             attempt = connection.execute(
@@ -387,13 +389,13 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(len(self.transport.messages), message_count)
 
         unlock_event = self.callback("result:unlock")
-        self.assertEqual(self.transport.messages[-1][1], UNLOCK_PLACEHOLDER)
+        self.assertIn("Ещё 2 варианта + 1 оригинал — 49 ₽", self.transport.messages[-1][1])
         self.assertNotIn(str(attempt["original_result_path"]), self.transport.messages[-1][1])
         callback_message_count = len(self.transport.messages)
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
-    def test_owner_sandbox_payment_unlocks_and_redelivers_only_selected_original(self) -> None:
+    def test_owner_sandbox_payment_grants_pack_then_user_selects_original(self) -> None:
         self.generate_first()
         paid_settings = replace(
             self.settings,
@@ -414,6 +416,8 @@ class MaxApplicationTests(TestCase):
         )
         event = self.event("message_callback", action="result:unlock")
         paid_app.handle(event)
+        self.assertIn("Оригинал можно выбрать позже", self.transport.messages[-1][1])
+        paid_app.handle(self.event("message_callback", action="package:buy"))
         pay_button = self.transport.messages[-1][2][0]
         self.assertTrue(pay_button.action.startswith("https://auth.robokassa.ru/"))
         with self.database.read() as connection:
@@ -432,9 +436,35 @@ class MaxApplicationTests(TestCase):
             "SignatureValue": signature,
         }, method="POST", path="/payments/robokassa/result")
         self.assertTrue(webhook.accepted)
-        self.assertTrue(paid_app.deliver_paid_original(order["id"]))
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT unlock_status FROM gallery_versions WHERE id=?",
+                    (order["version_id"],),
+                ).fetchone()[0],
+                "demo",
+            )
+        self.transport.image_delivery = False
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        with self.database.read() as connection:
+            entitlement = connection.execute(
+                """SELECT status,gallery_version_id FROM unlock_entitlements
+                   WHERE source_payment_order_id=?""",
+                (order["id"],),
+            ).fetchone()
+            self.assertEqual(entitlement["status"], "available")
+            self.assertIsNone(entitlement["gallery_version_id"])
+            self.assertEqual(
+                connection.execute(
+                    "SELECT unlock_status FROM gallery_versions WHERE id=?",
+                    (order["version_id"],),
+                ).fetchone()[0],
+                "demo",
+            )
+        self.transport.image_delivery = True
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
         self.assertEqual(self.transport.images[-1][1], original)
-        self.assertTrue(paid_app.deliver_paid_original(order["id"]))
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute(
@@ -455,6 +485,14 @@ class MaxApplicationTests(TestCase):
 
     def test_text_after_result_continues_as_field_level_correction(self) -> None:
         self.onboard_to_prompt()
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_generation_credits(
+                connection,
+                user_id=self.store.get("u1").user_id,
+                delta=1,
+                reason="test third lineage version",
+                idempotency_key="test-lineage-credit",
+            )
         phrases = (
             "Замени фон на Альпы",
             "Добавь куртку",
@@ -464,7 +502,10 @@ class MaxApplicationTests(TestCase):
             if index:
                 self.clock.advance(2)
             self.app.handle(self.event("message_created", text=phrase))
-            self.assertEqual(self.store.get("u1").state, "result_ready")
+            self.assertEqual(
+                self.store.get("u1").state,
+                "demo_exhausted" if index == 2 else "result_ready",
+            )
         self.assertEqual(self.provider.calls, 3)
         with self.database.read() as connection:
             rows = connection.execute(
@@ -499,6 +540,14 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("message_created", text="Сделай лицо естественнее"))
         second = self.store.get("u1").current_version_id
         self.clock.advance(2)
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_generation_credits(
+                connection,
+                user_id=self.store.get("u1").user_id,
+                delta=1,
+                reason="test repeat lineage version",
+                idempotency_key="test-repeat-credit",
+            )
         self.callback("result:repeat")
         dialog = self.store.get("u1")
         third = dialog.current_version_id

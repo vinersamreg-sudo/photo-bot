@@ -14,6 +14,10 @@ The classic ResultURL does not itself provide a separately signed merchant field
 
 Duplicate callbacks are safe. An exact replay returns the prior acknowledgement without another unlock or delivery. A second valid callback for an already paid order is audited as a duplicate payment and also cannot widen unlock scope.
 
+## Product grant
+
+The only v1 item is `continuation_pack_2_plus_1`, receipt name «Пакет обработки Pixora: 2 варианта и 1 оригинал», amount 49.00 RUB. A verified ResultURL atomically grants two generation credits and one available original entitlement. It does not unlock or deliver a version. The user later selects an owned available GalleryVersion; browser SuccessURL never grants value. Replayed callbacks return idempotent success without a second package.
+
 ## Refund limitation
 
 Robokassa refund execution needs an operation key (`OpKey`) and Password3. Classic ResultURL may not supply `OpKey`; until ResultURL2 or a documented operation-status reconciliation supplies it, automatic refund submission is intentionally blocked. A local `RefundIntent` can still be prepared and audited for manual handling.

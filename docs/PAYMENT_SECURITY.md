@@ -2,31 +2,32 @@
 
 ## Implemented controls
 
-- all commercial flags default off and deploy forcibly restores the safe state;
-- production activation requires a second explicit approval flag;
-- ResultURL listener binds loopback in production, accepts only POST on its configured path and returns 405 for GET;
-- request bodies are capped at 64 KiB;
-- signatures use constant-time comparison;
-- invoice, exact amount, local provider/merchant, RUB, expiry and opaque token are checked;
-- event digests, order status and database constraints provide replay/idempotency protection;
-- callback source is hashed; safe payload stores booleans only;
-- credentials, signatures, raw callback body, MAX IDs, prompts and private paths are excluded from logs/reports;
-- unlock is exact-version and committed before delivery;
-- failed delivery preserves paid state and supports re-delivery;
+- all commercial flags default off and deploy forcibly restores safe state;
+- production activation requires a separate approval flag;
+- ResultURL binds loopback, accepts only POST, caps bodies at 64 KiB and requires strict UTF-8;
+- signatures use constant-time comparison; invoice, exact 49.00 RUB amount, merchant/provider, expiry and opaque token are checked;
+- event digests and unique constraints provide callback/payment grant replay protection;
+- ResultURL atomically grants the complete +2 credit / +1 entitlement package or nothing;
+- browser redirect grants nothing; purchase never auto-selects or unlocks a version;
+- generation credits reserve before provider and cannot go negative under concurrent requests;
+- original unlock checks ownership, deletion and file presence before entitlement consumption;
+- original entitlement is reserved before MAX delivery, consumed only after success,
+  and returned to available on delivery failure;
+- unused-package rollback is scoped to its source lot; used value requires manual review;
+- admin adjustments require reason, idempotency key, dry-run default and explicit `--apply`;
+- callbacks, telemetry, CLI and reports exclude credentials, signatures, raw bodies, MAX IDs, prompts, images and private paths;
 - refund execution has an independent disabled flag and requires Password3 plus operation key.
-- operator views mask invoice/order/version references and never expose signed URLs, platform IDs or file paths;
-- resend/retry/refund mutation is dry-run by default and requires explicit `--apply`.
 
-## Required infrastructure controls before activation
+## Required before activation
 
-- TLS on the public ResultURL, strict host/path routing and proxy body/time limits;
-- rate limiting and provider IP filtering where Robokassa publishes stable ranges;
-- firewall blocking direct public access to the loopback port;
-- secret rotation procedure and protected GitHub Environment approvals;
-- alerting on rejected callbacks, duplicate payments and delivery backlog;
-- daily reconciliation between Robokassa cabinet, orders, receipts and refunds;
-- tested database backup after migration v8 and documented incident response.
+- trusted TLS ResultURL, strict host/path proxy, firewall and rate/body limits;
+- protected environment approvals and secret rotation procedure;
+- sandbox evidence for callback replay, two simultaneous generations, two payments, unlock race and refund hold/rollback;
+- reconciliation between Robokassa cabinet, order, package grant, credit lot, entitlement, receipt and refund;
+- alerts for rejected callbacks, negative/inconsistent balance, held packages and original retry backlog;
+- backup/restore after migration v9 and documented incident response;
+- accountant/lawyer approval of receipt nomenclature, tax and offer/refund terms.
 
 ## Known boundary
 
-Classic ResultURL cannot prove a provider timestamp/currency/merchant field that it does not send. Local order binding and expiry mitigate substitution, while signature + amount + invoice + `Shp_order` are authoritative request checks. Do not claim ResultURL2/JWS protections until that integration is actually implemented and tested.
+Classic ResultURL does not carry every ResultURL2/JWS field. Signature + amount + invoice + `Shp_order` and local merchant/currency/expiry are the implemented authority. Do not claim ResultURL2 protections. SQLite and one runtime process are appropriate for bounded owner/small pilot, not proven for mass public concurrency.

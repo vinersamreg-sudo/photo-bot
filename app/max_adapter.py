@@ -177,8 +177,9 @@ def result_actions(remaining: int) -> View:
         text = "Бесплатные варианты закончились."
         buttons = (
             Button("⬇ Получить оригинал", "result:unlock"),
+            Button("Ещё 2 варианта + 1 оригинал — 49 ₽", "package:buy"),
             Button("📂 Мои работы", "studio:works"),
-            Button("🗑 Удалить", "result:delete"),
+            Button("Начать заново", "new:source"),
         )
     return View(text, buttons)
 

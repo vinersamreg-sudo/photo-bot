@@ -96,6 +96,14 @@ class AiBrainIntegrationTests(TestCase):
                 "SELECT original_path FROM gallery_versions WHERE id=?", (versions[1].id,)
             ).fetchone()[0])
         self.clock.advance()
+        with self.database.transaction() as connection:
+            service.commerce.adjust_generation_credits(
+                connection,
+                user_id=session.user_id,
+                delta=1,
+                reason="three-version AI lineage regression",
+                idempotency_key="rocks-regression-credit",
+            )
         service.generate(
             session.session_id,
             "Сохрани эти же скалы. Убери только остаточное размытие фона. Остальное не меняй",

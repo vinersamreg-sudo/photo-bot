@@ -532,6 +532,113 @@ ON provider_context_events(event_type, created_at DESC);
 """
 
 
+COMMERCE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_credit_accounts (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    free_grant_applied INTEGER NOT NULL DEFAULT 0 CHECK(free_grant_applied IN (0,1)),
+    available_generation_credits INTEGER NOT NULL DEFAULT 0
+        CHECK(available_generation_credits >= 0),
+    reserved_generation_credits INTEGER NOT NULL DEFAULT 0
+        CHECK(reserved_generation_credits >= 0),
+    total_generation_credits_granted INTEGER NOT NULL DEFAULT 0
+        CHECK(total_generation_credits_granted >= 0),
+    total_generation_credits_consumed INTEGER NOT NULL DEFAULT 0
+        CHECK(total_generation_credits_consumed >= 0),
+    total_generation_credits_refunded INTEGER NOT NULL DEFAULT 0
+        CHECK(total_generation_credits_refunded >= 0),
+    total_generation_credits_adjusted INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0)
+);
+CREATE TABLE IF NOT EXISTS generation_credit_lots (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL CHECK(source_type IN ('initial_free','continuation_pack','admin')),
+    source_payment_order_id TEXT UNIQUE,
+    granted_credits INTEGER NOT NULL CHECK(granted_credits > 0),
+    available_credits INTEGER NOT NULL CHECK(available_credits >= 0),
+    reserved_credits INTEGER NOT NULL DEFAULT 0 CHECK(reserved_credits >= 0),
+    consumed_credits INTEGER NOT NULL DEFAULT 0 CHECK(consumed_credits >= 0),
+    refunded_credits INTEGER NOT NULL DEFAULT 0 CHECK(refunded_credits >= 0),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','exhausted','refunded')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(available_credits + reserved_credits + consumed_credits + refunded_credits = granted_credits)
+);
+CREATE INDEX IF NOT EXISTS idx_credit_lots_user_available
+ON generation_credit_lots(user_id,status,created_at);
+CREATE TABLE IF NOT EXISTS generation_credit_reservations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    lot_id TEXT NOT NULL REFERENCES generation_credit_lots(id),
+    attempt_id TEXT NOT NULL UNIQUE REFERENCES generation_attempts(id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('reserved','consumed','released')),
+    release_reason TEXT,
+    reserved_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    consumed_at TEXT,
+    released_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_credit_reservations_status
+ON generation_credit_reservations(status,reserved_at);
+CREATE TABLE IF NOT EXISTS credit_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    delta INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    reference_type TEXT NOT NULL,
+    reference_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    balance_after INTEGER NOT NULL CHECK(balance_after >= 0),
+    reserved_after INTEGER NOT NULL CHECK(reserved_after >= 0),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_user_time
+ON credit_ledger(user_id,id DESC);
+CREATE TABLE IF NOT EXISTS unlock_entitlements (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_payment_intent_id TEXT,
+    source_payment_order_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('available','reserved','consumed','cancelled','refunded')),
+    gallery_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
+    reserved_at TEXT,
+    consumed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_unlock_entitlements_user_status
+ON unlock_entitlements(user_id,status,created_at);
+CREATE TABLE IF NOT EXISTS continuation_pack_grants (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    payment_order_id TEXT NOT NULL UNIQUE,
+    payment_intent_id TEXT,
+    credit_lot_id TEXT NOT NULL UNIQUE REFERENCES generation_credit_lots(id),
+    entitlement_id TEXT NOT NULL UNIQUE REFERENCES unlock_entitlements(id),
+    generation_credit_quantity INTEGER NOT NULL CHECK(generation_credit_quantity=2),
+    unlock_entitlement_quantity INTEGER NOT NULL CHECK(unlock_entitlement_quantity=1),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','refunded')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pack_grants_user_time
+ON continuation_pack_grants(user_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS commerce_admin_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_hash TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('generation_credit','unlock_entitlement')),
+    delta INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    applied INTEGER NOT NULL CHECK(applied IN (0,1)),
+    created_at TEXT NOT NULL
+);
+"""
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -664,6 +771,15 @@ class Database:
             connection.executescript(TELEMETRY_SCHEMA)
             connection.executescript(PAYMENT_SCHEMA)
             connection.executescript(PROVIDER_CONTEXT_SCHEMA)
+            connection.executescript(COMMERCE_SCHEMA)
+            account_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(user_credit_accounts)")
+            }
+            if "total_generation_credits_adjusted" not in account_columns:
+                connection.execute(
+                    """ALTER TABLE user_credit_accounts ADD COLUMN
+                       total_generation_credits_adjusted INTEGER NOT NULL DEFAULT 0"""
+                )
             payment_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(payment_intents)")
             }
@@ -674,11 +790,13 @@ class Database:
                 ("currency", "TEXT NOT NULL DEFAULT 'RUB'"),
                 ("updated_at", "TEXT"),
                 ("expires_at", "TEXT"),
+                ("product_code", "TEXT NOT NULL DEFAULT 'legacy_original_unlock'"),
             ):
                 if name not in payment_columns:
                     connection.execute(
                         f"ALTER TABLE payment_intents ADD COLUMN {name} {declaration}"
                     )
+            self._allow_repeat_payment_intents(connection)
             gallery_version_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(gallery_versions)")
             }
@@ -687,11 +805,43 @@ class Database:
                 ("unlocked_at", "TEXT"),
                 ("delivery_count", "INTEGER NOT NULL DEFAULT 0"),
                 ("last_delivered_at", "TEXT"),
+                ("unlock_entitlement_id", "TEXT"),
             ):
                 if name not in gallery_version_columns:
                     connection.execute(
                         f"ALTER TABLE gallery_versions ADD COLUMN {name} {declaration}"
                     )
+            payment_order_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(payment_orders)")
+            }
+            for name, declaration in (
+                ("product_code", "TEXT NOT NULL DEFAULT 'legacy_original_unlock'"),
+                ("generation_credit_quantity", "INTEGER NOT NULL DEFAULT 0"),
+                ("unlock_entitlement_quantity", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in payment_order_columns:
+                    connection.execute(
+                        f"ALTER TABLE payment_orders ADD COLUMN {name} {declaration}"
+                    )
+            telemetry_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(product_events)")
+            }
+            for name, declaration in (
+                ("subject_hash", "TEXT"),
+                ("value_integer", "INTEGER"),
+                ("value_real", "REAL"),
+            ):
+                if name not in telemetry_columns:
+                    connection.execute(
+                        f"ALTER TABLE product_events ADD COLUMN {name} {declaration}"
+                    )
+            attempt_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(generation_attempts)")
+            }
+            if "credit_reservation_id" not in attempt_columns:
+                connection.execute(
+                    "ALTER TABLE generation_attempts ADD COLUMN credit_reservation_id TEXT"
+                )
             dialog_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(max_dialogs)")
             }
@@ -776,6 +926,18 @@ class Database:
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(8,?,?)",
                     ("version_scoped_commercial_payments", now),
                 )
+            commerce_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=9"
+            ).fetchone()
+            if commerce_migration is None:
+                from app.commerce import migrate_legacy_credit_accounts
+
+                now = datetime.now(timezone.utc).isoformat()
+                migrate_legacy_credit_accounts(connection, now)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(9,?,?)",
+                    ("continuation_pack_credit_and_entitlement_ledgers", now),
+                )
         finally:
             connection.close()
 
@@ -807,11 +969,74 @@ class Database:
                        technical_refund=1
                    WHERE status IN ('pending', 'processing')"""
             ).rowcount
+            from app.commerce import CommerceService
+
+            recovery_now = datetime.now(timezone.utc).isoformat()
+            released_credit_reservations = CommerceService.recover_stale_reservations(
+                connection, recovery_now
+            )
+            released_unlock_reservations = CommerceService.recover_stale_unlock_deliveries(
+                connection, recovery_now
+            )
         return {
             "completed_events": completed_events,
             "retryable_events": retryable_events,
             "interrupted_attempts": interrupted_attempts,
+            "released_credit_reservations": released_credit_reservations,
+            "released_unlock_reservations": released_unlock_reservations,
         }
+
+    @staticmethod
+    def _allow_repeat_payment_intents(connection: sqlite3.Connection) -> None:
+        """Remove the legacy one-payment-per-generation constraint safely."""
+
+        unique_attempt_index = False
+        for index in connection.execute("PRAGMA index_list(payment_intents)").fetchall():
+            if not index[2]:
+                continue
+            columns = connection.execute(
+                f"PRAGMA index_info('{index[1]}')"
+            ).fetchall()
+            if [row[2] for row in columns] == ["attempt_id"]:
+                unique_attempt_index = True
+                break
+        if not unique_attempt_index:
+            return
+        connection.executescript(
+            """
+            PRAGMA foreign_keys=OFF;
+            PRAGMA legacy_alter_table=ON;
+            BEGIN IMMEDIATE;
+            ALTER TABLE payment_intents RENAME TO payment_intents_legacy_unique_attempt;
+            CREATE TABLE payment_intents (
+                id TEXT PRIMARY KEY,
+                attempt_id TEXT NOT NULL REFERENCES generation_attempts(id),
+                idempotency_key TEXT NOT NULL UNIQUE,
+                amount_rub INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                confirmed_at TEXT,
+                version_id TEXT,
+                user_id TEXT,
+                provider TEXT NOT NULL DEFAULT 'legacy',
+                currency TEXT NOT NULL DEFAULT 'RUB',
+                updated_at TEXT,
+                expires_at TEXT,
+                product_code TEXT NOT NULL DEFAULT 'legacy_original_unlock'
+            );
+            INSERT INTO payment_intents(
+                id,attempt_id,idempotency_key,amount_rub,status,created_at,confirmed_at,
+                version_id,user_id,provider,currency,updated_at,expires_at,product_code
+            )
+            SELECT id,attempt_id,idempotency_key,amount_rub,status,created_at,confirmed_at,
+                   version_id,user_id,provider,currency,updated_at,expires_at,product_code
+            FROM payment_intents_legacy_unique_attempt;
+            DROP TABLE payment_intents_legacy_unique_attempt;
+            COMMIT;
+            PRAGMA legacy_alter_table=OFF;
+            PRAGMA foreign_keys=ON;
+            """
+        )
 
     @staticmethod
     def _backfill_gallery(connection: sqlite3.Connection) -> None:

@@ -14,7 +14,15 @@ from uuid import uuid4
 import httpx
 
 from app.config import Settings
+from app.commerce import (
+    CommerceService,
+    GENERATION_CREDITS_PER_PACK,
+    PRICE_MINOR,
+    PRODUCT_CODE,
+    UNLOCK_ENTITLEMENTS_PER_PACK,
+)
 from app.database import Database
+from app.domain import InvalidInputError, PaymentRequiredError
 from app.robokassa import (
     RobokassaError,
     RobokassaPaymentRequest,
@@ -98,6 +106,9 @@ class PaymentOrder:
     status: PaymentStatus
     expires_at: datetime
     payment_url: str | None = None
+    product_code: str = PRODUCT_CODE
+    generation_credit_quantity: int = GENERATION_CREDITS_PER_PACK
+    unlock_entitlement_quantity: int = UNLOCK_ENTITLEMENTS_PER_PACK
 
 
 @dataclass(frozen=True)
@@ -216,6 +227,9 @@ def _row_order(row: Mapping[str, object], payment_url: str | None = None) -> Pay
         status=PaymentStatus(str(row["status"])),
         expires_at=datetime.fromisoformat(str(row["expires_at"])),
         payment_url=payment_url,
+        product_code=str(row["product_code"]),
+        generation_credit_quantity=int(row["generation_credit_quantity"]),
+        unlock_entitlement_quantity=int(row["unlock_entitlement_quantity"]),
     )
 
 
@@ -234,6 +248,9 @@ class PaymentService:
         self.database = database
         self.provider = provider
         self.clock = clock
+        self.commerce = CommerceService(
+            database, clock, paid_retention_days=settings.paid_retention_days
+        )
 
     def _audit(
         self,
@@ -260,12 +277,22 @@ class PaymentService:
             ),
         )
 
-    def _record_product_event(self, connection, event_type: str, *, attempt_id=None, item_id=None) -> None:
+    def _record_product_event(
+        self, connection, event_type: str, *, attempt_id=None, item_id=None,
+        user_id=None, value_integer=None,
+    ) -> None:
+        subject_hash = (
+            hashlib.sha256(f"pixora-product-subject:{user_id}".encode()).hexdigest()
+            if user_id else None
+        )
         connection.execute(
             """INSERT INTO product_events(
-                   event_type,created_at,attempt_id,gallery_item_id
-               ) VALUES(?,?,?,?)""",
-            (event_type, _iso(self.clock()), attempt_id, item_id),
+                   event_type,created_at,attempt_id,gallery_item_id,subject_hash,value_integer
+               ) VALUES(?,?,?,?,?,?)""",
+            (
+                event_type, _iso(self.clock()), attempt_id, item_id,
+                subject_hash, value_integer,
+            ),
         )
 
     def _require_provider(self) -> PaymentProvider:
@@ -290,9 +317,13 @@ class PaymentService:
     def create_order(
         self, user_id: str, version_id: str, idempotency_key: str
     ) -> PaymentOrder:
+        """Create a package order; the selected version is context, not an unlock target."""
+
         provider = self._require_provider()
         if not idempotency_key:
             raise PaymentError("Payment idempotency key is required")
+        if self.settings.continuation_pack_price_rub * 100 != PRICE_MINOR:
+            raise PaymentError("Continuation pack price must be exactly 49 RUB")
         now = self.clock()
         expires_at = now + timedelta(minutes=self.settings.payment_order_ttl_minutes)
         with self.database.transaction() as connection:
@@ -308,107 +339,129 @@ class PaymentService:
             ).fetchone()
             if version is None or version["user_id"] != user_id or version["item_user_id"] != user_id:
                 raise PaymentError("Gallery version was not found")
-            if version["attempt_status"] != "succeeded" or not version["original_path"]:
-                raise PaymentError("Only a completed version can be purchased")
-            if not Path(version["original_path"]).is_file():
-                raise PaymentError("The original file is unavailable")
-            connection.execute(
-                """UPDATE payment_orders SET status=?,updated_at=?,failure_code='expired'
-                   WHERE version_id=? AND status=? AND expires_at<?""",
-                (
-                    PaymentStatus.EXPIRED.value, _iso(now), version_id,
-                    PaymentStatus.PENDING.value, _iso(now),
-                ),
-            )
-            existing = connection.execute(
-                """SELECT * FROM payment_orders
-                   WHERE version_id=? AND status IN ('pending','paid','delivery_pending','delivered')
-                   ORDER BY created_at DESC LIMIT 1""",
-                (version_id,),
+            if version["attempt_status"] != "succeeded":
+                raise PaymentError("Only a completed version can start a package purchase")
+            replay = connection.execute(
+                """SELECT o.* FROM payment_intents i
+                   JOIN payment_orders o ON o.intent_id=i.id
+                   WHERE i.idempotency_key=?""",
+                (idempotency_key,),
             ).fetchone()
-            if existing is not None:
-                order = _row_order(existing)
+            if replay is not None:
+                if replay["user_id"] != user_id or replay["product_code"] != PRODUCT_CODE:
+                    raise PaymentError("Payment idempotency key conflict")
+                order = _row_order(replay)
             else:
-                attempt_id = str(version["attempt_id"])
-                intent = connection.execute(
-                    "SELECT * FROM payment_intents WHERE attempt_id=?", (attempt_id,)
+                connection.execute(
+                    """UPDATE payment_orders SET status=?,updated_at=?,failure_code='expired'
+                       WHERE user_id=? AND product_code=? AND status=? AND expires_at<?""",
+                    (
+                        PaymentStatus.EXPIRED.value, _iso(now), user_id, PRODUCT_CODE,
+                        PaymentStatus.PENDING.value, _iso(now),
+                    ),
+                )
+                existing = connection.execute(
+                    """SELECT * FROM payment_orders
+                       WHERE user_id=? AND product_code=? AND status='pending' AND expires_at>=?
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (user_id, PRODUCT_CODE, _iso(now)),
                 ).fetchone()
-                intent_id = str(intent["id"]) if intent else uuid4().hex
-                if intent is None:
+                if existing is not None:
+                    order = _row_order(existing)
+                else:
+                    attempt_id = str(version["attempt_id"])
+                    intent_id = uuid4().hex
                     connection.execute(
                         """INSERT INTO payment_intents(
                                id,attempt_id,idempotency_key,amount_rub,status,created_at,
-                               version_id,user_id,provider,currency,updated_at,expires_at
-                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               version_id,user_id,provider,currency,updated_at,expires_at,product_code
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             intent_id, attempt_id, idempotency_key,
-                            self.settings.unlock_original_price_rub,
+                            self.settings.continuation_pack_price_rub,
                             PaymentStatus.PENDING.value, _iso(now), version_id, user_id,
                             provider.name, self.settings.payment_currency, _iso(now),
-                            _iso(expires_at),
+                            _iso(expires_at), PRODUCT_CODE,
                         ),
                     )
-                else:
                     connection.execute(
-                        """UPDATE payment_intents SET version_id=?,user_id=?,provider=?,currency=?,
-                               status='pending',updated_at=?,expires_at=? WHERE id=?""",
+                        "INSERT INTO payment_invoice_sequence(created_at) VALUES(?)", (_iso(now),)
+                    )
+                    invoice_id = int(
+                        connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    )
+                    order_id = uuid4().hex
+                    public_token = uuid4().hex
+                    connection.execute(
+                        """INSERT INTO payment_orders(
+                               id,public_token,intent_id,attempt_id,version_id,user_id,provider,
+                               merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
+                               created_at,updated_at,expires_at,product_code,
+                               generation_credit_quantity,unlock_entitlement_quantity
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
-                            version_id, user_id, provider.name, self.settings.payment_currency,
-                            _iso(now), _iso(expires_at), intent_id,
+                            order_id, public_token, intent_id, attempt_id, version_id, user_id,
+                            provider.name,
+                            hashlib.sha256(provider.merchant_login.encode("utf-8")).hexdigest(),
+                            invoice_id, PRICE_MINOR, self.settings.payment_currency,
+                            PaymentStatus.PENDING.value,
+                            self.settings.payment_receipt_item_name, _iso(now), _iso(now),
+                            _iso(expires_at), PRODUCT_CODE, GENERATION_CREDITS_PER_PACK,
+                            UNLOCK_ENTITLEMENTS_PER_PACK,
                         ),
                     )
-                connection.execute(
-                    "INSERT INTO payment_invoice_sequence(created_at) VALUES(?)", (_iso(now),)
-                )
-                invoice_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
-                order_id = uuid4().hex
-                public_token = uuid4().hex
-                connection.execute(
-                    """INSERT INTO payment_orders(
-                           id,public_token,intent_id,attempt_id,version_id,user_id,provider,
-                           merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
-                           created_at,updated_at,expires_at
-                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        order_id, public_token, intent_id, attempt_id, version_id, user_id,
-                        provider.name,
-                        hashlib.sha256(provider.merchant_login.encode("utf-8")).hexdigest(),
-                        invoice_id,
-                        self.settings.unlock_original_price_rub * 100,
-                        self.settings.payment_currency, PaymentStatus.PENDING.value,
-                        self.settings.payment_receipt_item_name, _iso(now), _iso(now),
-                        _iso(expires_at),
-                    ),
-                )
-                receipt_id = uuid4().hex
-                connection.execute(
-                    """INSERT INTO payment_receipts(
-                           id,order_id,receipt_type,item_name,quantity,amount_minor,tax,
-                           payment_method,payment_object,status,created_at,updated_at
-                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        receipt_id, order_id, "payment", self.settings.payment_receipt_item_name,
-                        "1", self.settings.unlock_original_price_rub * 100,
-                        self.settings.payment_receipt_tax, "full_payment", "service",
-                        "prepared", _iso(now), _iso(now),
-                    ),
-                )
-                self._audit(
-                    connection, order_id, "order_created", None,
-                    PaymentStatus.PENDING.value, None, "application",
-                )
-                self._record_product_event(
-                    connection, "payment_started", attempt_id=attempt_id,
-                    item_id=version["gallery_item_id"],
-                )
-                order = PaymentOrder(
-                    id=order_id, public_token=public_token, intent_id=intent_id,
-                    version_id=version_id, attempt_id=attempt_id, user_id=user_id,
-                    provider=provider.name, provider_invoice_id=invoice_id,
-                    amount_minor=self.settings.unlock_original_price_rub * 100,
-                    currency=self.settings.payment_currency,
-                    status=PaymentStatus.PENDING, expires_at=expires_at,
-                )
+                    receipt_id = uuid4().hex
+                    connection.execute(
+                        """INSERT INTO payment_receipts(
+                               id,order_id,receipt_type,item_name,quantity,amount_minor,tax,
+                               payment_method,payment_object,status,created_at,updated_at
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            receipt_id, order_id, "payment",
+                            self.settings.payment_receipt_item_name, "1", PRICE_MINOR,
+                            self.settings.payment_receipt_tax, "full_payment", "service",
+                            "prepared", _iso(now), _iso(now),
+                        ),
+                    )
+                    self._audit(
+                        connection, order_id, "continuation_pack_order_created", None,
+                        PaymentStatus.PENDING.value, None, "application",
+                    )
+                    self._record_product_event(
+                        connection, "continuation_pack_payment_started",
+                        attempt_id=attempt_id, item_id=version["gallery_item_id"],
+                        user_id=user_id,
+                    )
+                    previous_paid = int(
+                        connection.execute(
+                            """SELECT COUNT(*) FROM payment_orders
+                               WHERE user_id=? AND product_code=? AND status IN
+                               ('paid','delivery_pending','delivered','refund_pending','partially_refunded')""",
+                            (user_id, PRODUCT_CODE),
+                        ).fetchone()[0]
+                    )
+                    if previous_paid == 0:
+                        generations = int(
+                            connection.execute(
+                                """SELECT COUNT(*) FROM generation_attempts
+                                   WHERE user_id=? AND status='succeeded'""",
+                                (user_id,),
+                            ).fetchone()[0]
+                        )
+                        self._record_product_event(
+                            connection, "generations_before_first_purchase",
+                            user_id=user_id, value_integer=generations,
+                        )
+                    order = PaymentOrder(
+                        id=order_id, public_token=public_token, intent_id=intent_id,
+                        version_id=version_id, attempt_id=attempt_id, user_id=user_id,
+                        provider=provider.name, provider_invoice_id=invoice_id,
+                        amount_minor=PRICE_MINOR, currency=self.settings.payment_currency,
+                        status=PaymentStatus.PENDING, expires_at=expires_at,
+                        product_code=PRODUCT_CODE,
+                        generation_credit_quantity=GENERATION_CREDITS_PER_PACK,
+                        unlock_entitlement_quantity=UNLOCK_ENTITLEMENTS_PER_PACK,
+                    )
         request = RobokassaPaymentRequest(
             invoice_id=order.provider_invoice_id,
             amount_minor=order.amount_minor,
@@ -504,7 +557,10 @@ class PaymentService:
             amount_valid = bool(order and notification.amount_minor == order["amount_minor"])
             currency_valid = bool(order and order["currency"] == "RUB")
             status_valid = True  # Classic ResultURL is the provider's success notification.
-            timestamp_valid = bool(order and now <= datetime.fromisoformat(order["expires_at"]))
+            # A signed ResultURL for a known invoice may arrive after the local link
+            # TTL. The TTL stops link reuse; it must never turn a real payment into
+            # money received without product delivery.
+            timestamp_valid = order is not None
             token_valid = bool(order and notification.public_token == order["public_token"])
             replay_valid = True
             reason = next((name for name, valid in (
@@ -562,8 +618,10 @@ class PaymentService:
                         (order["version_id"],),
                     ).fetchone()
                     self._record_product_event(
-                        connection, "payment_failed", attempt_id=order["attempt_id"],
+                        connection, "continuation_pack_failed",
+                        attempt_id=order["attempt_id"],
                         item_id=item["gallery_item_id"] if item else None,
+                        user_id=order["user_id"],
                     )
                 return PaymentWebhook(False, False, http_status, response, order_id, reason)
             previous = str(order["status"])
@@ -580,42 +638,29 @@ class PaymentService:
                     (_iso(now), _iso(now), order["intent_id"]),
                 )
                 connection.execute(
-                    "UPDATE generation_attempts SET result_unlocked=1 WHERE id=?",
-                    (order["attempt_id"],),
-                )
-                connection.execute(
-                    """UPDATE gallery_versions SET unlock_status='unlocked',unlocked_at=?,
-                           payment_order_id=? WHERE id=?""",
-                    (_iso(now), order_id, order["version_id"]),
-                )
-                connection.execute(
-                    """UPDATE demo_sessions SET converted_to_paid=1,updated_at=?
-                       WHERE id=(SELECT session_id FROM generation_attempts WHERE id=?)""",
-                    (_iso(now), order["attempt_id"]),
-                )
-                connection.execute(
                     "UPDATE payment_receipts SET status='payment_confirmed',updated_at=? WHERE order_id=?",
                     (_iso(now), order_id),
                 )
                 item = connection.execute(
                     "SELECT gallery_item_id FROM gallery_versions WHERE id=?", (order["version_id"],)
                 ).fetchone()
-                paid_retention = _iso(
-                    now + timedelta(days=self.settings.paid_retention_days)
+                self.commerce.grant_continuation_pack(
+                    connection,
+                    user_id=order["user_id"],
+                    payment_order_id=order_id,
+                    payment_intent_id=order["intent_id"],
                 )
-                if item is not None:
-                    connection.execute(
-                        """UPDATE gallery_items SET retention_until=CASE
-                               WHEN retention_until<? THEN ? ELSE retention_until END,
-                               updated_at=? WHERE id=?""",
-                        (
-                            paid_retention, paid_retention, _iso(now),
-                            item["gallery_item_id"],
-                        ),
-                    )
                 self._record_product_event(
-                    connection, "payment_confirmed", attempt_id=order["attempt_id"],
+                    connection, "packs_per_payer", attempt_id=order["attempt_id"],
                     item_id=item["gallery_item_id"] if item else None,
+                    user_id=order["user_id"],
+                    value_integer=int(
+                        connection.execute(
+                            """SELECT COUNT(*) FROM continuation_pack_grants
+                               WHERE user_id=? AND status='active'""",
+                            (order["user_id"],),
+                        ).fetchone()[0]
+                    ),
                 )
             connection.execute(
                 """UPDATE payment_events SET status='processed',reason=?,processed_at=?
@@ -771,6 +816,12 @@ class PaymentService:
         available = int(order["amount_minor"]) - int(order["refunded_amount_minor"])
         if amount_minor > available:
             raise PaymentError("Refund exceeds the remaining paid amount")
+        if order["product_code"] == PRODUCT_CODE:
+            if amount_minor != int(order["amount_minor"]):
+                raise PaymentError("Continuation pack partial refund requires manual review")
+            eligibility = self.commerce.refund_eligibility(order_id)
+            if not eligibility.eligible:
+                raise PaymentError(eligibility.reason)
         return RefundPreview(
             order_id,
             amount_minor,
@@ -793,6 +844,7 @@ class PaymentService:
             safe_reason = RefundReason(reason.strip()).value
         except ValueError as exc:
             raise PaymentError("Refund reason is not supported") from exc
+        self.preview_refund(order_id, amount_minor, safe_reason, idempotency_key)
         now = self.clock()
         with self.database.transaction() as connection:
             existing = connection.execute(
@@ -850,7 +902,8 @@ class PaymentService:
             raise PaymentUnavailable("Refund execution is disabled")
         with self.database.read() as connection:
             row = connection.execute(
-                """SELECT r.*,o.provider_payment_id,o.attempt_id,p.item_name,p.tax
+                """SELECT r.*,o.provider_payment_id,o.attempt_id,o.product_code,
+                          p.item_name,p.tax
                    FROM refund_intents r JOIN payment_orders o ON o.id=r.order_id
                    JOIN payment_receipts p ON p.order_id=o.id AND p.receipt_type='payment'
                    WHERE r.id=?""",
@@ -860,6 +913,14 @@ class PaymentService:
             raise PaymentError("Refund is not in draft state")
         if not row["provider_payment_id"]:
             raise PaymentError("Refund requires the Robokassa operation key")
+        if row["product_code"] == PRODUCT_CODE:
+            with self.database.transaction() as connection:
+                try:
+                    self.commerce.hold_pack_for_refund(
+                        connection, str(row["order_id"])
+                    )
+                except (InvalidInputError, PaymentRequiredError) as exc:
+                    raise PaymentError(str(exc)) from exc
         try:
             result = provider.create_refund(RobokassaRefundRequest(
                 operation_key=str(row["provider_payment_id"]),
@@ -868,6 +929,11 @@ class PaymentService:
                 tax=str(row["tax"]),
             ))
         except RobokassaError as exc:
+            if row["product_code"] == PRODUCT_CODE:
+                with self.database.transaction() as connection:
+                    self.commerce.release_refund_hold(
+                        connection, str(row["order_id"])
+                    )
             raise PaymentError("Refund provider request failed") from exc
         now = self.clock()
         status = RefundStatus.PENDING if result.accepted else RefundStatus.FAILED
@@ -900,6 +966,10 @@ class PaymentService:
                     (_iso(now), row["order_id"]),
                 )
             else:
+                if row["product_code"] == PRODUCT_CODE:
+                    self.commerce.release_refund_hold(
+                        connection, str(row["order_id"])
+                    )
                 self._record_product_event(
                     connection, "refund_failed", attempt_id=row["attempt_id"]
                 )
@@ -970,7 +1040,19 @@ class PaymentService:
                        WHERE id=?""",
                     (refunded, order_status, _iso(now), row["order_id"]),
                 )
-                if order_status == PaymentStatus.REFUNDED.value:
+                if (
+                    order_status == PaymentStatus.REFUNDED.value
+                    and order["product_code"] == PRODUCT_CODE
+                ):
+                    try:
+                        self.commerce.rollback_unused_pack(
+                            connection, str(row["order_id"])
+                        )
+                    except (InvalidInputError, PaymentRequiredError) as exc:
+                        raise PaymentError(
+                            "Refund completed but package rollback requires operator intervention"
+                        ) from exc
+                elif order_status == PaymentStatus.REFUNDED.value:
                     connection.execute(
                         """UPDATE gallery_versions SET unlock_status='refunded'
                            WHERE id=? AND payment_order_id=?""",
@@ -1005,6 +1087,14 @@ class PaymentService:
                     item_id=item["gallery_item_id"] if item else None,
                 )
             elif mapped in {RefundStatus.FAILED, RefundStatus.CANCELLED}:
+                order_for_hold = connection.execute(
+                    "SELECT product_code FROM payment_orders WHERE id=?",
+                    (row["order_id"],),
+                ).fetchone()
+                if order_for_hold and order_for_hold["product_code"] == PRODUCT_CODE:
+                    self.commerce.release_refund_hold(
+                        connection, str(row["order_id"])
+                    )
                 connection.execute(
                     """UPDATE payment_orders SET status=CASE
                            WHEN delivered_at IS NULL THEN 'paid' ELSE 'delivered' END,

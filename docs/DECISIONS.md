@@ -1,5 +1,9 @@
 # Decisions
 
+## ADR-041 — Permanent v1 package is 2 generations plus 1 selected original
+
+Принято 20.07.2026 и заменяет ADR-035/036/038 в части состава продукта и момента выбора версии. Новый MAX user ID однократно получает две успешно доставленные генерации, глобальные для всех фотографий. Пакет `continuation_pack_2_plus_1` за 49 ₽ атомарно добавляет две generation credits и одно independent unlock entitlement. Покупка не привязывается к версии: пользователь позднее применяет entitlement к любой своей доступной GalleryVersion, созданной до или после покупки. Повторные пакеты складываются; подписки и auto-unlock нет. Reservation создаётся до provider и расходуется только после успешной доставки preview. Полностью неиспользованный пакет можно откатить атомарно; использованный пакет требует ручного возврата.
+
 ## ADR-040 — Moderation, sandbox, production payments and pilot are separate gates
 
 Принято 20.07.2026. Публичная витрина может быть отправлена на модерацию Robokassa, но это не разрешает ResultURL, sandbox, реальные деньги или pilot handlers. ResultURL должен быть POST-only за HTTPS reverse proxy; sandbox evidence, fiscal settings, controlled owner payment, original delivery, refund и reconciliation проверяются отдельно. Опасные admin-команды по умолчанию dry-run и требуют `--apply`. `public_launch_ready` остаётся false независимо от других gate.
@@ -8,7 +12,7 @@
 
 Принято 19.07.2026. Официальный сайт публикуется из `site/public` в отдельные immutable releases `/opt/pixora-site/releases/<sha>` с atomic symlink и rollback. Nginx не имеет доступа к `/opt/photo-bot`. GitHub deploy остаётся выключенным, пока DNS, trusted TLS, внешний smoke и неизменность backend не доказаны.
 
-## ADR-038 — Публичная цена равна 49 ₽ за одну выбранную версию
+## ADR-038 — Публичная цена равна 49 ₽ за одну выбранную версию (заменено ADR-041)
 
 Принято 19.07.2026. Покупка относится только к одной выбранной `GalleryVersion` без водяного знака, не является подпиской и не разблокирует соседние версии. Пока платёжный контур не прошёл sandbox, модерацию и отдельное разрешение владельца, сайт не показывает кнопку оплаты и честно сообщает о закрытом тестировании.
 

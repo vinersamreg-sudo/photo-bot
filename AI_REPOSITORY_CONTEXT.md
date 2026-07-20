@@ -14,8 +14,9 @@ Current v1 contract:
 - production defaults to observe-only and pilot limit 0;
 - never make real OpenAI image calls without explicit agreed maximum;
 - never expose user IDs, tokens, prompts, private paths or originals in reports/logs.
-- migration v8 contains a Robokassa sandbox/payment/refund architecture; all real-payment flags are forced off by deploy;
-- payment unlocks one exact GalleryVersion only; MAX delivery failure must preserve paid state and allow re-delivery;
+- migration v9 contains the permanent `continuation_pack_2_plus_1` ledgers; all real-payment flags are forced off by deploy;
+- a verified 49 ₽ ResultURL atomically grants two generation credits and one user-selected original entitlement; it never auto-selects a version;
+- the entitlement may unlock one owned available GalleryVersion created before or after purchase; MAX delivery failure preserves unlocked state and allows re-delivery;
 
 Latest production evidence (17.07.2026): owner-only E2E used exactly 5/5 approved
 real image requests; all succeeded and created GalleryVersions 11–15. Corrections,
@@ -32,9 +33,9 @@ Operations:
 - `python -m app.main backup-create --passphrase-stdin`
 - `python -m app.main backup-restore-test --backup NAME --passphrase-stdin`
 
-Migration v6 contains privacy-minimal product events; migration v8 contains commercial audit state. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment architecture is implemented but no provider sandbox/real-payment evidence or final legal approval exists.
+Migration v6 contains privacy-minimal product events; migration v8 preserves legacy payment audit state; migration v9 adds global generation-credit lots/reservations/ledger, package grants and original entitlements. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment architecture is implemented but no provider sandbox/real-payment evidence or final legal approval exists.
 
-Official website context (20.07.2026): `site/public` is the only site implementation. The verified MAX deep link is `https://max.ru/se13572368_bot`; the price is 49 ₽ for one selected watermark-free GalleryVersion; the public copy truthfully says closed testing and unavailable payment. Site deploy is separate and atomic under `/opt/pixora-site`; repository gate `PIXORA_SITE_DEPLOY_ENABLED=true` was opened only after the launch checks passed. Apex and `www` resolve to `116.203.24.102`; trusted HTTPS, canonical redirects, HSTS, browser smoke and Certbot renew dry-run pass. Owner-supplied seller data is published: INN `631937938795` and e-mail `viner-89@mail.ru`. This closes the engineering site gate for Robokassa moderation, but does not authorize sandbox, production payments or public bot handlers.
+Official website context (20.07.2026): `site/public` is the only site implementation. The verified MAX deep link is `https://max.ru/se13572368_bot`; the permanent product is «49 ₽ — ещё два варианта и один выбранный original без водяного знака»; the public copy truthfully says closed testing and unavailable payment. Site deploy is separate and atomic under `/opt/pixora-site`; repository gate `PIXORA_SITE_DEPLOY_ENABLED=true` was opened only after the launch checks passed. Apex and `www` resolve to `116.203.24.102`; trusted HTTPS, canonical redirects, HSTS, browser smoke and Certbot renew dry-run pass. Owner-supplied seller data is published: INN `631937938795` and e-mail `viner-89@mail.ru`. This closes the engineering site gate for Robokassa moderation, but does not authorize sandbox, production payments or public bot handlers.
 
 Commercial operations: `payment-status`, `payment-history`, `payment-show`, `payment-reconcile`, dry-run-first `payment-resend-original`, `payment-mark-delivery-retry`, `refund-create`, `refund-history/status`, `robokassa-health`, `pilot-status/report`, storage/backup/cleanup/cost and `health-report`. Read `docs/PAYMENTS.md`, `ROBOKASSA.md`, `PAYMENT_GO_LIVE_AUDIT.md`, `ROBOKASSA_CABINET_SETUP.md`, `ROBOKASSA_SANDBOX_E2E.md`, `PAYMENT_SUPPORT_RUNBOOK.md`, `PILOT_5_USERS_RUNBOOK.md` and `PILOT_UNIT_ECONOMICS.md`. ResultURL is POST-only. Never enable sandbox, production, public proxy or accept real money without the corresponding separate owner authorization.
 

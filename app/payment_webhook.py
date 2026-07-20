@@ -88,9 +88,10 @@ class PaymentWebhookServer:
                     try:
                         owner.on_paid(result.order_id)
                     except Exception as exc:
-                        # Payment acknowledgement remains authoritative. Delivery is retriable.
+                        # Payment acknowledgement and ledger grant remain authoritative.
+                        # The user notification is retriable and grants nothing itself.
                         LOGGER.error(
-                            "Paid original delivery deferred (error_type=%s)",
+                            "Paid package notification deferred (error_type=%s)",
                             type(exc).__name__,
                         )
                 response = result.response_text.encode("utf-8")

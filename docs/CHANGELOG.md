@@ -1,5 +1,19 @@
 # Changelog
 
+## 20.07.2026 — permanent 2+1 commercial model
+
+- fixed the permanent v1 product at 49 ₽ for two additional successful generations and one user-selected original;
+- migration v9 adds lifetime initial grants, global credit lots/reservations/ledger, package grants, original entitlements and admin audit;
+- credits reserve before provider, consume only after delivered preview and release on provider/policy/storage/MAX/cancel/restart failures;
+- verified ResultURL grants +2/+1 atomically and idempotently; browser redirects grant nothing and purchases never auto-unlock;
+- entitlement supports an owned version from before or after purchase, free redelivery,
+  missing-file protection, and reserve/consume/release delivery semantics with restart recovery;
+- added unused-package rollback/manual-review refund rules, masked dry-run-first commerce CLI and privacy-safe telemetry;
+- aligned MAX, site, offer, refund terms, receipt description, docs and the executed economics notebook;
+- real payments, OpenAI image requests and public/pilot handlers remained disabled.
+- final local gate passed: 254 backend tests and 49 site tests (303 total),
+  HTTP smoke, Lighthouse 100/100/100/100, compile, dependency and secret checks.
+
 ## 20.07.2026 — Robokassa and pilot readiness hardening
 
 - added moderation/cabinet/sandbox/support/pilot/economics runbooks and an executed economics notebook;
@@ -7,7 +21,7 @@
 - dangerous resend/retry/refund operations are dry-run by default and require `--apply`;
 - hardened ResultURL to POST-only, 64 KiB and strict UTF-8;
 - separated launch readiness into site, sandbox, production payment, owner E2E, pilot 5 and public gates;
-- final local gate passed: 232 backend tests and 49 site tests (281 total), compile, dependency, secret, asset, workflow-YAML and executed-notebook checks;
+- the readiness hardening gate at that point passed 232 backend tests and 49 site tests;
 - no payment, refund, pilot handler or OpenAI image request was enabled or executed.
 
 ## 20.07.2026 — Public DNS, TLS and Robokassa moderation site gate

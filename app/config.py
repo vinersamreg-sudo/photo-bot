@@ -37,7 +37,7 @@ class Settings:
     openai_context_delete_on_user_delete: bool = True
     openai_context_max_idle_days: int = 14
     openai_context_max_depth: int = 8
-    demo_max_successful_generations: int = 5
+    demo_max_successful_generations: int = 2
     demo_session_ttl_minutes: int = 60
     demo_watermark_text: str = "ОБРАЗЕЦ"
     demo_max_dimension: int = 1024
@@ -54,6 +54,7 @@ class Settings:
     max_prompt_length: int = 1500
     generation_timeout_seconds: int = 300
     unlock_original_price_rub: int = 49
+    continuation_pack_price_rub: int = 49
     payments_enabled: bool = False
     payment_provider: str = "disabled"
     payment_currency: str = "RUB"
@@ -78,7 +79,7 @@ class Settings:
     payment_success_url: str = ""
     payment_fail_url: str = ""
     payment_receipt_tax: str = "none"
-    payment_receipt_item_name: str = "Оригинал фотографии Pixora"
+    payment_receipt_item_name: str = "Пакет Pixora: 2 варианта и 1 оригинал"
     demo_retention_days: int = 30
     paid_retention_days: int = 180
     trash_retention_days: int = 30
@@ -173,6 +174,13 @@ def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
     value = int(raw) if raw else default
     if value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _continuation_pack_price(values: Mapping[str, str]) -> int:
+    value = _positive_int(values, "CONTINUATION_PACK_PRICE_RUB", 49)
+    if value != 49:
+        raise ValueError("CONTINUATION_PACK_PRICE_RUB is fixed at 49")
     return value
 
 
@@ -416,7 +424,7 @@ def load_settings(
         openai_context_max_depth=_positive_int(
             values, "OPENAI_CONTEXT_MAX_DEPTH", 8
         ),
-        demo_max_successful_generations=_positive_int(values, "DEMO_MAX_SUCCESSFUL_GENERATIONS", 5),
+        demo_max_successful_generations=_positive_int(values, "DEMO_MAX_SUCCESSFUL_GENERATIONS", 2),
         demo_session_ttl_minutes=_positive_int(values, "DEMO_SESSION_TTL_MINUTES", 60),
         demo_watermark_text=values.get("DEMO_WATERMARK_TEXT", "ОБРАЗЕЦ").strip() or "ОБРАЗЕЦ",
         demo_max_dimension=_positive_int(values, "DEMO_MAX_DIMENSION", 1024),
@@ -433,6 +441,7 @@ def load_settings(
         max_prompt_length=_positive_int(values, "MAX_PROMPT_LENGTH", 1500),
         generation_timeout_seconds=_positive_int(values, "GENERATION_TIMEOUT_SECONDS", 300),
         unlock_original_price_rub=_positive_int(values, "UNLOCK_ORIGINAL_PRICE_RUB", 49),
+        continuation_pack_price_rub=_continuation_pack_price(values),
         payments_enabled=payments_enabled,
         payment_provider=payment_provider,
         payment_currency=payment_currency,
@@ -469,8 +478,11 @@ def load_settings(
         payment_fail_url=fail_url,
         payment_receipt_tax=values.get("PAYMENT_RECEIPT_TAX", "none").strip() or "none",
         payment_receipt_item_name=(
-            values.get("PAYMENT_RECEIPT_ITEM_NAME", "Оригинал фотографии Pixora").strip()
-            or "Оригинал фотографии Pixora"
+            values.get(
+                "PAYMENT_RECEIPT_ITEM_NAME",
+                "Пакет Pixora: 2 варианта и 1 оригинал",
+            ).strip()
+            or "Пакет Pixora: 2 варианта и 1 оригинал"
         ),
         demo_retention_days=_positive_int(values, "DEMO_RETENTION_DAYS", 30),
         paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),

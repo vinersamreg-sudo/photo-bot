@@ -10,7 +10,7 @@
 
 ## Gate 0 — owner
 
-Owner image E2E gate выполнен. Deploy commercial candidate observe-only, применить migration v8, создать свежий encrypted backup + restore + off-site artifact, выполнить cleanup и проверить `health-report`. Затем отдельно настроить HTTPS ResultURL и пройти owner Robokassa sandbox без реальных денег.
+Owner image E2E gate выполнен. Deploy commercial candidate observe-only, применить migration v9, проверить credit/entitlement migration report, создать свежий encrypted backup + restore + off-site artifact, выполнить cleanup и проверить `health-report`. Затем отдельно настроить HTTPS ResultURL и пройти owner Robokassa sandbox без реальных денег.
 
 Exit: five consecutive successful full E2E, no stuck processing/original leak/data loss, errors understandable, backup and cleanup proven.
 

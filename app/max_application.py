@@ -22,6 +22,7 @@ from app.domain import (
     ImageTooLargeError,
     InvalidInputError,
     IntentAmbiguityError,
+    PaymentRequiredError,
     PolicyRejectedError,
     ProviderQuotaError,
     ProviderTimeoutError,
@@ -285,6 +286,7 @@ class MaxApplication:
                 "Бесплатные варианты закончились.",
                 (
                     Button("⬇ Получить оригинал", "result:unlock"),
+                    Button("Ещё 2 варианта + 1 оригинал — 49 ₽", "package:buy"),
                     Button("📂 Мои работы", "studio:works"),
                 ),
             )
@@ -476,6 +478,21 @@ class MaxApplication:
         if action == "menu":
             self._show_main(event.user_id, dialog, event.event_key)
             return
+        if action == "new:source":
+            self.store.transition(
+                event.user_id,
+                "waiting_for_source",
+                event_key=event.event_key,
+                force=True,
+                selected_scenario_id=None,
+                pending_prompt=None,
+                pending_action="initial",
+                session_id=None,
+                current_gallery_item_id=None,
+                current_version_id=None,
+            )
+            self.transport.send_message(event.user_id, "Пришлите фотографию 📷")
+            return
         if action == "settings":
             self._send_view(event.user_id, settings_view())
             return
@@ -505,6 +522,8 @@ class MaxApplication:
                 gallery_item_id=dialog.current_gallery_item_id,
             )
             self._unlock_or_deliver(event, dialog)
+        elif action == "package:buy":
+            self._buy_continuation_pack(event, dialog)
         elif action == "result:correct":
             self._track(
                 "correction_started",
@@ -673,12 +692,20 @@ class MaxApplication:
             session_id=session.session_id,
             gallery_item_id=item_id,
         )
-        if dialog.selected_scenario_id:
+        # An image sent from the exhausted result screen starts a fresh work.
+        # It must not inherit and auto-run the scenario that produced the last
+        # result; the user may upload a new source even with a zero balance.
+        selected_scenario_id = (
+            dialog.selected_scenario_id
+            if dialog.state != "demo_exhausted"
+            else None
+        )
+        if selected_scenario_id:
             updated = self.store.transition(
                 event.user_id, "confirmation", event_key=event.event_key, force=True,
                 user_id=session.user_id,
                 session_id=session.session_id,
-                selected_scenario_id=dialog.selected_scenario_id,
+                selected_scenario_id=selected_scenario_id,
                 current_gallery_item_id=item_id,
                 current_version_id=None,
                 pending_prompt="Применить выбранный сценарий",
@@ -692,7 +719,7 @@ class MaxApplication:
                 force=True,
                 user_id=session.user_id, session_id=session.session_id,
                 current_gallery_item_id=item_id, current_version_id=None,
-                pending_action="initial",
+                selected_scenario_id=None, pending_action="initial",
             )
             self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
 
@@ -721,12 +748,12 @@ class MaxApplication:
     def _remaining(self, session_id: str) -> int:
         with self.database.read() as connection:
             row = connection.execute(
-                "SELECT successful_generations,max_generations FROM demo_sessions WHERE id=?",
+                "SELECT user_id FROM demo_sessions WHERE id=?",
                 (session_id,),
             ).fetchone()
         if row is None:
             raise InvalidInputError("Demo session is missing")
-        return max(0, row["max_generations"] - row["successful_generations"])
+        return self.demo.commerce.balance(row["user_id"]).available
 
     def _receive_prompt(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         prompt = (event.text or "").strip()
@@ -912,41 +939,144 @@ class MaxApplication:
         self.transport.send_message(platform_user_id, "Добавлено в избранное ⭐")
 
     def _unlock_or_deliver(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
-        if not self.settings.payments_enabled:
-            self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
-            return
         if not dialog.user_id or not dialog.current_version_id:
             raise InvalidInputError("No gallery version selected")
+        try:
+            reservation = self.demo.commerce.reserve_unlock_delivery(
+                dialog.user_id, dialog.current_version_id
+            )
+        except PaymentRequiredError:
+            self._offer_continuation_pack(event.user_id)
+            return
+        try:
+            delivered = self.transport.send_image(
+                event.user_id,
+                reservation.original_path,
+                "Оригинал без водяного знака.",
+                (Button("📂 Мои работы", "studio:works"),),
+            )
+        except MaxTransportError:
+            delivered = False
+        if not delivered and not reservation.already_unlocked and reservation.entitlement_id:
+            self.demo.commerce.release_unlock_delivery(
+                dialog.user_id,
+                dialog.current_version_id,
+                reservation.entitlement_id,
+            )
+        if delivered and not reservation.already_unlocked and reservation.entitlement_id:
+            self.demo.commerce.commit_unlock_delivery(
+                dialog.user_id,
+                dialog.current_version_id,
+                reservation.entitlement_id,
+            )
+        now = self.demo.clock().isoformat()
+        with self.database.transaction() as connection:
+            if delivered:
+                connection.execute(
+                    """UPDATE gallery_versions SET delivery_count=delivery_count+1,
+                       last_delivered_at=? WHERE id=?""",
+                    (now, dialog.current_version_id),
+                )
         self._track(
-            "payment_clicked",
+            "original_delivered" if delivered else "original_delivery_failed",
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
+        if not delivered:
+            self.transport.send_message(
+                event.user_id,
+                "MAX не принял файл. Право на оригинал сохранено. "
+                "Нажмите «Получить оригинал» ещё раз.",
+            )
+
+    def _offer_continuation_pack(self, platform_user_id: str) -> None:
+        text = (
+            "Чтобы продолжить, нужен пакет:\n\n"
+            "Ещё 2 варианта + 1 оригинал — 49 ₽.\n\n"
+            "Оригинал можно выбрать позже в любой своей работе."
+        )
+        buttons = (
+            Button("Ещё 2 варианта + 1 оригинал — 49 ₽", "package:buy"),
+            Button("📂 Мои работы", "studio:works"),
+        )
+        self.transport.send_message(platform_user_id, text, buttons)
+
+    def _buy_continuation_pack(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        self._track(
+            "continuation_pack_clicked",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+        )
+        if not self.settings.payments_enabled:
+            self.transport.send_message(
+                event.user_id,
+                "Пакет «Ещё 2 варианта + 1 оригинал» стоит 49 ₽.\n\n"
+                "Оплата пока недоступна — идёт закрытое тестирование.",
+                (Button("📂 Мои работы", "studio:works"),),
+            )
+            return
+        if not dialog.user_id:
+            raise InvalidInputError("No Pixora account is selected")
+        version_id = dialog.current_version_id
+        if not version_id:
+            with self.database.read() as connection:
+                latest = connection.execute(
+                    """SELECT v.id FROM gallery_versions v
+                       JOIN gallery_items i ON i.id=v.gallery_item_id
+                       WHERE i.user_id=? AND i.deleted=0 AND v.status='succeeded'
+                       ORDER BY v.created_at DESC,v.version_number DESC LIMIT 1""",
+                    (dialog.user_id,),
+                ).fetchone()
+            version_id = latest["id"] if latest else None
+        if not version_id:
+            raise InvalidInputError("A completed Pixora version is required for checkout")
         try:
             order = self.payments.create_order(
-                dialog.user_id, dialog.current_version_id, f"max:{event.event_key}"
+                dialog.user_id, version_id, f"max:{event.event_key}"
             )
         except PaymentUnavailable:
             self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
             return
         except PaymentError:
             self.transport.send_message(
-                event.user_id,
-                "Не удалось подготовить оплату. Попробуйте позже.",
+                event.user_id, "Не удалось подготовить оплату. Попробуйте позже."
             )
-            return
-        if order.status in {
-            PaymentStatus.PAID,
-            PaymentStatus.DELIVERY_PENDING,
-            PaymentStatus.DELIVERED,
-        }:
-            self.deliver_paid_original(order.id)
             return
         self.transport.send_message(
             event.user_id,
-            f"Оригинал без водяного знака — {order.amount_minor // 100} ₽.",
-            (Button("Оплатить в Robokassa", order.payment_url or "result:unlock"),),
+            "Ещё 2 варианта + 1 оригинал — 49 ₽.\n\n"
+            "После оплаты вы сами выберете, какой оригинал получить.",
+            (Button("Оплатить 49 ₽ в Robokassa", order.payment_url or "package:buy"),),
         )
+
+    def notify_continuation_pack_paid(self, order_id: str) -> bool:
+        """Notify after the atomic ledger grant; no original is auto-unlocked."""
+
+        with self.database.read() as connection:
+            row = connection.execute(
+                """SELECT o.user_id,u.platform_user_id FROM payment_orders o
+                   JOIN users u ON u.id=o.user_id WHERE o.id=?""",
+                (order_id,),
+            ).fetchone()
+        if row is None:
+            raise PaymentError("Payment order was not found")
+        balance = self.demo.commerce.balance(row["user_id"])
+        entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
+        self.transport.send_message(
+            row["platform_user_id"],
+            "Оплата прошла ✅\n\n"
+            "Доступно:\n"
+            f"• ещё {balance.available} варианта;\n"
+            f"• {entitlements.available} оригинал без водяного знака.\n\n"
+            "Можно продолжить текущую работу или загрузить другую фотографию.",
+            (
+                Button("📂 Мои работы", "studio:works"),
+                Button("📷 Другая фотография", "new:source"),
+            ),
+        )
+        return True
 
     def deliver_paid_original(self, order_id: str) -> bool:
         """Deliver an already-paid exact version; payment stays paid on MAX failure."""

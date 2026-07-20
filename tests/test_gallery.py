@@ -121,6 +121,14 @@ class GalleryTests(TestCase):
         self.assertIn("Сделай лицо естественнее", versions[1].effective_prompt)
         self.assertEqual(versions[1].edit_plan.mode, "correction")
         self.clock.advance(2)
+        with self.database.transaction() as connection:
+            service.commerce.adjust_generation_credits(
+                connection,
+                user_id=session.user_id,
+                delta=1,
+                reason="third gallery lineage version",
+                idempotency_key="gallery-third-version-credit",
+            )
         service.generate(
             session.session_id,
             "Новый случайный вариант",

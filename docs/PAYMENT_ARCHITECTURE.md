@@ -2,29 +2,45 @@
 
 ## Components
 
-- `PaymentProvider` is the narrow provider boundary; `RobokassaProvider` owns signatures, payment links and refund HTTP.
-- `PaymentService` owns all durable state transitions and exact-version authorization.
-- `PaymentWebhookServer` is a small loopback-only ResultURL listener, intended to sit behind the existing HTTPS reverse proxy.
-- SQLite migration v8 adds orders, attempts, events, webhook checks, receipts, audit and refunds.
-- `MaxApplication` creates a payment link or re-delivers an already paid exact original.
-- `payment_admin` exposes masked read-only reconciliation, pilot reporting and dry-run-first recovery commands.
+- `PaymentProvider` / `RobokassaProvider`: signed link, ResultURL validation and provider refund boundary.
+- `PaymentService`: durable payment intent/order/event/receipt/audit transitions and atomic package grant.
+- `CommerceService`: initial grant, credit lots/reservations/ledger, package grants, unlock entitlements, rollback and admin audit.
+- `PaymentWebhookServer`: loopback-only POST ResultURL listener behind trusted HTTPS.
+- `MaxApplication`: package purchase UX and later user-selected original unlock.
+- `payment_admin` and commerce CLI: masked reconciliation and dry-run-first operations.
 
 ## Durable entities
 
-`PaymentIntent` captures purchase intent; `PaymentOrder` binds user, attempt and version to one invoice; `PaymentAttempt` records link/delivery activity; `PaymentEvent` and `PaymentWebhook` provide idempotent callback evidence; `PaymentReceipt` stores fiscal preparation state; `PaymentAudit` is append-only operational history. Refunds have separate intent and audit tables.
+Migration v8 retains PaymentIntent/Order/Attempt/Event/Webhook/Receipt/Audit and RefundIntent/Audit. Migration v9 adds:
 
-## Transaction boundary
+- `user_credit_accounts`: aggregate available/reserved/granted/consumed/refunded/adjusted totals and a lifetime `free_grant_applied` bit;
+- `generation_credit_lots`: initial, paid and admin sources, so refund affects only its package;
+- `generation_credit_reservations`: one attempt/idempotency key per reserved credit;
+- `credit_ledger`: append-only balance changes;
+- `continuation_pack_grants`: atomic +2/+1 grant and usage/refund status;
+- `unlock_entitlements`: available/reserved/consumed/cancelled/refunded and optional selected version;
+- `commerce_admin_audit`: hashed subject, reason, delta and idempotency.
 
-Callback processing inserts the event, validates it and changes order/intent/version state in one SQLite transaction. Only `gallery_versions.id = payment_orders.version_id` is unlocked. Delivery happens after commit. MAX failure moves the paid order to `delivery_pending`; it never rolls payment back and never requires another charge.
+## Generation transaction boundary
 
-## Concurrency
+Before provider, one active lot is atomically moved available → reserved. A second concurrent request cannot use it. After successful MAX preview delivery, the reservation and lot become consumed and GalleryVersion remains durable. Every failure path releases the same reservation. Startup recovery releases only reservations whose attempts are no longer pending/processing; it cannot mint new value.
 
-SQLite serializes writers. Unique invoice, public token, idempotency key and event digest constraints prevent double order creation and replay. A different valid callback for the same paid invoice is recognized from order state and audited without a second unlock. Delivery attempts are separate and may legitimately be repeated.
+## Payment transaction boundary
 
-## Operator recovery
+Callback processing validates invoice, amount, signature, merchant binding, token and local state. In one SQLite transaction it records the callback, confirms the payment and creates exactly one package grant, a two-credit lot and one entitlement. A repeated callback returns idempotent success. Browser redirect does not call this boundary.
 
-Operator retry does not rewrite the paid state. `payment-mark-delivery-retry --apply` appends an audit decision only for `delivery_pending`; `payment-resend-original --apply` reuses the exact paid version and records delivery outcome. Refund preview validates amount/reason/idempotency without creating a row or calling Robokassa.
+The package is not version-scoped. Later, original delivery checks user ownership,
+non-deleted state and private-original presence, reserves the oldest available
+entitlement, and sends the file through MAX. Only a successful MAX delivery commits
+the reservation and marks that exact version unlocked. A failed delivery releases
+the reservation, so the right remains available and no payment is required to retry.
+Startup recovery releases any delivery reservation left by an interrupted runtime;
+refund holds are distinct because they have no selected GalleryVersion and remain held.
 
-## Retention
+## Refund and concurrency
 
-Paid originals retain the paid retention policy. Payment audit rows intentionally survive gallery cleanup; they store opaque internal IDs and financial state, not images, prompt text, platform user IDs or secrets. Legal/accounting retention duration still requires specialist approval before sales.
+SQLite serializes writers. Unique invoice, event digest, package payment ID, reservation key, ledger key and entitlement source constraints prevent replay. An unused package rollback removes only its available lot and entitlement. Used/reserved value is manual review. A refund hold makes the specific package non-spendable while retaining audit evidence.
+
+## Retention and privacy
+
+Paid originals use paid retention. Financial/ledger audit survives gallery cleanup but stores opaque internal IDs, hashed subject and bounded enums—not images, prompt text, platform IDs, credentials or private paths. Statutory retention and fiscal wording still require specialist confirmation.

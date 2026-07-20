@@ -8,6 +8,10 @@ Pixora — AI-редактор фотографий в MAX. `photo-bot` — то
 
 Основной v1-путь: `/start → фотография → текст → обработка → демо с watermark → исправить / другой вариант / Мои работы`. До первой обработки нет меню сценариев и нет подтверждения запроса. «Идеи» — необязательный вторичный каталог.
 
+## Постоянная коммерческая модель Pixora v1
+
+Новый MAX user ID один раз получает две успешно доставленные генерации с watermark; баланс глобален для всех его фотографий. Ошибка provider/network/policy/storage/MAX, отмена или duplicate не расходуют его. Пакет `continuation_pack_2_plus_1` / Pixora Continuation Pack стоит 49 ₽ и атомарно добавляет две генерации и одно независимое право на original. Версию пользователь выбирает сам до или после расходования генераций; допускается любая существующая собственная версия до или после покупки. Пакеты складываются, подписки и автоматической разблокировки нет.
+
 ## Зафиксированный v1 scope
 
 - один production image provider: OpenAI `gpt-image-2` через `/v1/images/edits`;
@@ -29,7 +33,7 @@ Pixora — AI-редактор фотографий в MAX. `photo-bot` — то
 
 SQLite ежедневно копируется online-backup API, шифруется AES-256-CBC/PBKDF2, проходит реальное восстановление и копируется в GitHub Actions artifact. Cleanup запускается только после подтверждения off-site copy. Retention: backup 14 дней, demo 30, paid 180, trash 30.
 
-Migration v8 реализует коммерческий boundary: Robokassa sandbox, payment order/event/webhook/receipt/audit, exact-version unlock, delivery retry и refund intent. Реальные платежи не являются включённой функцией: deploy принудительно оставляет payments/webhook/refunds off, provider disabled, sandbox и production approval false. Первый настоящий платёж требует отдельного разрешения и выполнения `COMMERCIAL_LAUNCH.md`.
+Migration v8 сохраняет Robokassa order/event/webhook/receipt/audit/refund boundary. Migration v9 добавляет глобальный credit ledger, reservation до provider, consume только после доставки, release при любом сбое, атомарный package grant и отдельно расходуемые original entitlements. Реальные платежи не являются включённой функцией: deploy принудительно оставляет payments/webhook/refunds off, provider disabled, sandbox и production approval false. Первый настоящий платёж требует отдельного разрешения и выполнения `COMMERCIAL_LAUNCH.md`.
 
 ## Доступ и запуск
 

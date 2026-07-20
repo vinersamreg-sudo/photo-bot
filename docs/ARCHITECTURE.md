@@ -10,7 +10,7 @@ An event already linked to a processing attempt is completed rather than replaye
 
 ## User request path
 
-`MAX event → deduplication → dialog state → validated private source → deterministic EditPlan → English prompt → OpenAI gpt-image-2 images.edit → private original → watermark preview → MAX delivery → quota commit → GalleryVersion`.
+`MAX event → deduplication → dialog state → validated private source → credit reservation → deterministic EditPlan → English prompt → OpenAI gpt-image-2 images.edit → private original → watermark preview → MAX delivery → credit consumption → GalleryVersion`.
 
 Delivery precedes success/quota commit. Timeout/network/quota/policy/storage/delivery errors use separate domain types. Technical failures set `technical_refund=1`. The MAX processing status is edited to success or a precise safe error; no HTTP status, request ID or provider name is shown.
 
@@ -22,7 +22,7 @@ Migration v6 adds `product_events`. It stores event category, internal session/a
 
 Gallery retention covers demo, paid and trash. `maintenance-cleanup` first reports due gallery items, stale temp and unreferenced private files; `--execute` deletes only scoped, non-symlink candidates after their grace period.
 
-Migration v8 adds commercial state without changing the image provider path. `PaymentOrder` binds one exact GalleryVersion to a numeric provider invoice and opaque token. ResultURL validation and version unlock commit in one SQLite transaction. Original delivery is a separate retriable attempt, so MAX failure cannot erase a confirmed payment. Payment audit stores no image, prompt, platform ID or secret.
+Migration v8 adds legacy Robokassa order/event/refund state without changing the image provider path. Migration v9 adds `UserCreditAccount`, credit lots, reservations and ledger; `PackageGrant`; and `UnlockEntitlement`. A verified ResultURL atomically creates the whole +2/+1 grant. Entitlement remains user-owned until it is atomically linked to one selected owned GalleryVersion. Original delivery is retriable after unlock, so MAX failure cannot erase confirmed value. Commercial audit stores no image, prompt, platform ID or secret.
 
 The ResultURL listener is part of the same process only when payment and webhook flags are enabled; production config requires loopback binding behind a public HTTPS reverse proxy. Normal deploy keeps the listener off. This bounded MVP topology is suitable for owner sandbox/small pilot, not high-volume public traffic.
 

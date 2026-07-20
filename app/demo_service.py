@@ -13,6 +13,7 @@ from typing import Callable, Optional
 from uuid import uuid4
 
 from app.config import Settings
+from app.commerce import CommerceService
 from app.database import Database
 from app.domain import (
     AssetUnavailableError,
@@ -78,6 +79,9 @@ class DemoService:
         self.storage = storage
         self.watermarker = watermarker
         self.provider = provider
+        self.commerce = CommerceService(
+            database, clock, paid_retention_days=settings.paid_retention_days
+        )
         self.provider_context_service = provider_context_service
         self.gallery = GalleryService(
             database,
@@ -114,51 +118,43 @@ class DemoService:
                 )
             else:
                 user_id = user["id"]
-                existing = connection.execute(
-                    "SELECT * FROM demo_sessions WHERE user_id=?", (user_id,)
+            self.commerce.ensure_initial_grant(connection, user_id)
+            existing = connection.execute(
+                "SELECT * FROM demo_sessions WHERE user_id=?", (user_id,)
+            ).fetchone()
+            if existing:
+                stored_source, stored_digest, _stored_size = self.storage.create_session(
+                    user_id, existing["id"], source
+                )
+                current_item = connection.execute(
+                    "SELECT * FROM gallery_items WHERE id=?",
+                    (existing["gallery_item_id"],),
                 ).fetchone()
-                if existing:
-                    if existing["source_sha256"] != digest:
-                        connection.execute(
-                            "UPDATE users SET risk_score=risk_score+1 WHERE id=?", (user_id,)
-                        )
-                        connection.commit()
-                        raise SourceReplacementError(
-                            "Бесплатная демонстрация действует для одной исходной фотографии. "
-                            "Для обработки нового фото потребуется платная операция или новый пакет"
-                        )
-                    if (
-                        existing["status"] in {"completed", "deleted"}
-                        or existing["successful_generations"] >= existing["max_generations"]
-                    ):
-                        raise DemoLimitError("The free demo has already been completed")
-
-                    # A dialog may outlive the short active-session TTL. Re-uploading
-                    # the same source is an explicit user action, so safely refresh the
-                    # existing session without granting a new quota or allowing a
-                    # different source image.
-                    stored_source, stored_digest, _stored_size = self.storage.create_session(
-                        user_id, existing["id"], source
+                if (
+                    existing["source_sha256"] != digest
+                    or current_item is None
+                    or current_item["deleted"]
+                ):
+                    self.gallery.create_linked_demo_item(
+                        connection, user_id, existing["id"], stored_source, now
                     )
-                    expires = now + timedelta(minutes=self.settings.demo_session_ttl_minutes)
-                    connection.execute(
-                        """UPDATE demo_sessions
-                           SET source_file_path=?,source_sha256=?,status='active',expires_at=?,updated_at=?
-                           WHERE id=?""",
-                        (
-                            str(stored_source),
-                            stored_digest,
-                            iso(expires),
-                            iso(now),
-                            existing["id"],
-                        ),
-                    )
-                    refreshed = connection.execute(
-                        "SELECT * FROM demo_sessions WHERE id=?", (existing["id"],)
-                    ).fetchone()
-                    return self._session_info(refreshed)
-                if user["demo_used"]:
-                    raise DemoLimitError("The free demo has already been used")
+                expires = now + timedelta(minutes=self.settings.demo_session_ttl_minutes)
+                connection.execute(
+                    """UPDATE demo_sessions
+                       SET source_file_path=?,source_sha256=?,status='active',expires_at=?,
+                           completed_at=NULL,updated_at=? WHERE id=?""",
+                    (
+                        str(stored_source),
+                        stored_digest,
+                        iso(expires),
+                        iso(now),
+                        existing["id"],
+                    ),
+                )
+                refreshed = connection.execute(
+                    "SELECT * FROM demo_sessions WHERE id=?", (existing["id"],)
+                ).fetchone()
+                return self._session_info(refreshed)
 
             session_id = uuid4().hex
             stored_source, stored_digest, _stored_size = self.storage.create_session(
@@ -212,12 +208,12 @@ class DemoService:
             ).fetchone()
             if row is None:
                 return None
-            if (
-                row["status"] in {"completed", "deleted"}
-                or row["successful_generations"] >= row["max_generations"]
-            ):
-                raise DemoLimitError("The free demo has already been completed")
-            if row["status"] not in {"active", "expired"}:
+            if row["status"] == "deleted":
+                return None
+            item = connection.execute(
+                "SELECT deleted FROM gallery_items WHERE id=?", (row["gallery_item_id"],)
+            ).fetchone()
+            if item is None or item["deleted"]:
                 return None
             source_path = Path(row["source_file_path"])
             if not source_path.is_file():
@@ -226,7 +222,7 @@ class DemoService:
             expires = now + timedelta(minutes=self.settings.demo_session_ttl_minutes)
             connection.execute(
                 """UPDATE demo_sessions
-                   SET status='active',expires_at=?,updated_at=?
+                   SET status='active',expires_at=?,completed_at=NULL,updated_at=?
                    WHERE id=?""",
                 (iso(expires), iso(now), row["id"]),
             )
@@ -273,13 +269,13 @@ class DemoService:
             ).fetchone()
             if replay:
                 if replay["status"] == "succeeded":
-                    session = connection.execute(
-                        "SELECT * FROM demo_sessions WHERE id=?", (replay["session_id"],)
-                    ).fetchone()
+                    balance = self.commerce.ensure_initial_grant(
+                        connection, replay["user_id"]
+                    )
                     return DemoGenerationResult(
                         replay["id"],
                         Path(replay["demo_result_path"]),
-                        session["max_generations"] - session["successful_generations"],
+                        balance.available,
                         True,
                     )
                 raise ConcurrentGenerationError("The same event is already being or was processed")
@@ -295,8 +291,6 @@ class DemoService:
                     (iso(now), session_id),
                 )
                 raise DemoExpiredError("Demo session has expired")
-            if session["successful_generations"] >= session["max_generations"]:
-                raise DemoLimitError("Demo successful-generation limit is exhausted")
             parent = None
             parent_processing_plan: Optional[ProcessingPlan] = None
             if parent_version_id:
@@ -521,6 +515,16 @@ class DemoService:
                     processing_plan.to_json(),
                 ),
             )
+            reservation_id = self.commerce.reserve_generation(
+                connection,
+                user_id=session["user_id"],
+                attempt_id=attempt_id,
+                idempotency_key=idempotency_key,
+            )
+            connection.execute(
+                "UPDATE generation_attempts SET credit_reservation_id=? WHERE id=?",
+                (reservation_id, attempt_id),
+            )
             user_id = session["user_id"]
             gallery_item_id = session["gallery_item_id"]
 
@@ -633,16 +637,8 @@ class DemoService:
                    WHERE id=?""",
                 (iso(completed), session_id),
             )
-            session = connection.execute(
-                "SELECT successful_generations,max_generations FROM demo_sessions WHERE id=?",
-                (session_id,),
-            ).fetchone()
-            remaining = session["max_generations"] - session["successful_generations"]
-            if remaining == 0:
-                connection.execute(
-                    "UPDATE demo_sessions SET status='completed', completed_at=?, updated_at=? WHERE id=?",
-                    (iso(completed), iso(completed), session_id),
-                )
+            balance = self.commerce.consume_generation(connection, reservation_id)
+            remaining = balance.available
             if self.provider_context_service is not None:
                 self.provider_context_service.finalize(
                     connection,
@@ -729,11 +725,21 @@ class DemoService:
 
     def _fail_attempt(self, attempt_id: str, status: str, error_type: str, message: str, refund: bool) -> None:
         with self.database.transaction() as connection:
-            connection.execute(
+            updated = connection.execute(
                 """UPDATE generation_attempts SET status=?, completed_at=?, error_type=?,
                    error_message_safe=?, technical_refund=? WHERE id=? AND status='processing'""",
                 (status, iso(self.clock()), error_type, message[:300], int(refund), attempt_id),
-            )
+            ).rowcount
+            if updated:
+                reservation = connection.execute(
+                    """SELECT id FROM generation_credit_reservations
+                       WHERE attempt_id=? AND status='reserved'""",
+                    (attempt_id,),
+                ).fetchone()
+                if reservation:
+                    self.commerce.release_generation(
+                        connection, reservation["id"], error_type
+                    )
 
     def delete_session(self, session_id: str) -> None:
         with self.database.read() as connection:

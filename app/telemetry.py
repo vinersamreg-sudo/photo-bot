@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 from typing import Optional
 
 from app.database import Database
@@ -35,6 +36,22 @@ EVENT_TYPES = {
     "refund_confirmed",
     "refund_failed",
     "error",
+    "initial_free_pack_granted",
+    "generation_credit_reserved",
+    "generation_credit_consumed",
+    "generation_credit_released",
+    "continuation_pack_clicked",
+    "continuation_pack_payment_started",
+    "continuation_pack_paid",
+    "continuation_pack_failed",
+    "unlock_entitlement_granted",
+    "unlock_entitlement_consumed",
+    "unlock_entitlement_unused",
+    "repeat_pack_purchase",
+    "generations_before_first_purchase",
+    "packs_per_payer",
+    "unlock_version_age",
+    "balance_at_churn",
 }
 
 
@@ -55,6 +72,9 @@ class TelemetryRecorder:
         duration_ms: Optional[int] = None,
         estimated_cost: Optional[float] = None,
         parser_fallback: bool = False,
+        subject_user_id: Optional[str] = None,
+        value_integer: Optional[int] = None,
+        value_real: Optional[float] = None,
     ) -> None:
         if event_type not in EVENT_TYPES:
             raise ValueError("Unknown telemetry event type")
@@ -62,8 +82,9 @@ class TelemetryRecorder:
             connection.execute(
                 """INSERT INTO product_events(
                        event_type,created_at,session_id,attempt_id,gallery_item_id,
-                       error_type,duration_ms,estimated_cost,parser_fallback
-                   ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                       error_type,duration_ms,estimated_cost,parser_fallback,
+                       subject_hash,value_integer,value_real
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     event_type,
                     datetime.now(timezone.utc).isoformat(),
@@ -74,5 +95,13 @@ class TelemetryRecorder:
                     duration_ms,
                     estimated_cost,
                     int(parser_fallback),
+                    (
+                        hashlib.sha256(
+                            f"pixora-product-subject:{subject_user_id}".encode()
+                        ).hexdigest()
+                        if subject_user_id else None
+                    ),
+                    value_integer,
+                    value_real,
                 ),
             )

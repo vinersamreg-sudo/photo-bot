@@ -11,7 +11,7 @@ The official site engineering gate for Robokassa moderation passed on 20.07.2026
 1. Keep pilot limit 0 and enable handlers for owner only.
 2. Configure Robokassa test merchant and public HTTPS ResultURL.
 3. Create one 49 RUB sandbox order for one version.
-4. Confirm valid callback, exact-version unlock, original delivery and repeat delivery.
+4. Confirm valid callback atomically grants +2 generation credits and +1 entitlement, then separately select a version and verify original/redelivery.
 5. Replay callback and verify no double unlock/delivery.
 6. Simulate MAX delivery failure and verify `delivery_pending` recovery.
 7. Prepare a refund; exercise provider refund only when operation key and Password3 are confirmed.

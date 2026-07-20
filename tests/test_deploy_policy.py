@@ -60,15 +60,19 @@ class DeployPolicyTests(TestCase):
         self.assertIn("WHERE version=8", self.workflow)
         self.assertIn('"migration_v8": migration_v8', self.workflow)
         self.assertIn("assert migration_v8", self.workflow)
+        self.assertIn("WHERE version=9", self.workflow)
+        self.assertIn('"migration_v9": migration_v9', self.workflow)
+        self.assertIn("assert migration_v9", self.workflow)
+        self.assertIn('"credit_accounts": credit_accounts', self.workflow)
+        self.assertIn("assert credit_accounts == users", self.workflow)
+        self.assertIn("assert negative_credit_accounts == 0", self.workflow)
         self.assertIn('"stale_processing_orphans": stale_processing_orphans', self.workflow)
         self.assertIn("assert stale_processing_orphans == 0", self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
         health_position = self.workflow.rindex('"$ROOT"/scripts/healthcheck.sh')
         marker_position = self.workflow.rindex("data/deployed_commit.txt")
-        openai_position = self.workflow.rindex("python -m app.main openai-check")
         self.assertGreater(marker_position, health_position)
-        self.assertGreater(marker_position, openai_position)
 
     def test_runtime_audit_python_heredoc_terminates_at_remote_column(self) -> None:
         lines = self.workflow.splitlines()
@@ -99,7 +103,8 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env OPENAI_CONVERSATION_RETENTION_ENABLED false", self.workflow)
         self.assertIn("set_env APP_ENV production", self.workflow)
         self.assertIn("set_env BASE_DIR /opt/photo-bot", self.workflow)
-        self.assertIn("ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 5", self.workflow)
+        self.assertIn("set_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2", self.workflow)
+        self.assertIn("set_env CONTINUATION_PACK_PRICE_RUB 49", self.workflow)
         self.assertIn("ensure_env GLOBAL_MAX_CONCURRENT_GENERATIONS 2", self.workflow)
         self.assertIn("ensure_env DEMO_RETENTION_DAYS 30", self.workflow)
         self.assertIn("ensure_env PAID_RETENTION_DAYS 180", self.workflow)
@@ -111,12 +116,13 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env ROBOKASSA_MODE sandbox", self.workflow)
         self.assertIn("set_env ROBOKASSA_PRODUCTION_APPROVED false", self.workflow)
 
-    def test_transfers_openai_key_via_stdin_and_checks_authorization(self) -> None:
-        self.assertIn("Validate OpenAI credential from GitHub runner", self.workflow)
+    def test_transfers_openai_key_via_stdin_without_external_validation(self) -> None:
+        self.assertIn("Confirm OpenAI credential is configured without an API request", self.workflow)
         self.assertIn("Configure OpenAI credential", self.workflow)
         self.assertIn("secrets.OPENAI_API_KEY", self.workflow)
         self.assertIn('printf \'%s\' "$OPENAI_API_KEY" |', self.workflow)
-        self.assertIn("python -m app.main openai-check", self.workflow)
+        self.assertNotIn("python -m app.main openai-check", self.workflow)
+        self.assertIn("external API check intentionally skipped", self.workflow)
 
     def test_configures_max_without_exposing_the_token_as_an_argument(self) -> None:
         self.assertIn("Configure MAX credential", self.workflow)
@@ -167,9 +173,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn("options: ['0', '5']", self.workflow)
         self.assertIn("Grant bounded owner E2E attempts", self.workflow)
         self.assertIn("inputs.grant_owner_e2e_attempts == '5'", self.workflow)
-        self.assertIn("max_generations=successful_generations+5", self.workflow)
-        self.assertIn('row["successful_generations"] < row["max_generations"]', self.workflow)
-        self.assertIn("owner_e2e_attempts_granted=5", self.workflow)
+        self.assertIn("CommerceService(database).adjust_generation_credits", self.workflow)
+        self.assertIn("delta=5", self.workflow)
+        self.assertIn("owner_e2e_generation_credits_adjusted=5", self.workflow)
         self.assertNotIn("print(owner_id)", self.workflow)
 
     def test_deploy_uses_one_systemd_service_without_background_watchdogs(self) -> None:

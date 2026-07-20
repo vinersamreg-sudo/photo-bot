@@ -91,9 +91,10 @@ class PixoraSiteTests(unittest.TestCase):
         self.assertIn("Платежи отключены", self.html)
 
     # 05
-    def test_price_is_49_rubles_for_one_version(self) -> None:
+    def test_price_is_49_rubles_for_continuation_pack(self) -> None:
         self.assertIn("49 ₽", self.html)
-        self.assertIn("одной выбранной версии", self.html)
+        self.assertIn("Ещё 2 варианта + 1 оригинал", self.html)
+        self.assertIn("право выбрать 1 оригинал", self.html)
         forbidden_price = f"{3 * 50 - 1} ₽"
         self.assertNotIn(forbidden_price, self.html)
 
@@ -291,12 +292,13 @@ class PixoraSiteTests(unittest.TestCase):
         payment = self.pages["legal/payment-refund.html"]
         self.assertIn("Оплата сейчас отключена", payment)
         self.assertIn("49 ₽", payment)
-        self.assertIn("Автоматический возврат не обещается", payment)
+        self.assertIn("Полностью неиспользованный пакет", payment)
+        self.assertIn("рассматривается вручную", payment)
 
     # 37
     def test_terms_cover_abuse_and_rights(self) -> None:
         terms = self.pages["legal/terms.html"]
-        for text in ("Права на фотографии", "Запрещено", "Abuse", "watermark", "Удаление"):
+        for text in ("Права на фотографии", "Запрещено", "Abuse", "водяной знак", "Удаление"):
             self.assertIn(text, terms)
 
     # 38

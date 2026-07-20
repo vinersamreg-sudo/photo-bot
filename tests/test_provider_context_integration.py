@@ -131,6 +131,14 @@ class ProviderContextIntegrationTests(TestCase):
         self._generate("initial")
         first = self._versions()[0]
         self._generate("second", prompt="make only the jacket green", correction=True)
+        with self.database.transaction() as connection:
+            self.service.commerce.adjust_generation_credits(
+                connection,
+                user_id=self.session.user_id,
+                delta=1,
+                reason="three-version branch regression fixture",
+                idempotency_key="test-context-branch-credit",
+            )
         self._generate(
             "branch",
             prompt="make only the jacket blue",

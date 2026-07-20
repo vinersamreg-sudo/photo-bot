@@ -1,5 +1,17 @@
 # Current State
 
+## 20.07.2026 — permanent Pixora v1 product model implemented
+
+- migration v9 adds lifetime initial grant, global generation balances, credit lots/reservations/ledger, atomic continuation-pack grants and independent unlock entitlements;
+- initial balance is exactly two successfully delivered previews across one or many photographs; all technical/policy/storage/delivery failures release the reservation;
+- one verified `continuation_pack_2_plus_1` payment for 49 ₽ grants +2 generations and +1 user-selected original, without automatic unlock; repeat packs stack;
+- original entitlement can be consumed on an owned available version created before
+  or after purchase; missing original consumes nothing, MAX delivery uses a temporary
+  reservation, and failure/restart returns the entitlement without unlocking the version;
+- unused package rollback is automatic-safe; any used generation or original requires manual refund review;
+- backend, MAX, site, offer, receipt description, CLI, telemetry and economics now use the same model;
+- no real payment, OpenAI image request or public handler was enabled for this change.
+
 ## 20.07.2026 — payment/pilot readiness hardening
 
 - Robokassa moderation package is complete and public site/legal routes were rechecked; standard declared SVG favicon works, while the optional `/favicon.ico` fallback remains a non-blocking 404.
@@ -7,7 +19,7 @@
 - Added privacy-safe payment show/reconciliation, dry-run-first resend/retry/refund commands, Robokassa health and cohort-scoped pilot report.
 - `launch-status` now separates site, sandbox, production payment, owner E2E, pilot 5 and always-false public readiness.
 - Sandbox, refunds and real payment are still unverified external gates; all commercial flags, handlers and pilot remain off.
-- Unit economics at 49 ₽ are fragile: one estimated 10 ₽ generation requires about 26.5% conversion; three require about 77%; five are loss-making even at 100% under stated assumptions.
+- Unit economics at 49 ₽ remain fragile: at the working 10 ₽ generation estimate, 1.5 average free and 1.5 paid generations per package require about 60.9% conversion to break even; actual invoice data are still absent.
 
 Runbooks: `ROBOKASSA_SUBMISSION_PACKAGE.md`, `PAYMENT_GO_LIVE_AUDIT.md`, `ROBOKASSA_CABINET_SETUP.md`, `ROBOKASSA_SANDBOX_E2E.md`, `PAYMENT_SUPPORT_RUNBOOK.md`, `PILOT_5_USERS_RUNBOOK.md`, `PILOT_UNIT_ECONOMICS.md`.
 
@@ -19,7 +31,7 @@ Runbooks: `ROBOKASSA_SUBMISSION_PACKAGE.md`, `PAYMENT_GO_LIVE_AUDIT.md`, `ROBOKA
 - `photo-bot.service` и MAX polling здоровы; `MAX_POLL_OBSERVE_ONLY=true`;
 - owner allowlist настроен, pilot limit 0, пользовательские handlers выключены;
 - OpenAI `gpt-image-2` — единственный production image provider; router/composite/segmentation выключены;
-- SQLite migration v8, `PRAGMA quick_check=ok`, pending/processing attempts 0, processing dialogs 0, processing GalleryVersions 0 проверяются post-deploy audit;
+- SQLite migration v9, `PRAGMA quick_check=ok`, pending/processing attempts 0, processing dialogs 0, processing GalleryVersions 0 проверяются post-deploy audit;
 - owner dialog восстановлен в `main_menu`;
 - encrypted backup/restore/off-site lifecycle подтверждён; public launch readiness остаётся false.
 
@@ -43,13 +55,13 @@ Runbooks: `ROBOKASSA_SUBMISSION_PACKAGE.md`, `PAYMENT_GO_LIVE_AUDIT.md`, `ROBOKA
 - исправлен ложный orphan: session `metadata.json` теперь считается referenced и не удаляется maintenance;
 - после deploy повторный аудит подтвердил orphan private files 0.
 
-Commercial candidate расширяет regression suite до 232 backend unittest tests и 49 site tests без реальных OpenAI image calls и без платежей.
+Commercial candidate расширяет regression suite до 254 backend unittest tests и 49 site tests без реальных OpenAI image calls и без платежей.
 
-## Commercial MVP candidate
+## Historical migration v8 boundary (superseded by v9 product model above)
 
 - migration v8 добавляет PaymentOrder/Attempt/Event/Webhook/Receipt/Audit и RefundIntent/Audit;
 - Robokassa payment link и classic ResultURL доступны только за fail-closed flags;
-- paid callback разблокирует одну точную GalleryVersion; GalleryItem и соседние версии не разблокируются;
+- legacy paid callback был version-scoped; migration v9 теперь начисляет package +2/+1 без auto-unlock, а version выбирается позднее;
 - MAX delivery failure сохраняет подтверждённую оплату и допускает повторную выдачу original;
 - refund draft/CLI реализованы; provider execution требует Password3, operation key и отдельного enable;
 - result и Gallery UX сокращены, удаление стало recoverable trash/restore;
@@ -65,7 +77,7 @@ Provider sandbox/real-payment evidence, operation-key refund reconciliation, о�
 
 - `site/public` — единственная реализация сайта; второй frontend не создаётся;
 - MAX deep link проверен: `https://max.ru/se13572368_bot`;
-- публичная цена синхронизирована с backend: 49 ₽ за одну выбранную версию без watermark;
+- публичный продукт синхронизирован с backend: 49 ₽ за ещё два варианта и один выбранный original без watermark;
 - добавлены оферта, privacy, согласие, правила, оплата/возврат и контакты;
 - оплата и публичный запуск честно обозначены как недоступные в закрытом тестировании;
 - CI проверяет mobile/desktop Lighthouse, ссылки, SEO, legal consistency, отсутствие секретов и atomic deploy;
