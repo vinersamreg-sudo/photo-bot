@@ -13,15 +13,21 @@ Real payments are fail-closed. Every deploy sets `PAYMENTS_ENABLED=false`, `PAYM
 ## Operator commands
 
 ```bash
-python -m app.main payment-status
-python -m app.main payment-history --order-id <opaque-order-id>
-python -m app.main refund-prepare --order-id <opaque-order-id> --amount-rub 49.00 --reason customer_request --idempotency-key <opaque-key>
-python -m app.main refund-submit --refund-id <opaque-refund-id>
+python -m app.main payment-status --format human
+python -m app.main payment-history [--invoice <invoice>] --format human
+python -m app.main payment-show --invoice <invoice> --format human
+python -m app.main payment-reconcile [--invoice <invoice>] --format human
+python -m app.main payment-resend-original --invoice <invoice> [--apply]
+python -m app.main payment-mark-delivery-retry --invoice <invoice> [--apply]
+python -m app.main refund-create --invoice <invoice> --amount-rub 49 --reason customer_request --idempotency-key <ticket> [--apply|--dry-run]
+python -m app.main refund-history [--refund-id <opaque-refund-id>]
 python -m app.main refund-status --refund-id <opaque-refund-id> [--refresh]
-python -m app.main refund-history --refund-id <opaque-refund-id>
+python -m app.main robokassa-health --format human
 ```
 
-`refund-prepare` is local and safe. Reason is one controlled value: `customer_request`, `duplicate_payment`, `technical_failure`, `delivery_failure`, `quality_dispute` or `other`; free personal text is not stored. `refund-submit` and provider refresh remain blocked unless payment/refund flags and Password3 are explicitly enabled. Commands do not print credentials, MAX IDs, prompts or private paths.
+Dangerous commands are dry-run by default and require explicit `--apply`. Reason is one controlled value: `customer_request`, `duplicate_payment`, `technical_failure`, `delivery_failure`, `quality_dispute` or `other`; free personal text is not stored. Provider refund/refresh remain blocked unless payment/refund flags and Password3 are explicitly enabled. Operator output masks references and does not print credentials, signed URLs, MAX IDs, prompts or private paths. `--format json` is available for machine-readable read-only reports.
+
+Detailed procedures: [go-live audit](PAYMENT_GO_LIVE_AUDIT.md), [cabinet setup](ROBOKASSA_CABINET_SETUP.md), [sandbox E2E](ROBOKASSA_SANDBOX_E2E.md), [support](PAYMENT_SUPPORT_RUNBOOK.md).
 
 ## Evidence required before first real payment
 

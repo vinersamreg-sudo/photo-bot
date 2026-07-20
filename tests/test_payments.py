@@ -1,8 +1,10 @@
 import hashlib
+import sqlite3
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -10,6 +12,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.commercial_operations import cost_status, payment_status
+from app.payment_admin import payment_reconcile, payment_show
 from app.database import Database
 from app.demo_service import DemoService
 from app.image_provider import FakeImageProvider
@@ -278,6 +281,103 @@ class PaymentTests(TestCase):
             self.service.history(order.id).order.status, PaymentStatus.DELIVERED
         )
 
+    def test_refund_preview_and_delivery_retry_are_safe_and_audited(self) -> None:
+        order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
+        with self.assertRaisesRegex(PaymentError, "not paid"):
+            self.service.original_for_order(order.id, self.user_id)
+        self.service.process_webhook(
+            self.signed_callback(order), method="POST",
+            path="/payments/robokassa/result",
+        )
+        preview = self.service.preview_refund(
+            order.id, 4900, "customer_request", "refund-preview"
+        )
+        self.assertEqual(preview.available_minor, 4900)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM refund_intents").fetchone()[0], 0
+            )
+        self.service.mark_delivery(order.id, delivered=False, error_code="max_failed")
+        scheduled = self.service.schedule_delivery_retry(order.id)
+        self.assertEqual(scheduled.status, PaymentStatus.DELIVERY_PENDING)
+        with self.database.read() as connection:
+            audit = connection.execute(
+                "SELECT event_type FROM payment_audit WHERE order_id=? ORDER BY id DESC LIMIT 1",
+                (order.id,),
+            ).fetchone()[0]
+        self.assertEqual(audit, "delivery_retry_scheduled")
+        with self.assertRaisesRegex(PaymentError, "delivery-pending"):
+            self.service.schedule_delivery_retry(
+                self.service.create_order(self.user_id, self.versions[1]["id"], "event-2").id
+            )
+
+    def test_operator_payment_view_is_reconciled_and_privacy_safe(self) -> None:
+        order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
+        self.service.process_webhook(
+            self.signed_callback(order), method="POST",
+            path="/payments/robokassa/result",
+        )
+        report = payment_show(self.database, order.provider_invoice_id)
+        reconciliation = payment_reconcile(self.database, order.provider_invoice_id)
+        rendered = str(report)
+        self.assertTrue(report["consistent"])
+        self.assertEqual(reconciliation["mismatch_count"], 0)
+        self.assertNotIn(order.id, rendered)
+        self.assertNotIn(order.user_id, rendered)
+        self.assertNotIn(order.public_token, rendered)
+        self.assertNotIn(str(self.base), rendered)
+
+    def test_callback_database_failure_returns_no_ack_and_preserves_pending_state(self) -> None:
+        order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-db")
+        with patch.object(
+            self.database,
+            "transaction",
+            side_effect=sqlite3.OperationalError("simulated commit boundary failure"),
+        ):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.service.process_webhook(
+                    self.signed_callback(order),
+                    method="POST",
+                    path="/payments/robokassa/result",
+                )
+        with self.database.read() as connection:
+            status = connection.execute(
+                "SELECT status FROM payment_orders WHERE id=?", (order.id,)
+            ).fetchone()[0]
+            unlock = connection.execute(
+                "SELECT unlock_status FROM gallery_versions WHERE id=?",
+                (self.versions[0]["id"],),
+            ).fetchone()[0]
+        self.assertEqual(status, "pending")
+        self.assertEqual(unlock, "demo")
+
+    def test_paid_delivery_pending_state_survives_service_restart(self) -> None:
+        order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-restart")
+        self.service.process_webhook(
+            self.signed_callback(order), method="POST", path="/payments/robokassa/result"
+        )
+        self.service.mark_delivery(order.id, delivered=False, error_code="max_unavailable")
+        restarted = build_payment_service(self.settings, Database(self.settings.database_path))
+        self.addCleanup(restarted.provider.close)
+        history = restarted.history(order.id)
+        self.assertEqual(history.order.status, PaymentStatus.DELIVERY_PENDING)
+        original = restarted.original_for_order(order.id, self.user_id)
+        self.assertTrue(original.is_file())
+
+    def test_reconciliation_detects_receipt_mismatch(self) -> None:
+        order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-reconcile")
+        self.service.process_webhook(
+            self.signed_callback(order), method="POST", path="/payments/robokassa/result"
+        )
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE payment_receipts SET amount_minor=4800 WHERE order_id=?",
+                (order.id,),
+            )
+        report = payment_reconcile(self.database, order.provider_invoice_id)
+        self.assertEqual(report["mismatch_count"], 1)
+        self.assertFalse(report["orders"][0]["checks"]["receipt_consistent"])
+
     def test_refund_is_prepared_but_not_sent_while_execution_flag_is_off(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
         self.service.process_webhook(
@@ -370,6 +470,21 @@ class PaymentTests(TestCase):
         self.assertEqual(delivered, [order.id])
         missing = httpx.get(f"http://127.0.0.1:{server.bound_port}/wrong")
         self.assertEqual(missing.status_code, 404)
+
+    def test_http_webhook_rejects_wrong_method_oversize_and_malformed_encoding(self) -> None:
+        server = PaymentWebhookServer(
+            self.service, "127.0.0.1", 0, "/payments/robokassa/result"
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        url = f"http://127.0.0.1:{server.bound_port}/payments/robokassa/result"
+        wrong_method = httpx.get(url)
+        self.assertEqual(wrong_method.status_code, 405)
+        self.assertEqual(wrong_method.headers.get("allow"), "POST")
+        oversize = httpx.post(url, content=b"x" * (64 * 1024 + 1))
+        self.assertEqual(oversize.status_code, 413)
+        malformed = httpx.post(url, content=b"OutSum=49.00&bad=\xff")
+        self.assertEqual(malformed.status_code, 400)
 
 
 class RobokassaSignatureTests(TestCase):

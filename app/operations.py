@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from app.config import Settings
 from app.database import Database
 from app.openai_client import check_openai_connection, create_openai_client
@@ -75,6 +77,123 @@ def _connectivity(settings: Settings, online: bool) -> tuple[bool | None, bool |
     return max_ok, openai_ok
 
 
+def _site_moderation_status(online: bool) -> dict[str, Any]:
+    required = (
+        "/",
+        "/contacts.html",
+        "/legal/offer.html",
+        "/legal/privacy.html",
+        "/legal/personal-data.html",
+        "/legal/payment-refund.html",
+        "/legal/terms.html",
+        "/robots.txt",
+        "/sitemap.xml",
+        "/assets/favicon.svg",
+    )
+    if not online:
+        return {
+            "checked": False,
+            "required_routes_ok": None,
+            "price_49_consistent": None,
+            "legacy_price_149_absent": None,
+            "https_redirect_ok": None,
+            "www_redirect_ok": None,
+            "hsts_present": None,
+            "moderation_ready": False,
+        }
+    route_status: dict[str, int | None] = {}
+    bodies: list[str] = []
+    https_redirect_ok = False
+    www_redirect_ok = False
+    hsts_present = False
+    try:
+        with httpx.Client(timeout=10, follow_redirects=False) as client:
+            for path in required:
+                response = client.get(f"https://pixoraai.ru{path}")
+                route_status[path] = response.status_code
+                if response.status_code == 200 and response.headers.get(
+                    "content-type", ""
+                ).lower().startswith(("text/html", "text/plain", "application/xml")):
+                    bodies.append(response.text)
+                if path == "/":
+                    hsts_present = bool(response.headers.get("strict-transport-security"))
+            http_response = client.get("http://pixoraai.ru/")
+            https_redirect_ok = bool(
+                http_response.status_code in {301, 302, 307, 308}
+                and http_response.headers.get("location", "").startswith(
+                    "https://pixoraai.ru"
+                )
+            )
+            www_response = client.get("https://www.pixoraai.ru/")
+            www_redirect_ok = bool(
+                www_response.status_code in {301, 302, 307, 308}
+                and www_response.headers.get("location", "").startswith(
+                    "https://pixoraai.ru"
+                )
+            )
+    except (httpx.HTTPError, OSError):
+        pass
+    combined = "\n".join(bodies)
+    routes_ok = bool(route_status) and all(value == 200 for value in route_status.values())
+    price_49 = "49 ₽" in combined
+    price_149_absent = "149 ₽" not in combined
+    ready = bool(
+        routes_ok
+        and price_49
+        and price_149_absent
+        and https_redirect_ok
+        and www_redirect_ok
+        and hsts_present
+    )
+    return {
+        "checked": True,
+        "route_status": route_status,
+        "required_routes_ok": routes_ok,
+        "price_49_consistent": price_49,
+        "legacy_price_149_absent": price_149_absent,
+        "https_redirect_ok": https_redirect_ok,
+        "www_redirect_ok": www_redirect_ok,
+        "hsts_present": hsts_present,
+        "moderation_ready": ready,
+    }
+
+
+def _owner_e2e_status(settings: Settings, database: Database) -> dict[str, Any]:
+    if not settings.max_owner_user_ids:
+        return {"configured": False, "successful_attempts": 0, "ready": False}
+    placeholders = ",".join("?" for _ in settings.max_owner_user_ids)
+    with database.read() as connection:
+        owner_rows = connection.execute(
+            f"SELECT id FROM users WHERE platform='max' AND platform_user_id IN ({placeholders})",
+            settings.max_owner_user_ids,
+        ).fetchall()
+        owner_ids = [str(row[0]) for row in owner_rows]
+        succeeded = 0
+        gallery_versions = 0
+        if owner_ids:
+            owner_placeholders = ",".join("?" for _ in owner_ids)
+            succeeded = int(connection.execute(
+                f"SELECT COUNT(*) FROM generation_attempts WHERE user_id IN ({owner_placeholders}) AND status='succeeded'",
+                owner_ids,
+            ).fetchone()[0])
+            gallery_versions = int(connection.execute(
+                f"""SELECT COUNT(*) FROM gallery_versions v
+                    JOIN generation_attempts a ON a.id=v.attempt_id
+                    WHERE a.user_id IN ({owner_placeholders}) AND v.status='succeeded'
+                      AND v.original_path IS NOT NULL AND v.preview_watermarked_path IS NOT NULL""",
+                owner_ids,
+            ).fetchone()[0])
+    ready = len(owner_rows) == 1 and succeeded >= 5 and gallery_versions >= 5
+    return {
+        "configured": True,
+        "owner_record_count": len(owner_rows),
+        "successful_attempts": succeeded,
+        "complete_gallery_versions": gallery_versions,
+        "minimum_required": 5,
+        "ready": ready,
+    }
+
+
 def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[str, Any]:
     database = Database(settings.database_path)
     with database.read() as connection:
@@ -133,6 +252,8 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
     cleanup = _read_json(settings.data_dir / "maintenance_last.json")
     usage = shutil.disk_usage(settings.base_dir)
     max_connected, openai_connected = _connectivity(settings, online)
+    site = _site_moderation_status(online)
+    owner_e2e = _owner_e2e_status(settings, database)
     service_active = _systemd_active() if settings.app_env == "production" else True
     backup_age = _age_hours(latest.get("created_at")) if latest else None
     poll_age = _age_hours(poll[0]) if poll else None
@@ -171,6 +292,43 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         and cleanup_age <= settings.backup_max_age_hours
         and cleanup.get("remaining_orphan_count") == 0
     )
+    sandbox_evidence = _read_json(settings.data_dir / "robokassa_sandbox_evidence.json")
+    sandbox_e2e_verified = bool(
+        sandbox_evidence
+        and sandbox_evidence.get("verified") is True
+        and sandbox_evidence.get("mode") == "sandbox"
+    )
+    credentials_present = bool(
+        settings.robokassa_merchant_login
+        and settings.robokassa_password1
+        and settings.robokassa_password2
+    )
+    sandbox_ready = bool(
+        operational_ready
+        and credentials_present
+        and settings.payment_provider == "robokassa"
+        and settings.robokassa_mode == "sandbox"
+        and settings.payment_result_url.startswith("https://")
+        and settings.payment_success_url.startswith("https://")
+        and settings.payment_fail_url.startswith("https://")
+    )
+    production_payment_ready = bool(
+        operational_ready
+        and sandbox_e2e_verified
+        and credentials_present
+        and settings.payment_provider == "robokassa"
+        and settings.robokassa_mode == "production"
+        and settings.robokassa_production_approved
+        and settings.payment_result_url.startswith("https://")
+        and settings.payment_refunds_enabled
+    )
+    pilot_5_ready = bool(
+        operational_ready
+        and owner_e2e["ready"]
+        and len(settings.max_pilot_user_ids) >= 5
+        and settings.max_poll_observe_only
+        and settings.pilot_user_limit == 0
+    )
     return {
         "runtime": {
             "environment": settings.app_env,
@@ -194,7 +352,11 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
             "webhook_enabled": settings.payment_webhook_enabled,
             "refund_execution_enabled": settings.payment_refunds_enabled,
             "production_approved": settings.robokassa_production_approved,
+            "credentials_present": credentials_present,
+            "sandbox_e2e_verified": sandbox_e2e_verified,
         },
+        "site": site,
+        "owner_e2e": owner_e2e,
         "database": {"quick_check": quick_check, "migration": int(migration)},
         "storage": {"free_mb": usage.free // (1024 * 1024), "minimum_free_mb": settings.disk_min_free_mb},
         "backup": {
@@ -241,6 +403,11 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         "readiness": {
             "runtime_ready": runtime_ready,
             "operational_ready": operational_ready,
+            "site_moderation_ready": bool(site["moderation_ready"]),
+            "robokassa_sandbox_ready": sandbox_ready,
+            "robokassa_production_ready": production_payment_ready,
+            "owner_e2e_ready": bool(owner_e2e["ready"]),
+            "pilot_5_ready": pilot_5_ready,
             "public_launch_ready": False,
             "mode": "closed_pilot",
         },

@@ -4,7 +4,7 @@
 
 - all commercial flags default off and deploy forcibly restores the safe state;
 - production activation requires a second explicit approval flag;
-- ResultURL listener binds loopback in production and accepts only its configured path;
+- ResultURL listener binds loopback in production, accepts only POST on its configured path and returns 405 for GET;
 - request bodies are capped at 64 KiB;
 - signatures use constant-time comparison;
 - invoice, exact amount, local provider/merchant, RUB, expiry and opaque token are checked;
@@ -14,6 +14,8 @@
 - unlock is exact-version and committed before delivery;
 - failed delivery preserves paid state and supports re-delivery;
 - refund execution has an independent disabled flag and requires Password3 plus operation key.
+- operator views mask invoice/order/version references and never expose signed URLs, platform IDs or file paths;
+- resend/retry/refund mutation is dry-run by default and requires explicit `--apply`.
 
 ## Required infrastructure controls before activation
 

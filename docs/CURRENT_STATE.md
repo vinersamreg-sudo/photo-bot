@@ -1,5 +1,16 @@
 # Current State
 
+## 20.07.2026 — payment/pilot readiness hardening
+
+- Robokassa moderation package is complete and public site/legal routes were rechecked; standard declared SVG favicon works, while the optional `/favicon.ico` fallback remains a non-blocking 404.
+- ResultURL is POST-only with 64 KiB and strict UTF-8 limits; public reverse proxy remains intentionally inactive.
+- Added privacy-safe payment show/reconciliation, dry-run-first resend/retry/refund commands, Robokassa health and cohort-scoped pilot report.
+- `launch-status` now separates site, sandbox, production payment, owner E2E, pilot 5 and always-false public readiness.
+- Sandbox, refunds and real payment are still unverified external gates; all commercial flags, handlers and pilot remain off.
+- Unit economics at 49 ₽ are fragile: one estimated 10 ₽ generation requires about 26.5% conversion; three require about 77%; five are loss-making even at 100% under stated assumptions.
+
+Runbooks: `ROBOKASSA_SUBMISSION_PACKAGE.md`, `PAYMENT_GO_LIVE_AUDIT.md`, `ROBOKASSA_CABINET_SETUP.md`, `ROBOKASSA_SANDBOX_E2E.md`, `PAYMENT_SUPPORT_RUNBOOK.md`, `PILOT_5_USERS_RUNBOOK.md`, `PILOT_UNIT_ECONOMICS.md`.
+
 Актуально на 19.07.2026 для commercial MVP candidate. Production deployment обязан оставлять AI experiments и реальные платежи выключенными.
 
 ## Подтверждено в production
@@ -32,7 +43,7 @@
 - исправлен ложный orphan: session `metadata.json` теперь считается referenced и не удаляется maintenance;
 - после deploy повторный аудит подтвердил orphan private files 0.
 
-Commercial candidate расширяет regression suite до 230 pytest tests и 26 subtests без реальных OpenAI image calls и без платежей.
+Commercial candidate расширяет regression suite до 232 backend unittest tests и 49 site tests без реальных OpenAI image calls и без платежей.
 
 ## Commercial MVP candidate
 

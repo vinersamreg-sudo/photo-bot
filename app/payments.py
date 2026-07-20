@@ -179,6 +179,16 @@ class RefundHistory:
     audit: tuple[RefundAudit, ...]
 
 
+@dataclass(frozen=True)
+class RefundPreview:
+    order_id: str
+    amount_minor: int
+    currency: str
+    reason: str
+    available_minor: int
+    idempotent_existing: bool
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -262,6 +272,20 @@ class PaymentService:
         if not self.settings.payments_enabled or self.provider is None:
             raise PaymentUnavailable("Payments are disabled")
         return self.provider
+
+    def order_by_invoice(self, provider_invoice_id: int) -> PaymentOrder:
+        """Resolve an operator-supplied invoice without exposing signed URLs."""
+
+        if provider_invoice_id <= 0:
+            raise PaymentError("Invoice must be a positive integer")
+        with self.database.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM payment_orders WHERE provider_invoice_id=?",
+                (provider_invoice_id,),
+            ).fetchone()
+        if row is None:
+            raise PaymentError("Payment order was not found")
+        return _row_order(row)
 
     def create_order(
         self, user_id: str, version_id: str, idempotency_key: str
@@ -670,6 +694,91 @@ class PaymentService:
                 connection, "original_delivered" if delivered else "original_delivery_failed",
                 attempt_id=order["attempt_id"], item_id=item["gallery_item_id"] if item else None,
             )
+
+    def schedule_delivery_retry(self, order_id: str) -> PaymentOrder:
+        """Audit an operator decision to retry an already-paid failed delivery."""
+
+        with self.database.transaction() as connection:
+            order = connection.execute(
+                "SELECT * FROM payment_orders WHERE id=?", (order_id,)
+            ).fetchone()
+            if order is None:
+                raise PaymentError("Payment order was not found")
+            if order["status"] != PaymentStatus.DELIVERY_PENDING.value:
+                raise PaymentError("Only a delivery-pending order can be scheduled for retry")
+            self._audit(
+                connection,
+                order_id,
+                "delivery_retry_scheduled",
+                PaymentStatus.DELIVERY_PENDING.value,
+                PaymentStatus.DELIVERY_PENDING.value,
+                "operator_requested",
+                "operator",
+            )
+        return _row_order(order)
+
+    def preview_refund(
+        self,
+        order_id: str,
+        amount_minor: int,
+        reason: str,
+        idempotency_key: str,
+    ) -> RefundPreview:
+        """Validate a refund request without creating or changing any records."""
+
+        if amount_minor <= 0 or not reason.strip() or not idempotency_key:
+            raise PaymentError("Refund amount, reason and idempotency key are required")
+        try:
+            safe_reason = RefundReason(reason.strip()).value
+        except ValueError as exc:
+            raise PaymentError("Refund reason is not supported") from exc
+        with self.database.read() as connection:
+            existing = connection.execute(
+                "SELECT * FROM refund_intents WHERE idempotency_key=?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    str(existing["order_id"]) != order_id
+                    or int(existing["amount_minor"]) != amount_minor
+                    or str(existing["reason"]) != safe_reason
+                ):
+                    raise PaymentError("Refund idempotency key conflict")
+                order = connection.execute(
+                    "SELECT * FROM payment_orders WHERE id=?", (order_id,)
+                ).fetchone()
+                if order is None:
+                    raise PaymentError("Payment order was not found")
+                available = int(order["amount_minor"]) - int(order["refunded_amount_minor"])
+                return RefundPreview(
+                    order_id,
+                    amount_minor,
+                    str(order["currency"]),
+                    safe_reason,
+                    available,
+                    True,
+                )
+            order = connection.execute(
+                "SELECT * FROM payment_orders WHERE id=?", (order_id,)
+            ).fetchone()
+        if order is None or order["status"] not in {
+            PaymentStatus.PAID.value,
+            PaymentStatus.DELIVERY_PENDING.value,
+            PaymentStatus.DELIVERED.value,
+            PaymentStatus.PARTIALLY_REFUNDED.value,
+        }:
+            raise PaymentError("Only a paid order can be refunded")
+        available = int(order["amount_minor"]) - int(order["refunded_amount_minor"])
+        if amount_minor > available:
+            raise PaymentError("Refund exceeds the remaining paid amount")
+        return RefundPreview(
+            order_id,
+            amount_minor,
+            str(order["currency"]),
+            safe_reason,
+            available,
+            False,
+        )
 
     def prepare_refund(
         self,

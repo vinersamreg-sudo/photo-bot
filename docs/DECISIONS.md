@@ -1,5 +1,9 @@
 # Decisions
 
+## ADR-040 — Moderation, sandbox, production payments and pilot are separate gates
+
+Принято 20.07.2026. Публичная витрина может быть отправлена на модерацию Robokassa, но это не разрешает ResultURL, sandbox, реальные деньги или pilot handlers. ResultURL должен быть POST-only за HTTPS reverse proxy; sandbox evidence, fiscal settings, controlled owner payment, original delivery, refund и reconciliation проверяются отдельно. Опасные admin-команды по умолчанию dry-run и требуют `--apply`. `public_launch_ready` остаётся false независимо от других gate.
+
 ## ADR-039 — Site deploy изолирован и открывается только после HTTPS gate
 
 Принято 19.07.2026. Официальный сайт публикуется из `site/public` в отдельные immutable releases `/opt/pixora-site/releases/<sha>` с atomic symlink и rollback. Nginx не имеет доступа к `/opt/photo-bot`. GitHub deploy остаётся выключенным, пока DNS, trusted TLS, внешний smoke и неизменность backend не доказаны.

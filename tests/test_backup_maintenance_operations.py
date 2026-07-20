@@ -127,13 +127,18 @@ class BackupMaintenanceOperationsTests(TestCase):
             )
             report = collect_launch_status(settings, online=False)
             self.assertTrue(report["readiness"]["operational_ready"])
+            self.assertFalse(report["readiness"]["site_moderation_ready"])
+            self.assertFalse(report["readiness"]["robokassa_sandbox_ready"])
+            self.assertFalse(report["readiness"]["robokassa_production_ready"])
+            self.assertFalse(report["readiness"]["owner_e2e_ready"])
+            self.assertFalse(report["readiness"]["pilot_5_ready"])
             self.assertFalse(report["readiness"]["public_launch_ready"])
             serialized = json.dumps(report)
             for secret in ("openai-secret", "max-secret", "owner-private"):
                 self.assertNotIn(secret, serialized)
             for section in (
                 "runtime", "max", "provider", "database", "storage", "backup",
-                "cleanup", "processing", "today", "readiness",
+                "cleanup", "processing", "today", "site", "owner_e2e", "readiness",
             ):
                 self.assertIn(section, report)
 

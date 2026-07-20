@@ -46,6 +46,13 @@ from app.commercial_operations import (
     pilot_status,
     storage_status,
 )
+from app.payment_admin import (
+    mask_reference,
+    payment_reconcile,
+    payment_show,
+    pilot_report,
+    robokassa_health,
+)
 from app.payments import (
     PaymentError,
     PaymentUnavailable,
@@ -56,6 +63,38 @@ from app.payments import (
 
 LOGGER = logging.getLogger(__name__)
 MINIMUM_PYTHON = (3, 12, 0)
+
+
+def _human_lines(value: object, *, indent: int = 0) -> list[str]:
+    """Render compact operator output without losing explicit field names."""
+
+    prefix = "  " * indent
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for key, nested in value.items():
+            if isinstance(nested, (dict, list)):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(_human_lines(nested, indent=indent + 1))
+            else:
+                lines.append(f"{prefix}{key}: {nested}")
+        return lines
+    if isinstance(value, list):
+        lines = []
+        for nested in value:
+            if isinstance(nested, (dict, list)):
+                lines.append(f"{prefix}-")
+                lines.extend(_human_lines(nested, indent=indent + 1))
+            else:
+                lines.append(f"{prefix}- {nested}")
+        return lines
+    return [f"{prefix}{value}"]
+
+
+def _print_operator(value: object, output_format: str = "json") -> None:
+    if output_format == "human":
+        print("\n".join(_human_lines(value)))
+        return
+    print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 class SecretRedactionFilter(logging.Filter):
@@ -507,44 +546,85 @@ def run_ai_inspect(settings: Settings, attempt_id: str) -> int:
     return 0
 
 
-def run_status_report(settings: Settings, command: str, *, online: bool = False) -> int:
+def run_status_report(
+    settings: Settings,
+    command: str,
+    *,
+    online: bool = False,
+    output_format: str = "json",
+) -> int:
     database = Database(settings.database_path)
     collectors = {
         "pilot-status": lambda: pilot_status(settings, database),
+        "pilot-report": lambda: pilot_report(settings, database),
         "payment-status": lambda: payment_status(settings, database),
+        "robokassa-health": lambda: robokassa_health(settings, database),
         "storage-status": lambda: storage_status(settings, database),
         "backup-status": lambda: backup_status(settings),
         "cleanup-status": lambda: cleanup_status(settings),
         "cost-status": lambda: cost_status(settings, database),
         "health-report": lambda: health_report(settings, online=online),
     }
-    print(json.dumps(collectors[command](), ensure_ascii=False, indent=2, sort_keys=True))
+    _print_operator(collectors[command](), output_format)
     return 0
+
+
+def _refund_values(args: argparse.Namespace) -> tuple[int, str]:
+    amount = Decimal(args.amount_rub).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if amount <= 0:
+        raise ValueError("Refund amount must be positive")
+    return int(amount * 100), str(args.reason)
 
 
 def run_refund_prepare(settings: Settings, args: argparse.Namespace) -> int:
     try:
-        amount = Decimal(args.amount_rub).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        if amount <= 0:
-            raise ValueError("Refund amount must be positive")
-        amount_minor = int(amount * 100)
-        refund = build_payment_service(settings, Database(settings.database_path)).prepare_refund(
-            args.order_id, amount_minor, args.reason, args.idempotency_key
+        amount_minor, reason = _refund_values(args)
+        service = build_payment_service(settings, Database(settings.database_path))
+        preview = service.preview_refund(
+            args.order_id, amount_minor, reason, args.idempotency_key
+        )
+        if not args.apply:
+            _print_operator({
+                "mode": "dry-run",
+                "order_ref": mask_reference(preview.order_id, prefix="ord"),
+                "amount_rub": preview.amount_minor / 100,
+                "available_rub": preview.available_minor / 100,
+                "reason": preview.reason,
+                "idempotent_existing": preview.idempotent_existing,
+                "provider_called": False,
+                "database_mutated": False,
+            }, args.format)
+            return 0
+        refund = service.prepare_refund(
+            args.order_id, amount_minor, reason, args.idempotency_key
         )
     except (InvalidOperation, ValueError, PaymentError) as exc:
         LOGGER.error("Refund preparation rejected: %s", exc)
         return 2
-    print(json.dumps({
-        "refund_id": refund.id,
-        "order_id": refund.order_id,
+    _print_operator({
+        "mode": "apply",
+        "refund_ref": mask_reference(refund.id, prefix="ref"),
+        "order_ref": mask_reference(refund.order_id, prefix="ord"),
         "amount_rub": refund.amount_minor / 100,
         "status": refund.status.value,
         "provider_called": False,
-    }, ensure_ascii=False, sort_keys=True))
+        "audit_event": "refund_prepared",
+    }, args.format)
     return 0
 
 
-def run_refund_submit(settings: Settings, refund_id: str) -> int:
+def run_refund_submit(
+    settings: Settings, refund_id: str, *, apply: bool, output_format: str
+) -> int:
+    if not apply:
+        _print_operator({
+            "mode": "dry-run",
+            "refund_ref": mask_reference(refund_id, prefix="ref"),
+            "provider_called": False,
+            "database_mutated": False,
+            "next_step": "Repeat with --apply only after operator verification.",
+        }, output_format)
+        return 0
     try:
         refund = build_payment_service(settings, Database(settings.database_path)).submit_refund(
             refund_id
@@ -555,15 +635,18 @@ def run_refund_submit(settings: Settings, refund_id: str) -> int:
     except PaymentError as exc:
         LOGGER.error("Refund submission rejected: %s", exc)
         return 2
-    print(json.dumps({
-        "refund_id": refund.id,
+    _print_operator({
+        "mode": "apply",
+        "refund_ref": mask_reference(refund.id, prefix="ref"),
         "status": refund.status.value,
         "provider_request_created": bool(refund.provider_request_id),
-    }, sort_keys=True))
+    }, output_format)
     return 0
 
 
-def run_refund_status(settings: Settings, refund_id: str, refresh: bool) -> int:
+def run_refund_status(
+    settings: Settings, refund_id: str, refresh: bool, output_format: str
+) -> int:
     service = build_payment_service(settings, Database(settings.database_path))
     try:
         if refresh:
@@ -576,14 +659,14 @@ def run_refund_status(settings: Settings, refund_id: str, refresh: bool) -> int:
             if row is None:
                 raise PaymentError("Refund was not found")
             output = {
-                "refund_id": str(row["id"]),
-                "order_id": str(row["order_id"]),
+                "refund_ref": mask_reference(row["id"], prefix="ref"),
+                "order_ref": mask_reference(row["order_id"], prefix="ord"),
                 "amount_rub": int(row["amount_minor"]) / 100,
                 "status": str(row["status"]),
                 "provider_request_created": bool(row["provider_request_id"]),
                 "provider_refreshed": False,
             }
-            print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+            _print_operator(output, output_format)
             return 0
     except PaymentUnavailable as exc:
         LOGGER.error("Refund status refresh is disabled: %s", exc)
@@ -591,59 +674,243 @@ def run_refund_status(settings: Settings, refund_id: str, refresh: bool) -> int:
     except PaymentError as exc:
         LOGGER.error("Refund status unavailable: %s", exc)
         return 2
-    print(json.dumps({
-        "refund_id": refund.id,
-        "order_id": refund.order_id,
+    _print_operator({
+        "refund_ref": mask_reference(refund.id, prefix="ref"),
+        "order_ref": mask_reference(refund.order_id, prefix="ord"),
         "amount_rub": refund.amount_minor / 100,
         "status": refund.status.value,
         "provider_request_created": bool(refund.provider_request_id),
         "provider_refreshed": True,
-    }, ensure_ascii=False, sort_keys=True))
+    }, output_format)
     return 0
 
 
-def run_payment_history(settings: Settings, order_id: str) -> int:
+def run_payment_history(
+    settings: Settings,
+    order_id: str | None,
+    invoice: int | None,
+    output_format: str,
+) -> int:
+    database = Database(settings.database_path)
+    if order_id is None and invoice is None:
+        try:
+            _print_operator(payment_reconcile(database), output_format)
+            return 0
+        except PaymentError as exc:
+            LOGGER.error("Payment history unavailable: %s", exc)
+            return 2
+    service = build_payment_service(settings, database)
     try:
-        history = build_payment_service(
-            settings, Database(settings.database_path)
-        ).history(order_id)
+        resolved_order_id = (
+            service.order_by_invoice(invoice).id if invoice is not None else str(order_id)
+        )
+        history = service.history(resolved_order_id)
     except PaymentError as exc:
         LOGGER.error("Payment history unavailable: %s", exc)
         return 2
-    print(json.dumps({
-        "order_id": history.order.id,
-        "version_id": history.order.version_id,
+    _print_operator({
+        "invoice_ref": mask_reference(history.order.provider_invoice_id, prefix="inv"),
+        "order_ref": mask_reference(history.order.id, prefix="ord"),
+        "version_ref": mask_reference(history.order.version_id, prefix="ver"),
         "status": history.order.status.value,
         "amount_rub": history.order.amount_minor / 100,
         "currency": history.order.currency,
         "events": [entry.__dict__ for entry in history.audit],
-    }, ensure_ascii=False, indent=2, sort_keys=True))
+    }, output_format)
     return 0
 
 
-def run_refund_history(settings: Settings, refund_id: str) -> int:
+def run_refund_history(
+    settings: Settings, refund_id: str | None, output_format: str
+) -> int:
+    database = Database(settings.database_path)
+    if refund_id is None:
+        with database.read() as connection:
+            rows = connection.execute(
+                """SELECT r.id,r.order_id,r.amount_minor,r.currency,r.reason,r.status,r.created_at
+                   FROM refund_intents r ORDER BY r.created_at DESC LIMIT 50"""
+            ).fetchall()
+        _print_operator({
+            "count": len(rows),
+            "refunds": [
+                {
+                    "refund_ref": mask_reference(row["id"], prefix="ref"),
+                    "order_ref": mask_reference(row["order_id"], prefix="ord"),
+                    "amount_rub": int(row["amount_minor"]) / 100,
+                    "currency": str(row["currency"]),
+                    "reason": str(row["reason"]),
+                    "status": str(row["status"]),
+                    "created_at": str(row["created_at"]),
+                }
+                for row in rows
+            ],
+        }, output_format)
+        return 0
     try:
         history = build_payment_service(
-            settings, Database(settings.database_path)
+            settings, database
         ).refund_history(refund_id)
     except PaymentError as exc:
         LOGGER.error("Refund history unavailable: %s", exc)
         return 2
-    print(json.dumps({
-        "refund_id": history.refund.id,
-        "order_id": history.refund.order_id,
+    _print_operator({
+        "refund_ref": mask_reference(history.refund.id, prefix="ref"),
+        "order_ref": mask_reference(history.refund.order_id, prefix="ord"),
         "amount_rub": history.refund.amount_minor / 100,
         "currency": history.refund.currency,
         "reason": history.refund.reason,
         "status": history.refund.status.value,
         "events": [entry.__dict__ for entry in history.audit],
-    }, ensure_ascii=False, indent=2, sort_keys=True))
+    }, output_format)
+    return 0
+
+
+def run_payment_show(settings: Settings, invoice: int, output_format: str) -> int:
+    try:
+        report = payment_show(Database(settings.database_path), invoice)
+    except PaymentError as exc:
+        LOGGER.error("Payment order unavailable: %s", exc)
+        return 2
+    _print_operator(report, output_format)
+    return 0 if report["consistent"] else 4
+
+
+def run_payment_reconcile(
+    settings: Settings, invoice: int | None, output_format: str
+) -> int:
+    try:
+        report = payment_reconcile(Database(settings.database_path), invoice)
+    except PaymentError as exc:
+        LOGGER.error("Payment reconciliation failed: %s", exc)
+        return 2
+    _print_operator(report, output_format)
+    return 0 if report["mismatch_count"] == 0 else 4
+
+
+def run_delivery_retry(
+    settings: Settings,
+    invoice: int,
+    *,
+    apply: bool,
+    output_format: str,
+) -> int:
+    service = build_payment_service(settings, Database(settings.database_path))
+    try:
+        order = service.order_by_invoice(invoice)
+        if order.status.value != "delivery_pending":
+            raise PaymentError("Only a delivery-pending order can be scheduled for retry")
+        if not apply:
+            _print_operator({
+                "mode": "dry-run",
+                "invoice_ref": mask_reference(invoice, prefix="inv"),
+                "order_ref": mask_reference(order.id, prefix="ord"),
+                "status": order.status.value,
+                "database_mutated": False,
+                "audit_event": None,
+            }, output_format)
+            return 0
+        service.schedule_delivery_retry(order.id)
+    except PaymentError as exc:
+        LOGGER.error("Delivery retry scheduling rejected: %s", exc)
+        return 2
+    _print_operator({
+        "mode": "apply",
+        "invoice_ref": mask_reference(invoice, prefix="inv"),
+        "order_ref": mask_reference(order.id, prefix="ord"),
+        "status": order.status.value,
+        "audit_event": "delivery_retry_scheduled",
+    }, output_format)
+    return 0
+
+
+def run_resend_original(
+    settings: Settings,
+    invoice: int,
+    *,
+    apply: bool,
+    output_format: str,
+) -> int:
+    database = Database(settings.database_path)
+    service = build_payment_service(settings, database)
+    try:
+        order = service.order_by_invoice(invoice)
+        service.original_for_order(order.id, order.user_id)
+        if not apply:
+            _print_operator({
+                "mode": "dry-run",
+                "invoice_ref": mask_reference(invoice, prefix="inv"),
+                "order_ref": mask_reference(order.id, prefix="ord"),
+                "status": order.status.value,
+                "original_available": True,
+                "max_called": False,
+                "database_mutated": False,
+            }, output_format)
+            return 0
+        from app.max_runtime import build_max_application
+
+        application, client, _store = build_max_application(settings)
+        try:
+            delivered = application.deliver_paid_original(order.id)
+        finally:
+            client.close()
+    except (PaymentError, OSError) as exc:
+        LOGGER.error("Original redelivery rejected: %s", exc)
+        return 2
+    _print_operator({
+        "mode": "apply",
+        "invoice_ref": mask_reference(invoice, prefix="inv"),
+        "order_ref": mask_reference(order.id, prefix="ord"),
+        "delivered": bool(delivered),
+        "audit_event": "original_delivered" if delivered else "original_delivery_failed",
+    }, output_format)
+    return 0 if delivered else 5
+
+
+def run_refund_create(settings: Settings, args: argparse.Namespace) -> int:
+    try:
+        amount_minor, reason = _refund_values(args)
+        service = build_payment_service(settings, Database(settings.database_path))
+        order = service.order_by_invoice(args.invoice)
+        preview = service.preview_refund(
+            order.id, amount_minor, reason, args.idempotency_key
+        )
+        if not args.apply:
+            _print_operator({
+                "mode": "dry-run",
+                "invoice_ref": mask_reference(args.invoice, prefix="inv"),
+                "order_ref": mask_reference(order.id, prefix="ord"),
+                "amount_rub": preview.amount_minor / 100,
+                "available_rub": preview.available_minor / 100,
+                "reason": preview.reason,
+                "provider_called": False,
+                "database_mutated": False,
+            }, args.format)
+            return 0
+        refund = service.prepare_refund(
+            order.id, amount_minor, reason, args.idempotency_key
+        )
+    except (InvalidOperation, ValueError, PaymentError) as exc:
+        LOGGER.error("Refund creation rejected: %s", exc)
+        return 2
+    _print_operator({
+        "mode": "apply",
+        "invoice_ref": mask_reference(args.invoice, prefix="inv"),
+        "refund_ref": mask_reference(refund.id, prefix="ref"),
+        "amount_rub": refund.amount_minor / 100,
+        "status": refund.status.value,
+        "provider_called": False,
+        "audit_event": "refund_prepared",
+    }, args.format)
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-bot")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    def add_format(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--format", choices=("json", "human"), default="json")
+
     for command in ("health", "openai-check", "max-check", "run", "demo-stats"):
         subparsers.add_parser(command)
     cleanup = subparsers.add_parser("gallery-cleanup")
@@ -663,12 +930,13 @@ def build_parser() -> argparse.ArgumentParser:
     launch_status = subparsers.add_parser("launch-status")
     launch_status.add_argument("--strict", action="store_true")
     for command in (
-        "pilot-status", "payment-status", "storage-status", "backup-status",
-        "cleanup-status", "cost-status",
+        "pilot-status", "pilot-report", "payment-status", "robokassa-health",
+        "storage-status", "backup-status", "cleanup-status", "cost-status",
     ):
-        subparsers.add_parser(command)
+        add_format(subparsers.add_parser(command))
     health_report_parser = subparsers.add_parser("health-report")
     health_report_parser.add_argument("--online", action="store_true")
+    add_format(health_report_parser)
     refund_prepare = subparsers.add_parser("refund-prepare")
     refund_prepare.add_argument("--order-id", required=True)
     refund_prepare.add_argument("--amount-rub", required=True)
@@ -676,15 +944,48 @@ def build_parser() -> argparse.ArgumentParser:
         "--reason", required=True, choices=tuple(reason.value for reason in RefundReason)
     )
     refund_prepare.add_argument("--idempotency-key", required=True)
+    refund_prepare.add_argument("--apply", action="store_true")
+    add_format(refund_prepare)
     refund_submit = subparsers.add_parser("refund-submit")
     refund_submit.add_argument("--refund-id", required=True)
+    refund_submit.add_argument("--apply", action="store_true")
+    add_format(refund_submit)
     refund_status_parser = subparsers.add_parser("refund-status")
     refund_status_parser.add_argument("--refund-id", required=True)
     refund_status_parser.add_argument("--refresh", action="store_true")
+    add_format(refund_status_parser)
     payment_history_parser = subparsers.add_parser("payment-history")
-    payment_history_parser.add_argument("--order-id", required=True)
+    payment_history_selector = payment_history_parser.add_mutually_exclusive_group()
+    payment_history_selector.add_argument("--order-id")
+    payment_history_selector.add_argument("--invoice", type=int)
+    add_format(payment_history_parser)
+    payment_show_parser = subparsers.add_parser("payment-show")
+    payment_show_parser.add_argument("--invoice", required=True, type=int)
+    add_format(payment_show_parser)
+    payment_reconcile_parser = subparsers.add_parser("payment-reconcile")
+    payment_reconcile_parser.add_argument("--invoice", type=int)
+    add_format(payment_reconcile_parser)
+    resend_parser = subparsers.add_parser("payment-resend-original")
+    resend_parser.add_argument("--invoice", required=True, type=int)
+    resend_parser.add_argument("--apply", action="store_true")
+    add_format(resend_parser)
+    retry_parser = subparsers.add_parser("payment-mark-delivery-retry")
+    retry_parser.add_argument("--invoice", required=True, type=int)
+    retry_parser.add_argument("--apply", action="store_true")
+    add_format(retry_parser)
     refund_history_parser = subparsers.add_parser("refund-history")
-    refund_history_parser.add_argument("--refund-id", required=True)
+    refund_history_parser.add_argument("--refund-id")
+    add_format(refund_history_parser)
+    refund_create = subparsers.add_parser("refund-create")
+    refund_create.add_argument("--invoice", required=True, type=int)
+    refund_create.add_argument("--amount-rub", required=True)
+    refund_create.add_argument(
+        "--reason", required=True, choices=tuple(reason.value for reason in RefundReason)
+    )
+    refund_create.add_argument("--idempotency-key", required=True)
+    refund_create.add_argument("--dry-run", action="store_true")
+    refund_create.add_argument("--apply", action="store_true")
+    add_format(refund_create)
     demo = subparsers.add_parser("demo-edit")
     demo.add_argument("--user-id", required=True)
     demo.add_argument("--image", required=True)
@@ -726,22 +1027,49 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "launch-status":
         return print_launch_status(settings, strict=args.strict)
     if args.command in {
-        "pilot-status", "payment-status", "storage-status", "backup-status",
-        "cleanup-status", "cost-status", "health-report",
+        "pilot-status", "pilot-report", "payment-status", "robokassa-health",
+        "storage-status", "backup-status", "cleanup-status", "cost-status",
+        "health-report",
     }:
         return run_status_report(
-            settings, args.command, online=getattr(args, "online", False)
+            settings,
+            args.command,
+            online=getattr(args, "online", False),
+            output_format=args.format,
         )
     if args.command == "refund-prepare":
         return run_refund_prepare(settings, args)
     if args.command == "refund-submit":
-        return run_refund_submit(settings, args.refund_id)
+        return run_refund_submit(
+            settings, args.refund_id, apply=args.apply, output_format=args.format
+        )
     if args.command == "refund-status":
-        return run_refund_status(settings, args.refund_id, args.refresh)
+        return run_refund_status(
+            settings, args.refund_id, args.refresh, args.format
+        )
     if args.command == "payment-history":
-        return run_payment_history(settings, args.order_id)
+        return run_payment_history(
+            settings, args.order_id, args.invoice, args.format
+        )
+    if args.command == "payment-show":
+        return run_payment_show(settings, args.invoice, args.format)
+    if args.command == "payment-reconcile":
+        return run_payment_reconcile(settings, args.invoice, args.format)
+    if args.command == "payment-resend-original":
+        return run_resend_original(
+            settings, args.invoice, apply=args.apply, output_format=args.format
+        )
+    if args.command == "payment-mark-delivery-retry":
+        return run_delivery_retry(
+            settings, args.invoice, apply=args.apply, output_format=args.format
+        )
     if args.command == "refund-history":
-        return run_refund_history(settings, args.refund_id)
+        return run_refund_history(settings, args.refund_id, args.format)
+    if args.command == "refund-create":
+        if args.dry_run and args.apply:
+            LOGGER.error("--dry-run and --apply are mutually exclusive")
+            return 2
+        return run_refund_create(settings, args)
     if args.command == "ai-inspect":
         return run_ai_inspect(settings, args.attempt_id)
     return run_process(settings)

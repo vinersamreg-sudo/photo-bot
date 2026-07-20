@@ -8,7 +8,7 @@ Implementation follows the classic payment form and ResultURL contract from the 
 
 ## ResultURL
 
-The public HTTPS proxy must forward GET/POST form fields to the loopback path `/payments/robokassa/result`. The application validates the Password2 signature, known invoice, exact amount, local merchant/provider binding, RUB order, internal expiry, opaque order token and idempotency digest. It returns `OK<InvId>` only after the SQLite transaction commits.
+The public HTTPS proxy must forward **POST only** to the loopback path `/payments/robokassa/result`. GET on the configured path returns 405; bodies over 64 KiB or malformed UTF-8 are rejected. The application validates the Password2 signature, known invoice, exact amount, local merchant/provider binding, RUB order, internal expiry, opaque order token and idempotency digest. It returns `OK<InvId>` only after the SQLite transaction commits.
 
 The classic ResultURL does not itself provide a separately signed merchant field, currency, success status or provider timestamp. Therefore merchant/currency are validated against the locally created order; success is the documented meaning of a valid ResultURL; timestamp protection is the internal order expiry. These checks must not be described as ResultURL2/JWS validation.
 
@@ -21,3 +21,5 @@ Robokassa refund execution needs an operation key (`OpKey`) and Password3. Class
 ## Rollout
 
 Production mode additionally requires `ROBOKASSA_PRODUCTION_APPROVED=true`; deployment never sets it automatically. Provider endpoints, signatures and receipts must be rechecked against the merchant cabinet before activation because cabinet settings are external state.
+
+Exact target fields and the intentionally inactive Nginx proxy are documented in [ROBOKASSA_CABINET_SETUP.md](ROBOKASSA_CABINET_SETUP.md). A passing unit suite is not sandbox evidence; use [ROBOKASSA_SANDBOX_E2E.md](ROBOKASSA_SANDBOX_E2E.md).

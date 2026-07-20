@@ -1,5 +1,15 @@
 # Changelog
 
+## 20.07.2026 — Robokassa and pilot readiness hardening
+
+- added moderation/cabinet/sandbox/support/pilot/economics runbooks and an executed economics notebook;
+- added masked payment inspection/reconciliation, Robokassa health and cohort-scoped pilot funnel/economics reporting;
+- dangerous resend/retry/refund operations are dry-run by default and require `--apply`;
+- hardened ResultURL to POST-only, 64 KiB and strict UTF-8;
+- separated launch readiness into site, sandbox, production payment, owner E2E, pilot 5 and public gates;
+- final local gate passed: 232 backend tests and 49 site tests (281 total), compile, dependency, secret, asset, workflow-YAML and executed-notebook checks;
+- no payment, refund, pilot handler or OpenAI image request was enabled or executed.
+
 ## 20.07.2026 — Public DNS, TLS and Robokassa moderation site gate
 
 - apex and `www` propagated to `116.203.24.102` across Google, Cloudflare and Quad9;

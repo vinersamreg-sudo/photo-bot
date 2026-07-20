@@ -7,6 +7,7 @@
 - `PaymentWebhookServer` is a small loopback-only ResultURL listener, intended to sit behind the existing HTTPS reverse proxy.
 - SQLite migration v8 adds orders, attempts, events, webhook checks, receipts, audit and refunds.
 - `MaxApplication` creates a payment link or re-delivers an already paid exact original.
+- `payment_admin` exposes masked read-only reconciliation, pilot reporting and dry-run-first recovery commands.
 
 ## Durable entities
 
@@ -19,6 +20,10 @@ Callback processing inserts the event, validates it and changes order/intent/ver
 ## Concurrency
 
 SQLite serializes writers. Unique invoice, public token, idempotency key and event digest constraints prevent double order creation and replay. A different valid callback for the same paid invoice is recognized from order state and audited without a second unlock. Delivery attempts are separate and may legitimately be repeated.
+
+## Operator recovery
+
+Operator retry does not rewrite the paid state. `payment-mark-delivery-retry --apply` appends an audit decision only for `delivery_pending`; `payment-resend-original --apply` reuses the exact paid version and records delivery outcome. Refund preview validates amount/reason/idempotency without creating a row or calling Robokassa.
 
 ## Retention
 

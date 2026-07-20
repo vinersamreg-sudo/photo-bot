@@ -1,5 +1,13 @@
 # Roadmap
 
+## Immediate commercial gates — 20.07.2026
+
+1. Owner submits the already published site package for Robokassa moderation.
+2. After approval/test credentials, confirm fiscal settings and activate only owner/sandbox ResultURL for the 18-step E2E.
+3. Reconcile exact version delivery, restart, duplicate callback and refund dry-run; store redacted sandbox evidence.
+4. Separately run a no-payment five-user pilot and measure real generation count, conversion intent, latency, feedback and cost.
+5. Do not enable real 49 ₽ payments until owner production approval, controlled real owner payment, refund and reconciliation all pass.
+
 ## Gate 0 — owner
 
 Owner image E2E gate выполнен. Deploy commercial candidate observe-only, применить migration v8, создать свежий encrypted backup + restore + off-site artifact, выполнить cleanup и проверить `health-report`. Затем отдельно настроить HTTPS ResultURL и пройти owner Robokassa sandbox без реальных денег.

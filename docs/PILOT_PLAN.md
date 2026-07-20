@@ -1,5 +1,7 @@
 # Closed Pilot Plan
 
+Exact activation, rollback, budget and tester copy are in [PILOT_5_USERS_RUNBOOK.md](PILOT_5_USERS_RUNBOOK.md). Unit economics and its executed notebook are in [PILOT_UNIT_ECONOMICS.md](PILOT_UNIT_ECONOMICS.md) and `analysis/PILOT_UNIT_ECONOMICS.ipynb`.
+
 ## Owner gate
 
 Five full E2E successes in a row; no stuck status, original leak, quota debit on technical failure or lost GalleryVersion; encrypted backup restored; cleanup and recovery verified. Real image requests are agreed before execution and counted.

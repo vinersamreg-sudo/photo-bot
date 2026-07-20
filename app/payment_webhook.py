@@ -51,18 +51,28 @@ class PaymentWebhookServer:
                 if parsed.path != owner.path:
                     self.send_error(404)
                     return
+                if self.command != "POST":
+                    self.send_response(405)
+                    self.send_header("Allow", "POST")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 values = dict(parse_qsl(parsed.query, keep_blank_values=True))
-                if self.command == "POST":
-                    try:
-                        length = int(self.headers.get("Content-Length", "0"))
-                    except ValueError:
-                        self.send_error(400)
-                        return
-                    if length < 0 or length > MAX_BODY_BYTES:
-                        self.send_error(413)
-                        return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    self.send_error(400)
+                    return
+                if length < 0 or length > MAX_BODY_BYTES:
+                    self.send_error(413)
+                    return
+                try:
                     body = self.rfile.read(length).decode("utf-8", errors="strict")
-                    values.update(dict(parse_qsl(body, keep_blank_values=True)))
+                except UnicodeDecodeError:
+                    self.send_error(400)
+                    return
+                values.update(dict(parse_qsl(body, keep_blank_values=True)))
                 try:
                     result = owner.service.process_webhook(
                         values,

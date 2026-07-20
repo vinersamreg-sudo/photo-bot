@@ -83,6 +83,20 @@ Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `T
 
 Migration v8 implements Robokassa sandbox architecture, exact-`GalleryVersion` unlock, idempotent ResultURL processing, retriable original delivery and refund drafts/CLI. Real money is not enabled by this implementation: every deploy forces payment/webhook/refund flags off, sandbox mode and no production approval. Read [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
 
+Read-only and dry-run-first operator tools:
+
+```bash
+python -m app.main payment-show --invoice <invoice> --format human
+python -m app.main payment-reconcile [--invoice <invoice>] --format human
+python -m app.main payment-resend-original --invoice <invoice> [--apply]
+python -m app.main payment-mark-delivery-retry --invoice <invoice> [--apply]
+python -m app.main refund-create --invoice <invoice> --amount-rub 49 --reason customer_request --idempotency-key <ticket> --dry-run
+python -m app.main robokassa-health --format human
+python -m app.main pilot-report --format human
+```
+
+Owner procedures: [moderation package](docs/ROBOKASSA_SUBMISSION_PACKAGE.md), [payment audit](docs/PAYMENT_GO_LIVE_AUDIT.md), [cabinet map](docs/ROBOKASSA_CABINET_SETUP.md), [sandbox E2E](docs/ROBOKASSA_SANDBOX_E2E.md), [payment support](docs/PAYMENT_SUPPORT_RUNBOOK.md), [five-user pilot](docs/PILOT_5_USERS_RUNBOOK.md), [unit economics](docs/PILOT_UNIT_ECONOMICS.md).
+
 ```powershell
 python -m app.main max-check
 python -m app.main run
