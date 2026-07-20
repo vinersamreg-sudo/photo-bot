@@ -244,12 +244,15 @@ class PixoraSiteTests(unittest.TestCase):
         self.assertIn("Самозанятый", contacts)
         self.assertIn("налога на профессиональный доход", contacts)
         self.assertIn("Самара", contacts)
+        self.assertIn("631937938795", contacts)
+        self.assertIn("viner-89@mail.ru", contacts)
 
     # 30
-    def test_unverified_email_is_not_published(self) -> None:
+    def test_only_verified_email_is_published(self) -> None:
         public_text = "\n".join(self.pages.values()).lower()
         self.assertNotIn("hello@pixoraai.ru", public_text)
-        self.assertNotIn("mailto:", public_text)
+        self.assertNotIn("vinersamreg@gmail.com", public_text)
+        self.assertIn("mailto:viner-89@mail.ru", public_text)
 
     # 31
     def test_offer_has_at_least_35_numbered_sections(self) -> None:

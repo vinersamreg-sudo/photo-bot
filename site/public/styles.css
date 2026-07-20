@@ -102,7 +102,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .divider { position: absolute; z-index: 2; top: 0; bottom: 0; left: 50%; width: 1px; background: rgba(255,255,255,.8); box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
 .divider::after { content: "↔"; position: absolute; top: 50%; left: 50%; width: 36px; height: 36px; display: grid; place-items: center; transform: translate(-50%,-50%); border-radius: 50%; background: var(--white); color: var(--ink); font-size: 14px; }
 .example-copy { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 22px 24px 24px; }
-.example-copy span { font-size: 19px; font-weight: 720; }
+.example-copy h3 { margin: 0; font-size: 19px; font-weight: 720; }
 .example-copy p { margin: 0; color: #bdb7bf; font-size: 13px; }
 
 .benefits-section { background: #ebe4db; }
