@@ -64,7 +64,7 @@ Provider sandbox/real-payment evidence, operation-key refund reconciliation, о�
 - подтверждённые владельцем ИНН `631937938795` и e-mail `viner-89@mail.ru` опубликованы на главной, в контактах и legal-документах;
 - публичные маршруты, 404, robots, sitemap, favicon, ссылки и W3C HTML validation проверены; цена везде 49 ₽, 149 ₽ отсутствует.
 
-Production HTTPS завершён на целевом VPS: Nginx 1.24 и Certbot 2.9 активны, immutable read-only release опубликован через `/opt/pixora-site/current`, 80/443 доступны, backend изолирован и health остаётся зелёным. После закрытия launch gate GitHub Environment variable `PIXORA_SITE_DEPLOY_ENABLED` установлена в `true`. Инженерный gate сайта для отправки на модерацию Robokassa закрыт. Sandbox, ResultURL, реальные платежи, pilot и пользовательские handlers не включались.
+Production HTTPS завершён на целевом VPS: Nginx 1.24 и Certbot 2.9 активны, immutable read-only release опубликован через `/opt/pixora-site/current`, 80/443 доступны, backend изолирован и health остаётся зелёным. После закрытия launch gate GitHub Actions repository variable `PIXORA_SITE_DEPLOY_ENABLED` установлена в `true`; одноимённая environment variable удалена, потому что job-level `if` вычисляется раньше Environment. Инженерный gate сайта для отправки на модерацию Robokassa закрыт. Sandbox, ResultURL, реальные платежи, pilot и пользовательские handlers не включались.
 
 ## 19.07.2026 — optional provider context
 

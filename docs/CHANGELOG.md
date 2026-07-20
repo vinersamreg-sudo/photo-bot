@@ -8,6 +8,7 @@
 - owner-confirmed INN `631937938795` and e-mail `viner-89@mail.ru` published in site/legal source of truth;
 - all public/legal routes, 404, links, W3C validation and exact 49 ₽ price passed; 149 ₽ is absent;
 - `PIXORA_SITE_DEPLOY_ENABLED=true` enabled only after the full external launch gate passed;
+- corrected the deploy gate level: job-level `if` reads the repository variable, not an environment variable that is attached later;
 - Lighthouse keeps mobile/network emulation with a fixed CPU multiplier of 1 to remove GitHub runner contention from TBT; the 95 score threshold remains unchanged and a regression test locks the method;
 - site engineering gate for Robokassa moderation is complete; payments, webhook, refunds, pilot and MAX handlers remain disabled;
 - no real payment and no OpenAI image request performed.

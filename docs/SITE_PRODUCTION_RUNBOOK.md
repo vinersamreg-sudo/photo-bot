@@ -60,7 +60,7 @@ curl --fail -H 'Host: pixoraai.ru' http://127.0.0.1/legal/offer.html
 
 ## Включение CI deploy
 
-`PIXORA_SITE_DEPLOY_ENABLED=true` разрешается установить в GitHub Environment `production` только когда одновременно выполнены DNS, Nginx, TLS, external smoke и проверка всех документов. До этого workflow создаёт проверенный artifact, но не меняет production.
+`PIXORA_SITE_DEPLOY_ENABLED=true` разрешается установить как GitHub Actions repository variable только когда одновременно выполнены DNS, Nginx, TLS, external smoke и проверка всех документов. Job-level `if` вычисляется до подключения Environment `production`, поэтому environment variable здесь не работает как deploy gate. До установки repository variable workflow создаёт проверенный artifact, но не меняет production.
 
 Deploy создаёт staging-каталог, отвергает symlink/secret-like файлы, переводит release в read-only, сохраняет `previous`, атомарно переключает `current` и откатывает его при HTTPS smoke failure.
 

@@ -46,7 +46,7 @@ python scripts/assert_lighthouse.py .lighthouse/report-desktop.json
 
 Workflow `.github/workflows/site.yml` создаёт неизменяемый release, проверяет состав public tree, атомарно переключает symlink и возвращает `current` при неуспешном HTTPS smoke. Backend остаётся в `/opt/photo-bot` и не входит в root сайта.
 
-Deploy был закрыт GitHub Environment variable `PIXORA_SITE_DEPLOY_ENABLED` до прохождения DNS, Nginx, TLS и внешнего smoke. На 20.07.2026 этот gate пройден и variable установлена в `true`: apex и `www` указывают на целевой VPS, HTTPS/HSTS и canonical redirects работают, browser/curl/OpenSSL smoke и Certbot renew dry-run успешны. Это разрешает автоматический deploy сайта, но не включает платежи или пользовательские handlers бота.
+Deploy был закрыт GitHub Actions repository variable `PIXORA_SITE_DEPLOY_ENABLED` до прохождения DNS, Nginx, TLS и внешнего smoke. Job-level condition вычисляется до подключения Environment `production`, поэтому gate должен храниться именно на уровне repository. На 20.07.2026 он пройден и variable установлена в `true`: apex и `www` указывают на целевой VPS, HTTPS/HSTS и canonical redirects работают, browser/curl/OpenSSL smoke и Certbot renew dry-run успешны. Это разрешает автоматический deploy сайта, но не включает платежи или пользовательские handlers бота.
 
 Операционные инструкции:
 
