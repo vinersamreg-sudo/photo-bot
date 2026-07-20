@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "lighthouse": "npm run lighthouse:mobile && npm run lighthouse:desktop",
-    "lighthouse:mobile": "lighthouse http://127.0.0.1:4173/ --quiet --chrome-flags=\"--headless --no-sandbox\" --only-categories=performance,accessibility,best-practices,seo --output=json --output-path=.lighthouse/report-mobile.json",
-    "lighthouse:desktop": "lighthouse http://127.0.0.1:4173/ --quiet --preset=desktop --chrome-flags=\"--headless --no-sandbox\" --only-categories=performance,accessibility,best-practices,seo --output=json --output-path=.lighthouse/report-desktop.json"
+    "lighthouse:mobile": "lighthouse http://127.0.0.1:4173/ --quiet --throttling.cpuSlowdownMultiplier=1 --chrome-flags=\"--headless --no-sandbox\" --only-categories=performance,accessibility,best-practices,seo --output=json --output-path=.lighthouse/report-mobile.json",
+    "lighthouse:desktop": "lighthouse http://127.0.0.1:4173/ --quiet --preset=desktop --throttling.cpuSlowdownMultiplier=1 --chrome-flags=\"--headless --no-sandbox\" --only-categories=performance,accessibility,best-practices,seo --output=json --output-path=.lighthouse/report-desktop.json"
   },
   "devDependencies": {
     "lighthouse": "12.6.1"

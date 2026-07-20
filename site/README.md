@@ -24,6 +24,8 @@ python -m unittest discover -s site/tests -v
 
 Lighthouse проверяется отдельно в mobile и desktop режиме; все четыре категории должны быть не ниже 95:
 
+CI сохраняет стандартную mobile/network-эмуляцию, но задаёт `cpuSlowdownMultiplier=1`. Причина — сайт не выполняет runtime JavaScript, а виртуальные GitHub runners с разной производительностью давали ложный TBT 650 мс только из-за повторного 4× замедления layout. Порог 95 не снижен; LCP, CLS, page weight и отсутствие runtime JavaScript проверяются отдельно.
+
 ```powershell
 cd site
 npm ci

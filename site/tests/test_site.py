@@ -361,6 +361,13 @@ class PixoraSiteTests(unittest.TestCase):
         self.assertIn("$BASE/current", workflow)
         self.assertIn("$BASE/previous", workflow)
 
+    def test_lighthouse_keeps_network_emulation_without_flaky_cpu_multiplier(self) -> None:
+        package = json.loads((SITE / "package.json").read_text(encoding="utf-8"))
+        for name in ("lighthouse:mobile", "lighthouse:desktop"):
+            command = package["scripts"][name]
+            self.assertIn("--throttling.cpuSlowdownMultiplier=1", command)
+            self.assertNotIn("--throttling-method=provided", command)
+
     # 47
     def test_site_workflow_does_not_touch_backend(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
