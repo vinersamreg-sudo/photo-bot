@@ -1,5 +1,20 @@
 # Changelog
 
+## 21.07.2026 — Pixora Content Studio v1
+
+- introduced an independent, platform-neutral demonstration content domain with a
+  fail-closed MAX adapter;
+- added dedicated SQLite schema v2, private validated storage, deterministic Russian
+  post templates and three Pillow Before/After formats;
+- enforced created-for-Pixora/commercial rights, mandatory disclosure/CTA/UTM,
+  review-first lifecycle and typed quality blockers;
+- added dry-run-first `pixora content` status/generate/queue/approve/publish/analytics/
+  schedule commands and weekly planning;
+- deploy forces publication off and audits empty/healthy Content Studio state;
+- local gate passed 278 backend tests and 49 unchanged site tests (327 total),
+  compile, dependency, secret and asset-licence checks;
+- no real MAX publication and no OpenAI image request was made.
+
 ## 20.07.2026 — permanent 2+1 commercial model
 
 - fixed the permanent v1 product at 49 ₽ for two additional successful generations and one user-selected original;

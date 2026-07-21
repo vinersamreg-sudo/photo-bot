@@ -41,6 +41,17 @@ Commercial operations: `payment-status`, `payment-history`, `payment-show`, `pay
 
 Current commercial gate (20.07.2026): site may be submitted for Robokassa moderation; public ResultURL and sandbox evidence do not exist; real payment/refund/reconciliation are unverified; handlers are observe-only and pilot limit is 0. `launch-status` reports those gates separately and always keeps `public_launch_ready=false`. The 49 ₽ economics are viable only under strict generation-cost/conversion assumptions; consult the executed notebook before changing quota or price.
 
+Content Studio context (21.07.2026): `app/content_studio` is an independent
+operator-only demonstration-content subsystem with separate SQLite/storage. It
+accepts only created-for-Pixora, commercially verified sources; renders three
+Before/After layouts, generates factual Russian copy from deterministic templates,
+and enforces mandatory demo disclosure, CTA/UTM and manual review. Production
+publishing is forced off, no transport is configured, and no real content or AI
+request was created in its implementation sprint. Use `scripts/pixora content ...`.
+Before importing the first real asset, add and restore-test encrypted off-site
+backup of the Content Studio database and storage. Read the four `CONTENT_*`/
+`DEMO_CONTENT_POLICY.md` documents before changing this boundary.
+
 AI quality limits: identity/background can drift, corrections accumulate changes, outputs are nondeterministic and not pixel-perfect Photoshop. Report these honestly.
 
 Optional OpenAI context (19.07.2026): migration v7 and adapters exist but all

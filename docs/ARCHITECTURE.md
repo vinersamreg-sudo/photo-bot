@@ -36,6 +36,16 @@ SQLite online backup API creates a consistent snapshot. OpenSSL encrypts it usin
 
 MAX webhook, queue/workers, object storage and horizontal scale are deferred. The small Robokassa ResultURL listener is the only webhook exception and remains disabled until commercial rollout. Larger topology changes become relevant only after pilot metrics show that one polling process + SQLite is insufficient. The static site is a separate artifact under `site/` and is not published automatically with backend deploy.
 
+## Operator content plane
+
+Pixora Content Studio lives under `app/content_studio` and has a separate SQLite
+database and storage root under `data/content_studio`. It consumes only explicitly
+licensed demonstration before/after files. It shares no tables, services or runtime
+handlers with MAX UX, Gallery, AI Brain or payments. Platform-neutral domain and
+review logic feed a MAX adapter; the adapter has no configured network transport.
+Every deploy forces publication off and audits zero published posts and zero AI
+requests. Content data backup/restore must be added before real assets are imported.
+
 ## Optional OpenAI Responses context
 
 Migration v7 adds provider-context metadata and privacy-safe events.

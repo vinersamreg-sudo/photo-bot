@@ -2,6 +2,27 @@
 
 Официальный бренд продукта — **Pixora**. Отдельный статический лендинг находится в [`site/`](site/README.md); он не импортирует backend и имеет собственный CI/deploy boundary.
 
+## Content Studio
+
+`app/content_studio` — независимый операторский контур для честных
+демонстрационных материалов официального MAX-канала. Он импортирует только
+созданные для Pixora before/after изображения с подтверждённым коммерческим
+разрешением, собирает три формата карточек через Pillow, создаёт русский текст из
+детерминированных шаблонов и ведёт review-first очередь. Он не читает Gallery,
+платежи или пользовательские диалоги и не вызывает OpenAI.
+
+```powershell
+scripts\pixora.ps1 content status
+scripts\pixora.ps1 content queue --status needs_review
+scripts\pixora.ps1 content schedule --plan-start 2026-07-20 --days 7
+```
+
+Production deploy принудительно оставляет
+`CONTENT_STUDIO_PUBLISHING_ENABLED=false`; доступны только локальные preview и
+dry-run. Архитектура, политика и runbook: [Content Studio](docs/CONTENT_STUDIO_ARCHITECTURE.md),
+[pipeline](docs/CONTENT_PIPELINE.md), [MAX strategy](docs/MAX_CONTENT_STRATEGY.md),
+[demo policy](docs/DEMO_CONTENT_POLICY.md).
+
 ## AI Brain
 
 Pixora не передаёт correction как голую строку. `app/edit_intent.py` строит сериализуемый EditPlan v2 с provider-neutral scene fields; `app/prompt_builder.py` создаёт только English/ASCII technical prompt. Correction редактирует private original выбранной успешной версии и меняет только затронутые поля, Repeat сохраняет тот же intent и input branch. Raw Russian text никогда не передаётся ImageProvider. Подробности: [аудит до изменений](docs/AI_BRAIN_AUDIT.md), [архитектура](docs/AI_BRAIN_ARCHITECTURE.md), [правила prompt](docs/PROMPT_ENGINEERING_RULES.md).

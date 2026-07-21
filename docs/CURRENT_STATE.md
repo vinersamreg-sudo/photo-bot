@@ -1,5 +1,24 @@
 # Current State
 
+## 21.07.2026 — Pixora Content Studio v1 implemented, dry-run only
+
+- добавлен независимый операторский pipeline DemoAsset → Transformation → Result →
+  Post → review → schedule → publication audit;
+- separate SQLite schema v2 и private storage не читают и не меняют user, Gallery,
+  AI Brain или payment данные;
+- Pillow собирает square/vertical/stories Before/After, русский copy строится только
+  из deterministic templates с обязательными disclosure, CTA и UTM;
+- каждый материал входит в `needs_review`; quality flags блокируют approval, а
+  result/post/review утверждаются одной транзакцией;
+- MAX publisher имеет preview/dry-run/manual/publish/retry interface, но production
+  принудительно оставляет publishing false и не конфигурирует transport;
+- реальных демонстрационных материалов, MAX-публикаций и OpenAI image requests в
+  этом спринте нет;
+- локальный gate: 278 backend tests + 49 site tests, compile, dependency, secret,
+  asset-licence и deploy-policy checks зелёные;
+- до первого реального asset нужен отдельный encrypted restore-tested backup для
+  Content Studio SQLite и storage.
+
 ## 20.07.2026 — permanent Pixora v1 product model implemented
 
 - migration v9 adds lifetime initial grant, global generation balances, credit lots/reservations/ledger, atomic continuation-pack grants and independent unlock entitlements;

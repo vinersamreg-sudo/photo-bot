@@ -6,13 +6,18 @@ Push to `main` runs Python 3.12 dependency checks, secret/license scans, all uni
 
 Production env is converged to `OPENAI_IMAGE_MODEL=gpt-image-2`, quality medium, router/composite/segmentation disabled, polling enabled only with a MAX token. Push deploy sets `PILOT_USER_LIMIT=0` and `MAX_POLL_OBSERVE_ONLY=true`. A manual workflow may enable owner handlers and choose 0/5/10/20 pilot users; a positive limit fails before deployment when the secret list is shorter than the requested stage or contains the owner.
 
-Before stopping systemd, deployment checks the live database and aborts if a generation attempt or dialog is actively processing. Server verification then applies migration v6, runs tests, OpenAI/MAX auth checks, restarts one hardened systemd unit, validates MainPID/command/lock, checks restart and duplicate-instance protection, runs SQLite quick_check and `launch-status`, then records the deployed SHA.
+Before stopping systemd, deployment checks the live database and aborts if a generation attempt or dialog is actively processing. Server verification then applies current migrations, runs tests, OpenAI/MAX auth checks, restarts one hardened systemd unit, validates MainPID/command/lock, checks restart and duplicate-instance protection, runs SQLite quick_check and `launch-status`, then records the deployed SHA. It also initializes the isolated Content Studio schema, requires its quick check, forces publishing off, and asserts zero published posts and zero external AI requests.
 
 ## Backup workflow
 
 `Encrypted production backup` runs daily and manually. Required secret: `BACKUP_ENCRYPTION_PASSPHRASE` (plus Hetzner secrets). It creates an online SQLite snapshot, encrypts it, performs a server restore test, copies only the encrypted file off VPS, independently restores it on the runner, uploads a 14-day artifact, marks the off-site copy, executes maintenance cleanup and requires strict launch readiness.
 
 The passphrase is read through stdin and is never printed or stored in metadata. A green workflow is the evidence for backup readiness; code or an encrypted file alone is not.
+
+The current backup artifact contains the user/product SQLite database only. Content
+Studio must remain empty in production until a separate encrypted, restore-tested
+off-site backup covers both `data/content_studio/content_studio.sqlite3` and its
+storage tree.
 
 ## Rollback
 

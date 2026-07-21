@@ -8,6 +8,15 @@
 4. Separately run a no-payment five-user pilot and measure real generation count, conversion intent, latency, feedback and cost.
 5. Do not enable real 49 ₽ payments until owner production approval, controlled real owner payment, refund and reconciliation all pass.
 
+## Content Studio closed-mode gate — 21.07.2026
+
+Core, renderer, queue, review, planning and dry-run MAX adapter are implemented.
+Before importing the first real demonstration pair: extend encrypted backup to the
+separate Content Studio SQLite and storage, prove restore/off-site copy, select one
+rights-cleared Pixora-owned case, run visual/operator review, and keep network
+publishing disabled. Enabling real MAX publication remains a later, separate owner
+decision after a manual dry-run comparison.
+
 ## Gate 0 — owner
 
 Owner image E2E gate выполнен. Deploy commercial candidate observe-only, применить migration v9, проверить credit/entitlement migration report, создать свежий encrypted backup + restore + off-site artifact, выполнить cleanup и проверить `health-report`. Затем отдельно настроить HTTPS ResultURL и пройти owner Robokassa sandbox без реальных денег.

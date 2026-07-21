@@ -26,7 +26,7 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("REG_RU_", self.workflow)
         self.assertNotIn("trip-day", self.workflow.lower())
         self.assertIn("secrets.HETZNER_HOST", self.workflow)
-        self.assertIn('chmod +x "$ROOT"/scripts/*.sh', self.workflow)
+        self.assertIn('chmod +x "$ROOT"/scripts/*.sh "$ROOT"/scripts/pixora', self.workflow)
         self.assertIn('cd "$ROOT"', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip install', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip check', self.workflow)
@@ -113,6 +113,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env PAYMENT_PROVIDER disabled", self.workflow)
         self.assertIn("set_env PAYMENT_WEBHOOK_ENABLED false", self.workflow)
         self.assertIn("set_env PAYMENT_REFUNDS_ENABLED false", self.workflow)
+        self.assertIn("set_env CONTENT_STUDIO_PUBLISHING_ENABLED false", self.workflow)
+        self.assertIn('status["publishing_enabled"] is False', self.workflow)
+        self.assertIn('status["published_posts"] == 0', self.workflow)
         self.assertIn("set_env ROBOKASSA_MODE sandbox", self.workflow)
         self.assertIn("set_env ROBOKASSA_PRODUCTION_APPROVED false", self.workflow)
 

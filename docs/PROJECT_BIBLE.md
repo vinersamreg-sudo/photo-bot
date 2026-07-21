@@ -56,3 +56,14 @@ Pixora хранит память работы сама, а OpenAI conversation �
 adapter не меняют production v1: все flags выключены и основной endpoint —
 `/v1/images/edits`. Включение возможно только после отдельного owner approval и
 контролируемого сравнения; identity и visual drift не считаются решёнными.
+
+## Content Studio
+
+Pixora Content Studio — отдельная операторская подсистема официального MAX-канала,
+а не часть пользовательского photo flow. Её источник — только специально созданные
+для Pixora материалы с подтверждённым коммерческим разрешением. Она хранит
+DemoAsset/Transformation/Result/Post в отдельной SQLite, создаёт Pillow-карточки и
+фактический русский copy по шаблонам, затем требует ручной review. Истории клиентов,
+отзывы и заказы не выдумываются; disclosure обязателен. Реальная публикация,
+автопубликация и OpenAI-вызовы выключены. До импорта реального контента обязателен
+отдельный restore-tested backup Content Studio DB и файлов.
