@@ -138,7 +138,9 @@ class DeployPolicyTests(TestCase):
     def test_nginx_resulturl_deploy_is_root_scoped_and_rolls_back(self) -> None:
         script = self.nginx_resulturl_deploy
         self.assertIn('if [ "$(id -u)" -ne 0 ]', script)
-        self.assertIn("location", (ROOT / "site/nginx/pixoraai.ru.conf").read_text())
+        self.assertIn('CANDIDATE="${1:-}"', script)
+        self.assertIn('! -f "$CANDIDATE"', script)
+        self.assertIn('! -f "$ACTIVE"', script)
         self.assertIn("trap rollback ERR", script)
         self.assertIn('install -o root -g root -m 644 "$BACKUP" "$ACTIVE"', script)
         self.assertIn("nginx -t", script)
