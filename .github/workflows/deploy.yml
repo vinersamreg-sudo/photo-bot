@@ -661,18 +661,18 @@ jobs:
             set -euo pipefail
             CANDIDATE="$1"
             ACTIVE=/etc/nginx/sites-available/pixoraai.ru
-            BACKUP=/tmp/pixoraai.ru.conf.backup
-            sudo -n cp "$ACTIVE" "$BACKUP"
+            BACKUP="/tmp/pixoraai.ru.conf.backup.$$"
+            cp "$ACTIVE" "$BACKUP"
             rollback() {
-              sudo -n cp "$BACKUP" "$ACTIVE"
+              sudo -n install -o root -g root -m 644 "$BACKUP" "$ACTIVE"
               sudo -n nginx -t >/dev/null
               sudo -n systemctl reload nginx
               rm -f "$CANDIDATE"
-              sudo -n rm -f "$BACKUP"
+              rm -f "$BACKUP"
             }
             trap rollback ERR
             sudo -n install -o root -g root -m 644 "$CANDIDATE" "$ACTIVE"
-            sudo -n ln -sfn "$ACTIVE" /etc/nginx/sites-enabled/pixoraai.ru
+            test "$(readlink -f /etc/nginx/sites-enabled/pixoraai.ru)" = "$ACTIVE"
             sudo -n nginx -t
             sudo -n systemctl reload nginx
             GET_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
@@ -686,7 +686,7 @@ jobs:
             test "$POST_STATUS" = 503
             trap - ERR
             rm -f "$CANDIDATE"
-            sudo -n rm -f "$BACKUP"
+            rm -f "$BACKUP"
             printf 'resulturl_get_status=%s\n' "$GET_STATUS"
             printf 'resulturl_post_disabled_status=%s\n' "$POST_STATUS"
           REMOTE
