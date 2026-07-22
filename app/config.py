@@ -322,8 +322,8 @@ def load_settings(
     robokassa_hash_algorithm = (
         values.get("ROBOKASSA_HASH_ALGORITHM", "sha256").strip().lower() or "sha256"
     )
-    if robokassa_hash_algorithm not in {"md5", "sha256", "sha512"}:
-        raise ValueError("ROBOKASSA_HASH_ALGORITHM must be md5, sha256 or sha512")
+    if robokassa_hash_algorithm != "sha256":
+        raise ValueError("ROBOKASSA_HASH_ALGORITHM must be sha256")
     robokassa_commission_percent = _nonnegative_float(
         values, "ROBOKASSA_COMMISSION_PERCENT", 0.0
     )

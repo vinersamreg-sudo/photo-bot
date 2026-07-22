@@ -24,7 +24,7 @@ Every payment link includes a URL-encoded `Receipt`. Its encoded value participa
 
 The repository publishes only a fail-closed ResultURL transport while payments are disabled. `PAYMENT_WEBHOOK_LISTENER_ENABLED=true` starts a loopback listener; `PAYMENT_WEBHOOK_ENABLED=false` makes valid-path POST requests return `503 Retry-After` without parsing a signature, writing payment state, granting a package or returning `OK<InvId>`. GET returns `405 Allow: POST`. Business processing is enabled only in a separately approved sandbox window.
 
-Pixora signs and verifies with `ROBOKASSA_HASH_ALGORITHM=sha256`. The cabinet was observed using MD5, so a payment test is blocked until the cabinet algorithm and Password1/Password2 test credentials are deliberately aligned with SHA-256. No cabinet setting was changed by this audit.
+Pixora signs and verifies only with `ROBOKASSA_HASH_ALGORITHM=sha256`. Configuration and provider construction reject `md5`, `sha512` and every other value, while the digest implementation calls `hashlib.sha256` directly. The cabinet was observed using MD5, so a payment test is blocked until the cabinet algorithm and Password1/Password2 test credentials are deliberately aligned with SHA-256. No cabinet setting was changed by this audit.
 
 ## Refund limitation
 

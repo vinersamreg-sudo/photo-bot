@@ -104,8 +104,8 @@ class RobokassaProvider:
         fail_url: str = "",
         client: httpx.Client | None = None,
     ) -> None:
-        if hash_algorithm not in {"md5", "sha256", "sha512"}:
-            raise ValueError("Unsupported Robokassa hash algorithm")
+        if hash_algorithm != "sha256":
+            raise ValueError("Robokassa hash algorithm must be sha256")
         if mode not in {"sandbox", "production"}:
             raise ValueError("Unsupported Robokassa mode")
         self.merchant_login = merchant_login
@@ -127,7 +127,7 @@ class RobokassaProvider:
             self.client.close()
 
     def _digest(self, value: str) -> str:
-        return hashlib.new(self.hash_algorithm, value.encode("utf-8")).hexdigest().upper()
+        return hashlib.sha256(value.encode("utf-8")).hexdigest().upper()
 
     @staticmethod
     def _receipt(request: RobokassaPaymentRequest) -> str:

@@ -111,3 +111,14 @@ class SettingsTests(TestCase):
     def test_robokassa_commission_cannot_be_negative(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be non-negative"):
             load_settings(environ={"ROBOKASSA_COMMISSION_PERCENT": "-1"})
+
+    def test_robokassa_hash_algorithm_is_sha256_only(self) -> None:
+        self.assertEqual(
+            load_settings(environ={"ROBOKASSA_HASH_ALGORITHM": "sha256"})
+            .robokassa_hash_algorithm,
+            "sha256",
+        )
+        for rejected in ("md5", "sha512"):
+            with self.subTest(rejected=rejected):
+                with self.assertRaisesRegex(ValueError, "must be sha256"):
+                    load_settings(environ={"ROBOKASSA_HASH_ALGORITHM": rejected})

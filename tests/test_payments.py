@@ -616,6 +616,17 @@ class PaymentTests(TestCase):
 
 
 class RobokassaSignatureTests(TestCase):
+    def test_provider_rejects_non_sha256_algorithms(self) -> None:
+        for rejected in ("md5", "sha512"):
+            with self.subTest(rejected=rejected):
+                with self.assertRaisesRegex(ValueError, "must be sha256"):
+                    RobokassaProvider(
+                        merchant_login="shop",
+                        password1="one",
+                        password2="two",
+                        hash_algorithm=rejected,
+                    )
+
     def test_result_signature_accepts_six_decimal_production_amount(self) -> None:
         provider = RobokassaProvider(
             merchant_login="shop", password1="one", password2="two",

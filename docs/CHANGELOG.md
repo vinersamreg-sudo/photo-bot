@@ -1,5 +1,7 @@
 # Changelog
 
+- hard-locked every Robokassa payment signature to SHA-256 and made configuration/provider construction reject MD5 and SHA-512;
+
 ## 22.07.2026 — Robokassa fail-closed ResultURL transport
 
 - added a separately gated loopback ResultURL listener and exact Nginx proxy; GET returns 405 and disabled POST returns 503 without state mutation or ACK;

@@ -4,7 +4,7 @@
 
 - the permanent product name is «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽» across MAX, site, offer, payment terms, Receipt and payment documentation;
 - Receipt contains one item, quantity 1, cost 49.00 and sum 49.00, all derived from integer `price_minor=4900`; Receipt participates in the Password1 signature;
-- Pixora really uses SHA-256; the Robokassa cabinet was observed on MD5, so sandbox payment is blocked until the owner deliberately aligns the cabinet and test passwords;
+- Pixora is hard-locked to SHA-256: configuration rejects MD5/SHA-512 and the provider calls SHA-256 directly; the Robokassa cabinet was observed on MD5, so sandbox payment is blocked until the owner deliberately aligns the cabinet and test passwords;
 - Nginx and the loopback listener publish only a fail-closed ResultURL transport: GET 405, disabled POST 503, no ACK, state mutation or package grant;
 - business payment processing, refunds, pilot and public handlers remain off; mode remains sandbox and observe-only remains true;
 - Робочеки СМЗ are owner-confirmed active/FNS-approved with automatic receipt transmission, but exact `payment_method` and `payment_object` are not confirmed by official documentation and remain required empty gates;
