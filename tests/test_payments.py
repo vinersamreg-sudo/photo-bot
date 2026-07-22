@@ -1,11 +1,12 @@
 import hashlib
+import json
 import sqlite3
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 from PIL import Image
@@ -23,7 +24,11 @@ from app.payments import (
     build_payment_service,
 )
 from app.payment_webhook import PaymentWebhookServer
-from app.robokassa import RobokassaProvider, RobokassaRefundResult
+from app.robokassa import (
+    RobokassaPaymentRequest,
+    RobokassaProvider,
+    RobokassaRefundResult,
+)
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
 
@@ -51,12 +56,15 @@ class PaymentTests(TestCase):
             demo_min_request_interval_seconds=1,
             payments_enabled=True,
             payment_provider="robokassa",
+            payment_webhook_listener_enabled=True,
             payment_webhook_enabled=True,
             payment_result_url="https://example.test/payments/robokassa/result",
             robokassa_merchant_login="pixora-test",
             robokassa_password1="password-one",
             robokassa_password2="password-two",
             robokassa_password3="password-three",
+            payment_receipt_payment_method="full_payment",
+            payment_receipt_payment_object="service",
         )
         self.clock = Clock()
         self.database = Database(self.settings.database_path)
@@ -108,6 +116,30 @@ class PaymentTests(TestCase):
         self.assertEqual(query["IsTest"], ["1"])
         self.assertEqual(query["Shp_order"], [order.public_token])
         self.assertIn("Receipt", query)
+        receipt_text = unquote(query["Receipt"][0])
+        self.assertIn('"cost":49.00', receipt_text)
+        self.assertIn('"sum":49.00', receipt_text)
+        self.assertNotIn("149", receipt_text)
+        receipt = json.loads(receipt_text)
+        self.assertEqual(receipt, {
+            "items": [{
+                "name": "Пакет Pixora: 2 варианта обработки и 1 оригинал",
+                "quantity": 1,
+                "cost": 49.0,
+                "sum": 49.0,
+                "tax": "none",
+                "payment_method": "full_payment",
+                "payment_object": "service",
+            }]
+        })
+        expected_signature_base = (
+            f"pixora-test:49.00:{order.provider_invoice_id}:"
+            f"{query['Receipt'][0]}:password-one:Shp_order={order.public_token}"
+        )
+        self.assertEqual(
+            query["SignatureValue"][0],
+            hashlib.sha256(expected_signature_base.encode("utf-8")).hexdigest().upper(),
+        )
         self.assertNotIn("password-one", order.payment_url)
         again = self.service.create_order(self.user_id, self.versions[0]["id"], "event-2")
         self.assertEqual(again.id, order.id)
@@ -512,6 +544,75 @@ class PaymentTests(TestCase):
         self.assertEqual(oversize.status_code, 413)
         malformed = httpx.post(url, content=b"OutSum=49.00&bad=\xff")
         self.assertEqual(malformed.status_code, 400)
+
+    def test_http_webhook_transport_is_fail_closed_when_callbacks_are_disabled(self) -> None:
+        order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-off")
+        server = PaymentWebhookServer(
+            self.service,
+            "127.0.0.1",
+            0,
+            "/payments/robokassa/result",
+            accepting_callbacks=False,
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        url = f"http://127.0.0.1:{server.bound_port}/payments/robokassa/result"
+        response = httpx.post(url, data=self.signed_callback(order))
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers.get("retry-after"), "300")
+        self.assertEqual(httpx.get(url).status_code, 405)
+        with self.database.read() as connection:
+            status = connection.execute(
+                "SELECT status FROM payment_orders WHERE id=?", (order.id,)
+            ).fetchone()[0]
+            webhooks = connection.execute(
+                "SELECT COUNT(*) FROM payment_webhooks"
+            ).fetchone()[0]
+        self.assertEqual(status, "pending")
+        self.assertEqual(webhooks, 0)
+
+    def test_browser_success_and_fail_redirects_never_confirm_payment(self) -> None:
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "event-browser-redirect"
+        )
+        server = PaymentWebhookServer(
+            self.service, "127.0.0.1", 0, "/payments/robokassa/result"
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        base = f"http://127.0.0.1:{server.bound_port}"
+        self.assertEqual(
+            httpx.get(f"{base}/legal/payment-refund.html?payment=success").status_code,
+            404,
+        )
+        self.assertEqual(
+            httpx.get(f"{base}/legal/payment-refund.html?payment=failed").status_code,
+            404,
+        )
+        with self.database.read() as connection:
+            status = connection.execute(
+                "SELECT status FROM payment_orders WHERE id=?", (order.id,)
+            ).fetchone()[0]
+            webhooks = connection.execute(
+                "SELECT COUNT(*) FROM payment_webhooks"
+            ).fetchone()[0]
+        self.assertEqual(status, "pending")
+        self.assertEqual(webhooks, 0)
+
+    def test_receipt_requires_explicit_confirmed_fiscal_fields(self) -> None:
+        request = RobokassaPaymentRequest(
+            invoice_id=1,
+            amount_minor=4900,
+            description="description",
+            public_token="token",
+            expires_at=self.clock(),
+            receipt_name="Пакет Pixora: 2 варианта обработки и 1 оригинал",
+            receipt_tax="none",
+            receipt_payment_method="",
+            receipt_payment_object="",
+        )
+        with self.assertRaisesRegex(ValueError, "payment method"):
+            RobokassaProvider._receipt(request)
 
 
 class RobokassaSignatureTests(TestCase):

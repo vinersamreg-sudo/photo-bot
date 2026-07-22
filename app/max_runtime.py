@@ -71,7 +71,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
         application, client, store = build_max_application(settings, client)
     try:
         with SingleInstanceLock(settings.max_poll_lock_path):
-            if settings.payments_enabled and settings.payment_webhook_enabled:
+            if settings.payment_webhook_listener_enabled:
                 payment_service = (
                     application.payments
                     if application is not None
@@ -82,6 +82,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                     settings.payment_webhook_host,
                     settings.payment_webhook_port,
                     settings.payment_webhook_path,
+                    accepting_callbacks=settings.payment_webhook_enabled,
                     on_paid=(
                         application.notify_continuation_pack_paid
                         if application is not None else None

@@ -1,5 +1,15 @@
 # Current State
 
+## 22.07.2026 — Robokassa ResultURL and Receipt hardening
+
+- the permanent product name is «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽» across MAX, site, offer, payment terms, Receipt and payment documentation;
+- Receipt contains one item, quantity 1, cost 49.00 and sum 49.00, all derived from integer `price_minor=4900`; Receipt participates in the Password1 signature;
+- Pixora really uses SHA-256; the Robokassa cabinet was observed on MD5, so sandbox payment is blocked until the owner deliberately aligns the cabinet and test passwords;
+- Nginx and the loopback listener publish only a fail-closed ResultURL transport: GET 405, disabled POST 503, no ACK, state mutation or package grant;
+- business payment processing, refunds, pilot and public handlers remain off; mode remains sandbox and observe-only remains true;
+- Робочеки СМЗ are owner-confirmed active/FNS-approved with automatic receipt transmission, but exact `payment_method` and `payment_object` are not confirmed by official documentation and remain required empty gates;
+- no Robokassa cabinet setting, sandbox payment, real payment, refund or OpenAI image request was performed in this audit.
+
 ## 21.07.2026 — Pixora Content Studio v1 implemented, dry-run only
 
 - добавлен независимый операторский pipeline DemoAsset → Transformation → Result →
@@ -34,7 +44,7 @@
 ## 20.07.2026 — payment/pilot readiness hardening
 
 - Robokassa moderation package is complete and public site/legal routes were rechecked; standard declared SVG favicon works, while the optional `/favicon.ico` fallback remains a non-blocking 404.
-- ResultURL is POST-only with 64 KiB and strict UTF-8 limits; public reverse proxy remains intentionally inactive.
+- ResultURL is POST-only with 64 KiB and strict UTF-8 limits; its public transport is fail-closed while business callbacks remain disabled.
 - Added privacy-safe payment show/reconciliation, dry-run-first resend/retry/refund commands, Robokassa health and cohort-scoped pilot report.
 - `launch-status` now separates site, sandbox, production payment, owner E2E, pilot 5 and always-false public readiness.
 - Sandbox, refunds and real payment are still unverified external gates; all commercial flags, handlers and pilot remain off.

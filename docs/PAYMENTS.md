@@ -2,11 +2,11 @@
 
 ## Permanent v1 product
 
-The only v1 payment product is `continuation_pack_2_plus_1` / Pixora Continuation Pack. User copy: «Ещё 2 варианта + 1 оригинал». Price: 49 RUB, no subscription or automatic renewal. A verified payment atomically grants two generation credits and one independent original entitlement. It never auto-unlocks a result.
+The only v1 payment product is `continuation_pack_2_plus_1` / Pixora Continuation Pack. Permanent user, site, offer and receipt copy: «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽». There is no subscription or automatic renewal. A verified payment atomically grants two generation credits and one independent original entitlement. It never auto-unlocks a result.
 
 The user may spend generation credits on Correction, Repeat, a ready scenario or a different photograph. The entitlement may later unlock one owned, existing, non-deleted GalleryVersion with a private original, whether created before or after purchase. Repeat purchases stack.
 
-Real payments are fail-closed. Every deploy sets `PAYMENTS_ENABLED=false`, `PAYMENT_PROVIDER=disabled`, `PAYMENT_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, `ROBOKASSA_MODE=sandbox` and `ROBOKASSA_PRODUCTION_APPROVED=false`. Enabling production requires a separate owner decision, credentials, HTTPS ResultURL, sandbox evidence, legal/fiscal review and a controlled real-payment smoke.
+Real payments are fail-closed. Every deploy sets `PAYMENTS_ENABLED=false`, `PAYMENT_PROVIDER=disabled`, `PAYMENT_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, `ROBOKASSA_MODE=sandbox` and `ROBOKASSA_PRODUCTION_APPROVED=false`. The independently controlled `PAYMENT_WEBHOOK_LISTENER_ENABLED=true` publishes only a loopback-backed readiness transport returning 503 while business callbacks are off. Enabling production requires a separate owner decision, credentials, HTTPS ResultURL, sandbox evidence, legal/fiscal review and a controlled real-payment smoke.
 
 ## Accounting boundaries
 

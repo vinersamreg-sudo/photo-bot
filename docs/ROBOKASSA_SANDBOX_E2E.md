@@ -2,6 +2,8 @@
 
 Do not run this procedure without explicit owner approval and Robokassa test credentials. Snapshot DB and `.env`, keep a second SSH session open, restrict MAX to the owner, and cap the test to one 49 ₽ sandbox invoice. No real money is expected.
 
+Before requesting that approval, all of these must be true: cabinet hash is SHA-256; test Password #1 and Password #2 are present without disclosure; `PAYMENT_RECEIPT_PAYMENT_METHOD` and `PAYMENT_RECEIPT_PAYMENT_OBJECT` are confirmed by Robokassa for Робочеки СМЗ; public GET is 405; disabled POST is 503; payments, refunds, pilot and public handlers remain off. A 503 readiness probe is not payment E2E evidence.
+
 Common checks:
 
 ```bash
@@ -15,7 +17,7 @@ cd /opt/photo-bot
 |---|---|---|---|
 | 1 | Owner receives a demo: «Готово — демо…» | succeeded version, demo quota decremented, `result_delivered` | Gallery shows exact version; fail if no original+preview |
 | 2 | Owner taps «Получить оригинал» | `unlock_clicked`; no unlock yet | selected version ID is fixed; fail if sibling unlocks |
-| 3 | Bot offers 49 ₽ | new pending order/intent/attempt/receipt, audit `order_created` | `payment-show`; amount exactly 49.00 RUB |
+| 3 | Bot offers «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽» | new pending order/intent/attempt/receipt, audit `order_created` | `payment-show`; name exact, quantity 1, cost/sum exactly 49.00 RUB and Receipt total equals OutSum |
 | 4 | Bot sends sandbox payment URL | provider link contains `IsTest=1`, masked URL never logged | `payment-history`; fail if production URL lacks sandbox marker |
 | 5 | Owner completes test payment | browser redirect may appear; DB may still be pending | do not treat browser page as success |
 | 6 | Robokassa POSTs ResultURL | one callback event received | webhook log has request ID only; fail on GET acceptance |
@@ -40,4 +42,4 @@ After all 18 PASS results, create `data/robokassa_sandbox_evidence.json` on prod
 {"verified": true, "mode": "sandbox", "verified_at": "<UTC>", "invoice_ref": "masked", "operator": "owner"}
 ```
 
-Never include user ID, secrets, signed URL, full invoice, card/test-card data or callback body. On any FAIL: immediately restore `MAX_POLL_OBSERVE_ONLY=true`, `PAYMENTS_ENABLED=false`, `ROBOKASSA_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, stop and investigate.
+Never include user ID, secrets, signed URL, full invoice, card/test-card data or callback body. On any FAIL: immediately restore `MAX_POLL_OBSERVE_ONLY=true`, `PAYMENTS_ENABLED=false`, `PAYMENT_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, stop and investigate.

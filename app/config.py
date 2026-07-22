@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
+from app.commerce import RECEIPT_ITEM_NAME
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -59,6 +61,7 @@ class Settings:
     payment_provider: str = "disabled"
     payment_currency: str = "RUB"
     payment_order_ttl_minutes: int = 30
+    payment_webhook_listener_enabled: bool = False
     payment_webhook_enabled: bool = False
     payment_webhook_host: str = "127.0.0.1"
     payment_webhook_port: int = 8091
@@ -79,7 +82,9 @@ class Settings:
     payment_success_url: str = ""
     payment_fail_url: str = ""
     payment_receipt_tax: str = "none"
-    payment_receipt_item_name: str = "Пакет Pixora: 2 варианта и 1 оригинал"
+    payment_receipt_item_name: str = RECEIPT_ITEM_NAME
+    payment_receipt_payment_method: str = ""
+    payment_receipt_payment_object: str = ""
     demo_retention_days: int = 30
     paid_retention_days: int = 180
     trash_retention_days: int = 30
@@ -334,6 +339,9 @@ def load_settings(
     if payment_webhook_port > 65535:
         raise ValueError("PAYMENT_WEBHOOK_PORT must be at most 65535")
     payments_enabled = _boolean(values, "PAYMENTS_ENABLED", False)
+    webhook_listener_enabled = _boolean(
+        values, "PAYMENT_WEBHOOK_LISTENER_ENABLED", False
+    )
     webhook_enabled = _boolean(values, "PAYMENT_WEBHOOK_ENABLED", False)
     refunds_enabled = _boolean(values, "PAYMENT_REFUNDS_ENABLED", False)
     production_approved = _boolean(values, "ROBOKASSA_PRODUCTION_APPROVED", False)
@@ -343,6 +351,47 @@ def load_settings(
         raise ValueError("Production Robokassa requires explicit ROBOKASSA_PRODUCTION_APPROVED=true")
     if refunds_enabled and not payments_enabled:
         raise ValueError("Refunds cannot be enabled while payments are disabled")
+    if webhook_enabled and not webhook_listener_enabled:
+        raise ValueError(
+            "PAYMENT_WEBHOOK_ENABLED requires PAYMENT_WEBHOOK_LISTENER_ENABLED=true"
+        )
+    if webhook_enabled and not payments_enabled:
+        raise ValueError("PAYMENT_WEBHOOK_ENABLED requires PAYMENTS_ENABLED=true")
+    receipt_item_name = values.get(
+        "PAYMENT_RECEIPT_ITEM_NAME", RECEIPT_ITEM_NAME
+    ).strip() or RECEIPT_ITEM_NAME
+    if receipt_item_name != RECEIPT_ITEM_NAME:
+        raise ValueError(
+            "PAYMENT_RECEIPT_ITEM_NAME must match the permanent Pixora package"
+        )
+    receipt_tax = values.get("PAYMENT_RECEIPT_TAX", "none").strip() or "none"
+    allowed_taxes = {
+        "none", "vat0", "vat5", "vat7", "vat10", "vat20", "vat22",
+        "vat105", "vat107", "vat110", "vat120", "vat122",
+    }
+    if receipt_tax not in allowed_taxes:
+        raise ValueError("PAYMENT_RECEIPT_TAX is not supported by Robokassa")
+    receipt_payment_method = values.get(
+        "PAYMENT_RECEIPT_PAYMENT_METHOD", ""
+    ).strip()
+    allowed_payment_methods = {
+        "full_prepayment", "prepayment", "advance", "full_payment",
+        "partial_payment", "credit", "credit_payment",
+    }
+    if receipt_payment_method and receipt_payment_method not in allowed_payment_methods:
+        raise ValueError("PAYMENT_RECEIPT_PAYMENT_METHOD is not supported by Robokassa")
+    receipt_payment_object = values.get(
+        "PAYMENT_RECEIPT_PAYMENT_OBJECT", ""
+    ).strip()
+    allowed_payment_objects = {
+        "commodity", "excise", "job", "service", "gambling_bet",
+        "gambling_prize", "lottery", "lottery_prize",
+        "intellectual_activity", "payment", "agent_commission", "composite",
+        "resort_fee", "another", "property_right", "non-operating_gain",
+        "insurance_premium", "sales_tax", "tovar_mark",
+    }
+    if receipt_payment_object and receipt_payment_object not in allowed_payment_objects:
+        raise ValueError("PAYMENT_RECEIPT_PAYMENT_OBJECT is not supported by Robokassa")
     if payments_enabled:
         required = {
             "ROBOKASSA_MERCHANT_LOGIN": values.get("ROBOKASSA_MERCHANT_LOGIN", "").strip(),
@@ -355,6 +404,10 @@ def load_settings(
             raise ValueError("Enabled payments are missing: " + ", ".join(missing))
         if not webhook_enabled:
             raise ValueError("Enabled payments require PAYMENT_WEBHOOK_ENABLED=true")
+        if not receipt_payment_method or not receipt_payment_object:
+            raise ValueError(
+                "Enabled payments require confirmed Receipt payment method and object"
+            )
         if not required["PAYMENT_RESULT_URL"].startswith("https://"):
             raise ValueError("PAYMENT_RESULT_URL must use HTTPS")
         payment_provider_url = values.get(
@@ -369,6 +422,11 @@ def load_settings(
             not in {"127.0.0.1", "::1", "localhost"}
         ):
             raise ValueError("Production payment webhook must bind to loopback")
+    if app_env == "production" and webhook_listener_enabled and (
+        values.get("PAYMENT_WEBHOOK_HOST", "127.0.0.1").strip()
+        not in {"127.0.0.1", "::1", "localhost"}
+    ):
+        raise ValueError("Production payment webhook listener must bind to loopback")
     success_url = values.get("PAYMENT_SUCCESS_URL", "").strip()
     fail_url = values.get("PAYMENT_FAIL_URL", "").strip()
     if bool(success_url) != bool(fail_url):
@@ -446,6 +504,7 @@ def load_settings(
         payment_provider=payment_provider,
         payment_currency=payment_currency,
         payment_order_ttl_minutes=_positive_int(values, "PAYMENT_ORDER_TTL_MINUTES", 30),
+        payment_webhook_listener_enabled=webhook_listener_enabled,
         payment_webhook_enabled=webhook_enabled,
         payment_webhook_host=(
             values.get("PAYMENT_WEBHOOK_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -476,14 +535,10 @@ def load_settings(
         payment_result_url=values.get("PAYMENT_RESULT_URL", "").strip(),
         payment_success_url=success_url,
         payment_fail_url=fail_url,
-        payment_receipt_tax=values.get("PAYMENT_RECEIPT_TAX", "none").strip() or "none",
-        payment_receipt_item_name=(
-            values.get(
-                "PAYMENT_RECEIPT_ITEM_NAME",
-                "Пакет Pixora: 2 варианта и 1 оригинал",
-            ).strip()
-            or "Пакет Pixora: 2 варианта и 1 оригинал"
-        ),
+        payment_receipt_tax=receipt_tax,
+        payment_receipt_item_name=receipt_item_name,
+        payment_receipt_payment_method=receipt_payment_method,
+        payment_receipt_payment_object=receipt_payment_object,
         demo_retention_days=_positive_int(values, "DEMO_RETENTION_DAYS", 30),
         paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),
         trash_retention_days=_positive_int(values, "TRASH_RETENTION_DAYS", 30),

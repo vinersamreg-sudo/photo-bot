@@ -286,7 +286,7 @@ class MaxApplication:
                 "Бесплатные варианты закончились.",
                 (
                     Button("⬇ Получить оригинал", "result:unlock"),
-                    Button("Ещё 2 варианта + 1 оригинал — 49 ₽", "package:buy"),
+                    Button("Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽", "package:buy"),
                     Button("📂 Мои работы", "studio:works"),
                 ),
             )
@@ -992,11 +992,11 @@ class MaxApplication:
     def _offer_continuation_pack(self, platform_user_id: str) -> None:
         text = (
             "Чтобы продолжить, нужен пакет:\n\n"
-            "Ещё 2 варианта + 1 оригинал — 49 ₽.\n\n"
+            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽.\n\n"
             "Оригинал можно выбрать позже в любой своей работе."
         )
         buttons = (
-            Button("Ещё 2 варианта + 1 оригинал — 49 ₽", "package:buy"),
+            Button("Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽", "package:buy"),
             Button("📂 Мои работы", "studio:works"),
         )
         self.transport.send_message(platform_user_id, text, buttons)
@@ -1012,7 +1012,7 @@ class MaxApplication:
         if not self.settings.payments_enabled:
             self.transport.send_message(
                 event.user_id,
-                "Пакет «Ещё 2 варианта + 1 оригинал» стоит 49 ₽.\n\n"
+                "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽.\n\n"
                 "Оплата пока недоступна — идёт закрытое тестирование.",
                 (Button("📂 Мои работы", "studio:works"),),
             )
@@ -1046,7 +1046,7 @@ class MaxApplication:
             return
         self.transport.send_message(
             event.user_id,
-            "Ещё 2 варианта + 1 оригинал — 49 ₽.\n\n"
+            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽.\n\n"
             "После оплаты вы сами выберете, какой оригинал получить.",
             (Button("Оплатить 49 ₽ в Robokassa", order.payment_url or "package:buy"),),
         )

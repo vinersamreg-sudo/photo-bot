@@ -46,6 +46,7 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.max_poll_max_stale_seconds, 90)
         self.assertTrue(settings.max_poll_observe_only)
         self.assertEqual(settings.max_owner_user_ids, ("owner-1", "owner-2"))
+        self.assertFalse(settings.payment_webhook_listener_enabled)
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]
@@ -58,8 +59,11 @@ class SettingsTests(TestCase):
             "OPENAI_IMAGE_MODEL": "gpt-image-2",
             "PAYMENTS_ENABLED": "true",
             "PAYMENT_PROVIDER": "robokassa",
+            "PAYMENT_WEBHOOK_LISTENER_ENABLED": "true",
             "PAYMENT_WEBHOOK_ENABLED": "true",
             "PAYMENT_RESULT_URL": "https://pixora.example/payments/robokassa/result",
+            "PAYMENT_RECEIPT_PAYMENT_METHOD": "full_payment",
+            "PAYMENT_RECEIPT_PAYMENT_OBJECT": "service",
             "ROBOKASSA_MERCHANT_LOGIN": "shop",
             "ROBOKASSA_PASSWORD1": "one",
             "ROBOKASSA_PASSWORD2": "two",
@@ -86,6 +90,23 @@ class SettingsTests(TestCase):
     def test_refunds_require_payments(self) -> None:
         with self.assertRaisesRegex(ValueError, "while payments are disabled"):
             load_settings(environ={"PAYMENT_REFUNDS_ENABLED": "true"})
+
+    def test_business_webhook_requires_listener(self) -> None:
+        with self.assertRaisesRegex(ValueError, "LISTENER"):
+            load_settings(environ={"PAYMENT_WEBHOOK_ENABLED": "true"})
+        with self.assertRaisesRegex(ValueError, "PAYMENTS_ENABLED"):
+            load_settings(environ={
+                "PAYMENT_WEBHOOK_LISTENER_ENABLED": "true",
+                "PAYMENT_WEBHOOK_ENABLED": "true",
+            })
+
+    def test_permanent_receipt_product_and_fiscal_fields_are_validated(self) -> None:
+        with self.assertRaisesRegex(ValueError, "permanent Pixora package"):
+            load_settings(environ={"PAYMENT_RECEIPT_ITEM_NAME": "Другая услуга"})
+        with self.assertRaisesRegex(ValueError, "PAYMENT_RECEIPT_PAYMENT_METHOD"):
+            load_settings(environ={"PAYMENT_RECEIPT_PAYMENT_METHOD": "unknown"})
+        with self.assertRaisesRegex(ValueError, "PAYMENT_RECEIPT_PAYMENT_OBJECT"):
+            load_settings(environ={"PAYMENT_RECEIPT_PAYMENT_OBJECT": "unknown"})
 
     def test_robokassa_commission_cannot_be_negative(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be non-negative"):

@@ -1,5 +1,14 @@
 # Changelog
 
+## 22.07.2026 — Robokassa fail-closed ResultURL transport
+
+- added a separately gated loopback ResultURL listener and exact Nginx proxy; GET returns 405 and disabled POST returns 503 without state mutation or ACK;
+- aligned MAX, site, offer, payment terms and Receipt to «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽»;
+- removed binary float from Receipt money and added exact quantity/cost/sum/signature regression coverage;
+- made confirmed Receipt payment method/object mandatory before payments can enable;
+- documented that Pixora uses SHA-256 while the cabinet was observed on MD5 and that test credentials are not configured in GitHub production secrets;
+- payments, business webhook, refunds, pilot and public handlers remained disabled; no payment or OpenAI image request was executed.
+
 ## 21.07.2026 — Pixora Content Studio v1
 
 - introduced an independent, platform-neutral demonstration content domain with a

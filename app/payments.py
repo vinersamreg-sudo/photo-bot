@@ -419,7 +419,9 @@ class PaymentService:
                         (
                             receipt_id, order_id, "payment",
                             self.settings.payment_receipt_item_name, "1", PRICE_MINOR,
-                            self.settings.payment_receipt_tax, "full_payment", "service",
+                            self.settings.payment_receipt_tax,
+                            self.settings.payment_receipt_payment_method,
+                            self.settings.payment_receipt_payment_object,
                             "prepared", _iso(now), _iso(now),
                         ),
                     )
@@ -470,6 +472,8 @@ class PaymentService:
             expires_at=order.expires_at,
             receipt_name=self.settings.payment_receipt_item_name,
             receipt_tax=self.settings.payment_receipt_tax,
+            receipt_payment_method=self.settings.payment_receipt_payment_method,
+            receipt_payment_object=self.settings.payment_receipt_payment_object,
         )
         payment_url = provider.payment_link(request)
         attempt_key = hashlib.sha256(

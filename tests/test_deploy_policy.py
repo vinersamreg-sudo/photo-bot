@@ -111,6 +111,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("ensure_env TRASH_RETENTION_DAYS 30", self.workflow)
         self.assertIn("set_env PAYMENTS_ENABLED false", self.workflow)
         self.assertIn("set_env PAYMENT_PROVIDER disabled", self.workflow)
+        self.assertIn("set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true", self.workflow)
         self.assertIn("set_env PAYMENT_WEBHOOK_ENABLED false", self.workflow)
         self.assertIn("set_env PAYMENT_REFUNDS_ENABLED false", self.workflow)
         self.assertIn("set_env CONTENT_STUDIO_PUBLISHING_ENABLED false", self.workflow)
@@ -118,6 +119,19 @@ class DeployPolicyTests(TestCase):
         self.assertIn('status["published_posts"] == 0', self.workflow)
         self.assertIn("set_env ROBOKASSA_MODE sandbox", self.workflow)
         self.assertIn("set_env ROBOKASSA_PRODUCTION_APPROVED false", self.workflow)
+        self.assertIn(
+            "set_env PAYMENT_RESULT_URL https://pixoraai.ru/payments/robokassa/result",
+            self.workflow,
+        )
+        self.assertIn(
+            "set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'",
+            self.workflow,
+        )
+        self.assertIn("set_env PAYMENT_RECEIPT_PAYMENT_METHOD ''", self.workflow)
+        self.assertIn("set_env PAYMENT_RECEIPT_PAYMENT_OBJECT ''", self.workflow)
+        self.assertIn("Publish and verify fail-closed ResultURL transport", self.workflow)
+        self.assertIn('test "$GET_STATUS" = 405', self.workflow)
+        self.assertIn('test "$POST_STATUS" = 503', self.workflow)
 
     def test_transfers_openai_key_via_stdin_without_external_validation(self) -> None:
         self.assertIn("Confirm OpenAI credential is configured without an API request", self.workflow)

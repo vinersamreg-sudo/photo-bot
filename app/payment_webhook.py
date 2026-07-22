@@ -25,12 +25,14 @@ class PaymentWebhookServer:
         port: int,
         path: str,
         *,
+        accepting_callbacks: bool = True,
         on_paid: Callable[[str], object] | None = None,
     ) -> None:
         self.service = service
         self.host = host
         self.port = port
         self.path = path
+        self.accepting_callbacks = accepting_callbacks
         self.on_paid = on_paid
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -71,6 +73,16 @@ class PaymentWebhookServer:
                     body = self.rfile.read(length).decode("utf-8", errors="strict")
                 except UnicodeDecodeError:
                     self.send_error(400)
+                    return
+                if not owner.accepting_callbacks:
+                    # Keep the public transport endpoint observable before the
+                    # commercial gate opens, but never acknowledge or process a
+                    # callback while the business webhook is disabled.
+                    self.send_response(503)
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Retry-After", "300")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
                     return
                 values.update(dict(parse_qsl(body, keep_blank_values=True)))
                 try:

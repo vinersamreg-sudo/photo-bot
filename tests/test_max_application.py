@@ -389,7 +389,10 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(len(self.transport.messages), message_count)
 
         unlock_event = self.callback("result:unlock")
-        self.assertIn("Ещё 2 варианта + 1 оригинал — 49 ₽", self.transport.messages[-1][1])
+        self.assertIn(
+            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽",
+            self.transport.messages[-1][1],
+        )
         self.assertNotIn(str(attempt["original_result_path"]), self.transport.messages[-1][1])
         callback_message_count = len(self.transport.messages)
         self.assertFalse(self.app.handle(unlock_event))
@@ -401,11 +404,14 @@ class MaxApplicationTests(TestCase):
             self.settings,
             payments_enabled=True,
             payment_provider="robokassa",
+            payment_webhook_listener_enabled=True,
             payment_webhook_enabled=True,
             payment_result_url="https://example.test/payments/robokassa/result",
             robokassa_merchant_login="pixora-test",
             robokassa_password1="one",
             robokassa_password2="two",
+            payment_receipt_payment_method="full_payment",
+            payment_receipt_payment_object="service",
         )
         payments = build_payment_service(
             paid_settings, self.database, clock=self.clock

@@ -177,7 +177,7 @@ def result_actions(remaining: int) -> View:
         text = "Бесплатные варианты закончились."
         buttons = (
             Button("⬇ Получить оригинал", "result:unlock"),
-            Button("Ещё 2 варианта + 1 оригинал — 49 ₽", "package:buy"),
+            Button("Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽", "package:buy"),
             Button("📂 Мои работы", "studio:works"),
             Button("Начать заново", "new:source"),
         )

@@ -1,6 +1,6 @@
 # Payment go-live audit
 
-Verdict: architecture is materially ready for an owner-only sandbox, but **not ready for production money**. The blocking gates are public ResultURL activation, approved/final cabinet settings, sandbox evidence, fiscal settings, real owner payment, delivery/restart verification, refund and reconciliation verification.
+Verdict: architecture and fail-closed ResultURL transport are materially ready for an owner-only sandbox, but **not ready to run that sandbox payment or accept production money**. The blocking gates are SHA-256 alignment in the cabinet, test credentials, confirmed Робочеки СМЗ `payment_method`/`payment_object`, sandbox evidence, real owner payment, delivery/restart verification, refund and reconciliation verification.
 
 Legend: `PASS` verified by code/tests/read-only production evidence; `SANDBOX TEST REQUIRED`; `PRODUCTION TEST REQUIRED`; `OWNER ACTION`; `BLOCKED`.
 
@@ -24,10 +24,12 @@ Legend: `PASS` verified by code/tests/read-only production evidence; `SANDBOX TE
 | Local reconciliation | PASS | `payment-reconcile` checks ownership/version/receipt/unlock/file/audit |
 | Provider-vs-local reconciliation | OWNER ACTION | compare masked invoice/status with cabinet; no provider status API wired |
 | Webhook HTTP hardening | PASS | POST only, 64 KiB, strict UTF-8, wrong path/method rejected |
-| Public HTTPS ResultURL | BLOCKED | Nginx proxy intentionally not active while webhook flag is false |
-| Sandbox credentials and cabinet methods | OWNER ACTION | enter only after moderation approval/test credentials |
+| Public HTTPS ResultURL transport | DEPLOY REQUIRED | Nginx and loopback listener are implemented; disabled POST must be verified as 503 in production before any cabinet edit |
+| Hash alignment | OWNER ACTION | code uses SHA-256; cabinet was observed on MD5; no cabinet change made |
+| Sandbox credentials and cabinet methods | OWNER ACTION | GitHub production environment has no Robokassa secrets; exact test Password1/2 presence in production must be verified without disclosure |
 | Owner sandbox E2E | SANDBOX TEST REQUIRED | execute the 18-step runbook with explicit owner approval |
-| Fiscalization/receipt tax | OWNER ACTION | obtain written value from Robokassa/accountant |
+| Receipt name/amount/tax | PASS | exact package, quantity 1, integer minor units 4900 rendered as 49.00, `tax=none` for without VAT |
+| Fiscal payment method/object | OWNER ACTION | code intentionally requires non-empty confirmed values before payments can enable |
 | Production approval | BLOCKED | `ROBOKASSA_PRODUCTION_APPROVED=false` by design |
 | First real owner payment | PRODUCTION TEST REQUIRED | only after all previous gates and separate approval |
 | Production refund/reconciliation | PRODUCTION TEST REQUIRED | controlled owner transaction only |

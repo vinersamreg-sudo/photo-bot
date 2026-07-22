@@ -93,7 +93,10 @@ class PixoraSiteTests(unittest.TestCase):
     # 05
     def test_price_is_49_rubles_for_continuation_pack(self) -> None:
         self.assertIn("49 ₽", self.html)
-        self.assertIn("Ещё 2 варианта + 1 оригинал", self.html)
+        self.assertIn(
+            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽",
+            self.html,
+        )
         self.assertIn("право выбрать 1 оригинал", self.html)
         forbidden_price = f"{3 * 50 - 1} ₽"
         self.assertNotIn(forbidden_price, self.html)
@@ -346,7 +349,14 @@ class PixoraSiteTests(unittest.TestCase):
     def test_nginx_serves_only_site_tree(self) -> None:
         nginx = (SITE / "nginx" / "pixoraai.ru.conf").read_text(encoding="utf-8")
         self.assertIn("root /opt/pixora-site/current", nginx)
-        self.assertNotIn("proxy_pass", nginx)
+        self.assertEqual(nginx.count("proxy_pass"), 1)
+        self.assertIn("location = /payments/robokassa/result", nginx)
+        self.assertIn(
+            "proxy_pass http://127.0.0.1:8091/payments/robokassa/result",
+            nginx,
+        )
+        self.assertIn("client_max_body_size 64k", nginx)
+        self.assertIn("access_log off", nginx)
         self.assertNotIn("/opt/photo-bot", nginx)
 
     # 45

@@ -10,7 +10,7 @@
 | Password #1 | секрет для подписи исходящей формы; только `.env` |
 | Password #2 | секрет проверки ResultURL; только `.env` |
 | Password #3 | секрет Refund API; обязателен до тестирования возврата |
-| Алгоритм | SHA-256 в кабинете и `ROBOKASSA_HASH_ALGORITHM=sha256` |
+| Алгоритм | Pixora реально использует SHA-256 (`ROBOKASSA_HASH_ALGORITHM=sha256`). В кабинете сейчас выбран MD5: это блокирующее расхождение, но в рамках аудита кабинет не изменяется |
 | Encoding | UTF-8 |
 | ResultURL | `https://pixoraai.ru/payments/robokassa/result` |
 | ResultURL method | POST only |
@@ -25,37 +25,37 @@
 
 ## Чек и предмет расчёта
 
-Целевой receipt одной позиции:
+Целевой Receipt одной позиции:
 
-- name: `Оригинал выбранной версии Pixora`;
+- name: `Пакет Pixora: 2 варианта обработки и 1 оригинал`;
 - quantity: `1`;
+- cost: `49.00`;
 - sum: `49.00`;
-- payment_method: `full_payment`;
-- payment_object: `service`;
-- tax: значение `PAYMENT_RECEIPT_TAX`, подтверждённое владельцем и Robokassa.
+- payment_method: пока пусто; требуется подтверждение Robokassa для Робочеков СМЗ;
+- payment_object: пока пусто; требуется подтверждение Robokassa для Робочеков СМЗ;
+- tax: `none` (документированное Robokassa значение «без НДС», соответствующее подтверждённому владельцем НПД).
 
-Нельзя угадывать tax system/receipt tax. До sandbox E2E владелец должен письменно подтвердить, кто формирует чек для плательщика НПД, нужна ли облачная касса и какое значение `tax` принимает магазин. Текущая реализация умеет передавать receipt, но бизнес-настройка пока `OWNER ACTION`.
+Нельзя угадывать способ и предмет расчёта. Конфигурация Pixora не разрешает включить платежи, пока `PAYMENT_RECEIPT_PAYMENT_METHOD` и `PAYMENT_RECEIPT_PAYMENT_OBJECT` пусты. Робочеки СМЗ подтверждены владельцем как активные, одобренные ФНС и автоматически передающие чеки; внешний sandbox E2E чека ещё не выполнен.
 
-## Неактивируемый Nginx-фрагмент
+## Публичный fail-closed Nginx transport
 
-Сначала пройти code review и unit tests. Только затем отдельным deploy:
+Прокси публикуется отдельным deploy без включения платежей:
 
 ```nginx
-limit_req_zone $binary_remote_addr zone=robokassa_result:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=robokassa_result:10m rate=30r/m;
 
 location = /payments/robokassa/result {
-    limit_except POST { deny all; }
     client_max_body_size 64k;
-    limit_req zone=robokassa_result burst=10 nodelay;
+    limit_req zone=robokassa_result burst=20 nodelay;
+    access_log off;
     proxy_pass http://127.0.0.1:8091/payments/robokassa/result;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Request-ID $request_id;
-    proxy_pass_request_headers on;
 }
 ```
 
-Ограничения: backend слушает только loopback; autoindex off; остальные backend endpoints не публикуются; query/body/signature не добавляются в access log; healthcheck остаётся отдельным локальным endpoint. Приложение принимает только POST, тело до 64 KiB, строгий UTF-8 и отвечает `OK<InvId>` только после commit.
+Ограничения: backend слушает только loopback; autoindex off; остальные backend endpoints не публикуются; query/body/signature не добавляются в access log; healthcheck остаётся отдельным локальным endpoint. Пока `PAYMENT_WEBHOOK_ENABLED=false`, GET отвечает 405, а POST — 503 без изменения данных. После отдельного sandbox-enable приложение принимает только POST, тело до 64 KiB, строгий UTF-8 и отвечает `OK<InvId>` только после commit.
 
 ## Переменные production
 
@@ -67,9 +67,34 @@ ROBOKASSA_PASSWORD1=<secret>
 ROBOKASSA_PASSWORD2=<secret>
 ROBOKASSA_PASSWORD3=<secret>
 ROBOKASSA_HASH_ALGORITHM=sha256
+PAYMENT_WEBHOOK_LISTENER_ENABLED=true
+PAYMENT_WEBHOOK_ENABLED=false
 PAYMENT_RESULT_URL=https://pixoraai.ru/payments/robokassa/result
 PAYMENT_SUCCESS_URL=https://pixoraai.ru/legal/payment-refund.html?payment=success
 PAYMENT_FAIL_URL=https://pixoraai.ru/legal/payment-refund.html?payment=failed
+PAYMENT_RECEIPT_ITEM_NAME=Пакет Pixora: 2 варианта обработки и 1 оригинал
+PAYMENT_RECEIPT_TAX=none
+PAYMENT_RECEIPT_PAYMENT_METHOD=
+PAYMENT_RECEIPT_PAYMENT_OBJECT=
 ```
 
-Для текущего безопасного режима `PAYMENTS_ENABLED=false`, `ROBOKASSA_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, `ROBOKASSA_PRODUCTION_APPROVED=false` сохраняются без изменений.
+Для текущего безопасного режима `PAYMENTS_ENABLED=false`, `PAYMENT_PROVIDER=disabled`, `PAYMENT_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, `ROBOKASSA_PRODUCTION_APPROVED=false` сохраняются без изменений.
+
+Нужны именно тестовые Password #1 и Password #2 из кабинета, совместимые с выбранным там SHA-256. Password #3/OpKey нужен только для отдельной проверки Refund API; возвраты сейчас выключены. Значения не выводятся и не сохраняются в Git.
+
+## Один вопрос в поддержку до sandbox
+
+> Для самозанятого на НПД с активными «Робочеками СМЗ», продающего цифровую услугу «Пакет Pixora: 2 варианта обработки и 1 оригинал» с полной онлайн-оплатой до оказания услуги, какие точные значения `payment_method` и `payment_object` нужно передавать в `Receipt`, и требуется ли затем второй чек полного расчёта?
+
+До письменного ответа эти два поля остаются пустыми, а sandbox-платёж не запускается.
+
+## Имена секретов для sandbox
+
+В GitHub Environment `production` и затем в `/opt/photo-bot/.env` нужны следующие имена без вывода значений:
+
+- `ROBOKASSA_MERCHANT_LOGIN`;
+- `ROBOKASSA_PASSWORD1` — тестовый пароль №1 для SHA-256;
+- `ROBOKASSA_PASSWORD2` — тестовый пароль №2 для SHA-256;
+- `ROBOKASSA_PASSWORD3` — только если отдельно разрешена проверка Refund API.
+
+На 22.07.2026 эти имена отсутствуют в списке GitHub production secrets; их наличие в production `.env` проверяется только как boolean, без чтения значений.

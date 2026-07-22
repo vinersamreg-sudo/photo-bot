@@ -312,6 +312,7 @@ jobs:
             ensure_env CONTINUATION_PACK_PRICE_RUB 49
             ensure_env PAYMENT_CURRENCY RUB
             ensure_env PAYMENT_ORDER_TTL_MINUTES 30
+            ensure_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
             ensure_env PAYMENT_WEBHOOK_HOST 127.0.0.1
             ensure_env PAYMENT_WEBHOOK_PORT 8091
             ensure_env PAYMENT_WEBHOOK_PATH /payments/robokassa/result
@@ -320,7 +321,7 @@ jobs:
             ensure_env ROBOKASSA_REFUND_URL https://services.robokassa.ru/RefundService/Refund/Create
             ensure_env ROBOKASSA_REFUND_STATUS_URL https://services.robokassa.ru/RefundService/Refund/GetState
             ensure_env PAYMENT_RECEIPT_TAX none
-            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта и 1 оригинал'
+            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'
             ensure_env DEMO_RETENTION_DAYS 30
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
@@ -345,10 +346,20 @@ jobs:
             set_env UNLOCK_ORIGINAL_PRICE_RUB 49
             set_env CONTINUATION_PACK_PRICE_RUB 49
             set_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2
-            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта и 1 оригинал'
+            set_env PAYMENT_RESULT_URL https://pixoraai.ru/payments/robokassa/result
+            set_env PAYMENT_SUCCESS_URL 'https://pixoraai.ru/legal/payment-refund.html?payment=success'
+            set_env PAYMENT_FAIL_URL 'https://pixoraai.ru/legal/payment-refund.html?payment=failed'
+            set_env ROBOKASSA_HASH_ALGORITHM sha256
+            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'
+            set_env PAYMENT_RECEIPT_TAX none
+            set_env PAYMENT_RECEIPT_PAYMENT_METHOD ''
+            set_env PAYMENT_RECEIPT_PAYMENT_OBJECT ''
             # Commercial integrations require a separate, explicit rollout.
             set_env PAYMENTS_ENABLED false
             set_env PAYMENT_PROVIDER disabled
+            # Publish only the loopback transport. Business callback processing
+            # stays disabled until the separately approved owner sandbox window.
+            set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
             set_env PAYMENT_WEBHOOK_ENABLED false
             set_env PAYMENT_REFUNDS_ENABLED false
             set_env ROBOKASSA_MODE sandbox
@@ -519,9 +530,24 @@ jobs:
           assert credit_accounts == users
           assert negative_credit_accounts == 0
           assert settings.payments_enabled is False
+          assert settings.payment_webhook_listener_enabled is True
           assert settings.payment_webhook_enabled is False
           assert settings.payment_refunds_enabled is False
           assert settings.robokassa_mode == "sandbox"
+          assert settings.robokassa_hash_algorithm == "sha256"
+          assert settings.payment_result_url == "https://pixoraai.ru/payments/robokassa/result"
+          assert settings.payment_success_url == (
+              "https://pixoraai.ru/legal/payment-refund.html?payment=success"
+          )
+          assert settings.payment_fail_url == (
+              "https://pixoraai.ru/legal/payment-refund.html?payment=failed"
+          )
+          assert settings.payment_receipt_item_name == (
+              "Пакет Pixora: 2 варианта обработки и 1 оригинал"
+          )
+          assert settings.payment_receipt_tax == "none"
+          assert settings.payment_receipt_payment_method == ""
+          assert settings.payment_receipt_payment_object == ""
           assert settings.openai_conversation_memory_enabled is False
           assert settings.openai_responses_image_enabled is False
           assert settings.openai_conversation_retention_enabled is False
@@ -574,10 +600,27 @@ jobs:
               "credit_accounts": credit_accounts,
               "negative_credit_accounts": negative_credit_accounts,
               "payments_enabled": settings.payments_enabled,
+              "payment_webhook_listener_enabled": settings.payment_webhook_listener_enabled,
               "payment_webhook_enabled": settings.payment_webhook_enabled,
               "payment_refunds_enabled": settings.payment_refunds_enabled,
               "content_studio_publishing_enabled": False,
               "robokassa_mode": settings.robokassa_mode,
+              "robokassa_hash_algorithm": settings.robokassa_hash_algorithm,
+              "robokassa_merchant_login_configured": bool(settings.robokassa_merchant_login),
+              "robokassa_password1_configured": bool(settings.robokassa_password1),
+              "robokassa_password2_configured": bool(settings.robokassa_password2),
+              "robokassa_password3_configured": bool(settings.robokassa_password3),
+              "payment_result_url": settings.payment_result_url,
+              "payment_success_url": settings.payment_success_url,
+              "payment_fail_url": settings.payment_fail_url,
+              "payment_receipt_item_name": settings.payment_receipt_item_name,
+              "payment_receipt_tax": settings.payment_receipt_tax,
+              "payment_receipt_payment_method_configured": bool(
+                  settings.payment_receipt_payment_method
+              ),
+              "payment_receipt_payment_object_configured": bool(
+                  settings.payment_receipt_payment_object
+              ),
               "openai_conversation_memory_enabled": settings.openai_conversation_memory_enabled,
               "openai_responses_image_enabled": settings.openai_responses_image_enabled,
               "openai_conversation_retention_enabled": (
@@ -604,6 +647,48 @@ jobs:
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
             test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"
             printf 'deployed_commit=%s\n' "$DEPLOY_SHA"
+          REMOTE
+      - name: Publish and verify fail-closed ResultURL transport
+        if: env.DEPLOY_CONFIGURED == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          REMOTE_CONFIG="/tmp/pixoraai.ru.conf.$GITHUB_SHA"
+          scp -P "$SSH_PORT" site/nginx/pixoraai.ru.conf "$SSH_USER@$SSH_HOST:$REMOTE_CONFIG"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$REMOTE_CONFIG" <<'REMOTE'
+            set -euo pipefail
+            CANDIDATE="$1"
+            ACTIVE=/etc/nginx/sites-available/pixoraai.ru
+            BACKUP=/tmp/pixoraai.ru.conf.backup
+            sudo -n cp "$ACTIVE" "$BACKUP"
+            rollback() {
+              sudo -n cp "$BACKUP" "$ACTIVE"
+              sudo -n nginx -t >/dev/null
+              sudo -n systemctl reload nginx
+              rm -f "$CANDIDATE"
+              sudo -n rm -f "$BACKUP"
+            }
+            trap rollback ERR
+            sudo -n install -o root -g root -m 644 "$CANDIDATE" "$ACTIVE"
+            sudo -n ln -sfn "$ACTIVE" /etc/nginx/sites-enabled/pixoraai.ru
+            sudo -n nginx -t
+            sudo -n systemctl reload nginx
+            GET_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --resolve pixoraai.ru:443:127.0.0.1 \
+              https://pixoraai.ru/payments/robokassa/result)
+            POST_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --resolve pixoraai.ru:443:127.0.0.1 \
+              --request POST --data 'readiness_probe=1' \
+              https://pixoraai.ru/payments/robokassa/result)
+            test "$GET_STATUS" = 405
+            test "$POST_STATUS" = 503
+            trap - ERR
+            rm -f "$CANDIDATE"
+            sudo -n rm -f "$BACKUP"
+            printf 'resulturl_get_status=%s\n' "$GET_STATUS"
+            printf 'resulturl_post_disabled_status=%s\n' "$POST_STATUS"
           REMOTE
       - name: Reset owner dialog to a clean main-menu state
         if: >-
