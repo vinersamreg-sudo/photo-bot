@@ -648,33 +648,15 @@ jobs:
             test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"
             printf 'deployed_commit=%s\n' "$DEPLOY_SHA"
           REMOTE
-      - name: Publish and verify fail-closed ResultURL transport
+      - name: Verify fail-closed ResultURL transport
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          REMOTE_CONFIG="/tmp/pixoraai.ru.conf.$GITHUB_SHA"
-          scp -P "$SSH_PORT" site/nginx/pixoraai.ru.conf "$SSH_USER@$SSH_HOST:$REMOTE_CONFIG"
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$REMOTE_CONFIG" <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
             set -euo pipefail
-            CANDIDATE="$1"
-            ACTIVE=/etc/nginx/sites-available/pixoraai.ru
-            BACKUP="/tmp/pixoraai.ru.conf.backup.$$"
-            cp "$ACTIVE" "$BACKUP"
-            rollback() {
-              sudo -n install -o root -g root -m 644 "$BACKUP" "$ACTIVE"
-              sudo -n nginx -t >/dev/null
-              sudo -n systemctl reload nginx
-              rm -f "$CANDIDATE"
-              rm -f "$BACKUP"
-            }
-            trap rollback ERR
-            sudo -n install -o root -g root -m 644 "$CANDIDATE" "$ACTIVE"
-            test "$(readlink -f /etc/nginx/sites-enabled/pixoraai.ru)" = "$ACTIVE"
-            sudo -n nginx -t
-            sudo -n systemctl reload nginx
             GET_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
               --resolve pixoraai.ru:443:127.0.0.1 \
               https://pixoraai.ru/payments/robokassa/result)
@@ -684,9 +666,6 @@ jobs:
               https://pixoraai.ru/payments/robokassa/result)
             test "$GET_STATUS" = 405
             test "$POST_STATUS" = 503
-            trap - ERR
-            rm -f "$CANDIDATE"
-            rm -f "$BACKUP"
             printf 'resulturl_get_status=%s\n' "$GET_STATUS"
             printf 'resulturl_post_disabled_status=%s\n' "$POST_STATUS"
           REMOTE

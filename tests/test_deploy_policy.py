@@ -5,12 +5,14 @@ from unittest import TestCase
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 SERVICE = ROOT / "ops" / "photo-bot.service"
+NGINX_RESULTURL_DEPLOY = ROOT / "ops" / "deploy_nginx_resulturl.sh"
 
 
 class DeployPolicyTests(TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.nginx_resulturl_deploy = NGINX_RESULTURL_DEPLOY.read_text(encoding="utf-8")
 
     def test_supports_manual_deploy(self) -> None:
         self.assertIn("workflow_dispatch:", self.workflow)
@@ -129,9 +131,19 @@ class DeployPolicyTests(TestCase):
         )
         self.assertIn("set_env PAYMENT_RECEIPT_PAYMENT_METHOD ''", self.workflow)
         self.assertIn("set_env PAYMENT_RECEIPT_PAYMENT_OBJECT ''", self.workflow)
-        self.assertIn("Publish and verify fail-closed ResultURL transport", self.workflow)
+        self.assertIn("Verify fail-closed ResultURL transport", self.workflow)
         self.assertIn('test "$GET_STATUS" = 405', self.workflow)
         self.assertIn('test "$POST_STATUS" = 503', self.workflow)
+
+    def test_nginx_resulturl_deploy_is_root_scoped_and_rolls_back(self) -> None:
+        script = self.nginx_resulturl_deploy
+        self.assertIn('if [ "$(id -u)" -ne 0 ]', script)
+        self.assertIn("location", (ROOT / "site/nginx/pixoraai.ru.conf").read_text())
+        self.assertIn("trap rollback ERR", script)
+        self.assertIn('install -o root -g root -m 644 "$BACKUP" "$ACTIVE"', script)
+        self.assertIn("nginx -t", script)
+        self.assertIn('test "$GET_STATUS" = 405', script)
+        self.assertIn('test "$POST_STATUS" = 503', script)
 
     def test_transfers_openai_key_via_stdin_without_external_validation(self) -> None:
         self.assertIn("Confirm OpenAI credential is configured without an API request", self.workflow)

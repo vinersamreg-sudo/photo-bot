@@ -57,6 +57,10 @@ location = /payments/robokassa/result {
 
 Ограничения: backend слушает только loopback; autoindex off; остальные backend endpoints не публикуются; query/body/signature не добавляются в access log; healthcheck остаётся отдельным локальным endpoint. Пока `PAYMENT_WEBHOOK_ENABLED=false`, GET отвечает 405, а POST — 503 без изменения данных. После отдельного sandbox-enable приложение принимает только POST, тело до 64 KiB, строгий UTF-8 и отвечает `OK<InvId>` только после commit.
 
+Первичная или изменяющая Nginx публикация требует root и выполняется только проверенным
+`ops/deploy_nginx_resulturl.sh`; обычный CI после этого проверяет 405/503 без права
+перезаписывать root-конфигурацию.
+
 ## Переменные production
 
 ```dotenv
