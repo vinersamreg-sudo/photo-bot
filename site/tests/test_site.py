@@ -17,6 +17,10 @@ LEGAL = (
     "legal/payment-refund.html",
     "legal/terms.html",
 )
+PAYMENT_STATUS = (
+    "payment-success.html",
+    "payment-failed.html",
+)
 
 
 class PageParser(HTMLParser):
@@ -59,7 +63,10 @@ class PixoraSiteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.html = load("index.html")
-        cls.pages = {path: load(path) for path in ("index.html", "contacts.html", *LEGAL)}
+        cls.pages = {
+            path: load(path)
+            for path in ("index.html", "contacts.html", *PAYMENT_STATUS, *LEGAL)
+        }
         cls.parsers: dict[str, PageParser] = {}
         for path, html in cls.pages.items():
             parser = PageParser()
@@ -221,7 +228,7 @@ class PixoraSiteTests(unittest.TestCase):
     # 26
     def test_sitemap_lists_all_public_pages(self) -> None:
         sitemap = load("sitemap.xml")
-        for path in ("", "contacts.html", *LEGAL):
+        for path in ("", "contacts.html", *PAYMENT_STATUS, *LEGAL):
             self.assertIn(f"https://pixoraai.ru/{path}", sitemap)
 
     # 27
@@ -297,6 +304,35 @@ class PixoraSiteTests(unittest.TestCase):
         self.assertIn("49 ₽", payment)
         self.assertIn("Полностью неиспользованный пакет", payment)
         self.assertIn("рассматривается вручную", payment)
+
+    def test_payment_return_pages_are_static_and_fail_closed(self) -> None:
+        for path in PAYMENT_STATUS:
+            html = self.pages[path]
+            self.assertNotIn("?", html, path)
+            self.assertNotIn("<script", html, path)
+            self.assertNotIn("<form", html, path)
+            self.assertNotIn("/payments/robokassa/result", html, path)
+            self.assertIn(MAX_URL, html, path)
+            self.assertIn('href="/legal/payment-refund.html"', html, path)
+
+    def test_payment_success_copy_does_not_treat_redirect_as_confirmation(self) -> None:
+        html = self.pages["payment-success.html"]
+        self.assertIn('data-payment-return="success"', html)
+        self.assertIn("<h1 id=\"payment-status-title\">Платёж принят</h1>", html)
+        self.assertIn("Мы проверяем подтверждение от платёжной системы", html)
+        self.assertIn("сам по себе не подтверждает оплату", html)
+        self.assertIn("Источником истины", html)
+        self.assertIn("ResultURL", html)
+        self.assertIn("проверьте статус в Pixora", html)
+
+    def test_payment_failed_copy_is_cautious_and_has_support(self) -> None:
+        html = self.pages["payment-failed.html"]
+        self.assertIn('data-payment-return="failed"', html)
+        self.assertIn("<h1 id=\"payment-status-title\">Оплата не завершена</h1>", html)
+        self.assertIn("Деньги не были подтверждены", html)
+        self.assertIn("не подтверждает, что списания точно не было", html)
+        self.assertIn("операцию в приложении или выписке вашего банка", html)
+        self.assertIn('href="mailto:viner-89@mail.ru"', html)
 
     # 37
     def test_terms_cover_abuse_and_rights(self) -> None:

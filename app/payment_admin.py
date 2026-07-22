@@ -193,6 +193,8 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
     success = urlsplit(settings.payment_success_url)
     failure = urlsplit(settings.payment_fail_url)
     result_expected = f"https://pixoraai.ru{settings.payment_webhook_path}"
+    success_expected = "https://pixoraai.ru/payment-success.html"
+    failure_expected = "https://pixoraai.ru/payment-failed.html"
     checks = {
         "provider_selected": settings.payment_provider == "robokassa",
         "sandbox_mode": settings.robokassa_mode == "sandbox",
@@ -207,6 +209,9 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
         "result_url_exact": settings.payment_result_url == result_expected,
         "success_url_https": success.scheme == "https",
         "fail_url_https": failure.scheme == "https",
+        "success_url_exact": settings.payment_success_url == success_expected,
+        "fail_url_exact": settings.payment_fail_url == failure_expected,
+        "return_urls_without_query": not success.query and not failure.query,
         "listener_loopback": settings.payment_webhook_host in {"127.0.0.1", "::1", "localhost"},
         "webhook_path_exact": settings.payment_webhook_path == "/payments/robokassa/result",
         "currency_rub": settings.payment_currency == "RUB",
@@ -234,6 +239,9 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
         and checks["result_url_exact"]
         and checks["success_url_https"]
         and checks["fail_url_https"]
+        and checks["success_url_exact"]
+        and checks["fail_url_exact"]
+        and checks["return_urls_without_query"]
         and checks["listener_loopback"]
         and checks["webhook_path_exact"]
         and settings.payments_enabled

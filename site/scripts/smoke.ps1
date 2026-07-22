@@ -2,7 +2,8 @@ param([string]$BaseUrl = "http://127.0.0.1:4173")
 $ErrorActionPreference = "Stop"
 $paths = @(
     "/", "/styles.css", "/robots.txt", "/sitemap.xml", "/site.webmanifest",
-    "/contacts.html", "/legal/privacy.html", "/legal/offer.html",
+    "/contacts.html", "/payment-success.html", "/payment-failed.html",
+    "/legal/privacy.html", "/legal/offer.html",
     "/legal/personal-data.html", "/legal/payment-refund.html", "/legal/terms.html"
 )
 foreach ($path in $paths) {
@@ -15,5 +16,13 @@ if ($homepage -notmatch "Pixora AI" -or $homepage -notmatch 'data-max-cta="hero"
 }
 if ($homepage -match 'href="https://max.ru/"' -or $homepage -notmatch '(?<!\d)49(?!\d)') {
     throw "Homepage launch truth smoke failed"
+}
+$success = (Invoke-WebRequest -UseBasicParsing "$BaseUrl/payment-success.html").Content
+$failed = (Invoke-WebRequest -UseBasicParsing "$BaseUrl/payment-failed.html").Content
+if ($success -notmatch 'data-payment-return="success"' -or $success -notmatch "ResultURL") {
+    throw "Payment success page content smoke failed"
+}
+if ($failed -notmatch 'data-payment-return="failed"' -or $failed -notmatch "viner-89@mail.ru") {
+    throw "Payment failed page content smoke failed"
 }
 Write-Output "Pixora site smoke passed ($BaseUrl)"

@@ -126,6 +126,15 @@ class DeployPolicyTests(TestCase):
             self.workflow,
         )
         self.assertIn(
+            "set_env PAYMENT_SUCCESS_URL https://pixoraai.ru/payment-success.html",
+            self.workflow,
+        )
+        self.assertIn(
+            "set_env PAYMENT_FAIL_URL https://pixoraai.ru/payment-failed.html",
+            self.workflow,
+        )
+        self.assertNotIn("legal/payment-refund.html?payment=", self.workflow)
+        self.assertIn(
             "set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'",
             self.workflow,
         )

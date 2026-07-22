@@ -171,6 +171,22 @@ details p { max-width: 700px; margin: -5px 45px 24px 0; color: var(--muted); fon
 .contact-card dt { color: #7b747c; }
 .contact-card dd { margin: 0; font-weight: 650; }
 
+.payment-status-page { background: radial-gradient(circle at 78% 12%, rgba(174,162,193,.28), transparent 34%), var(--paper); }
+.payment-status-main { min-height: calc(100vh - 80px); min-height: calc(100svh - 80px); display: grid; place-items: center; padding: 64px 24px 88px; }
+.payment-status-card { width: min(100%, 680px); padding: clamp(34px, 6vw, 62px); border: 1px solid rgba(36,33,39,.1); border-radius: 32px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); }
+.payment-status-icon { width: 56px; height: 56px; margin-bottom: 28px; display: grid; place-items: center; border-radius: 18px; font-size: 27px; font-weight: 800; }
+.payment-status-icon-success { background: #e0e8dc; color: #4f6649; }
+.payment-status-icon-failed { background: #f0e3db; color: #82583f; }
+.payment-status-card h1 { margin: 0 0 22px; font-family: Georgia, "Times New Roman", serif; font-size: clamp(44px, 7vw, 68px); font-weight: 500; line-height: 1; letter-spacing: -.045em; }
+.payment-status-card > p { color: var(--muted); }
+.payment-status-lead { margin: 0 0 28px; font-size: clamp(18px, 2.5vw, 21px); line-height: 1.5; }
+.payment-status-notice { margin: 28px 0; padding: 20px 22px; border-radius: 18px; background: var(--lavender-light); }
+.payment-status-notice strong { display: block; margin-bottom: 6px; }
+.payment-status-notice p { margin: 0; color: #554f57; }
+.payment-status-card a:not(.button) { color: #513d6b; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.payment-status-actions { margin-top: 34px; display: flex; flex-wrap: wrap; align-items: center; gap: 20px; }
+.payment-status-link { font-size: 14px; font-weight: 680; }
+
 @media (max-width: 980px) {
   .desktop-nav { display: none; }
   .hero-grid { grid-template-columns: 1fr .7fr; gap: 42px; }
@@ -228,6 +244,11 @@ details p { max-width: 700px; margin: -5px 45px 24px 0; color: var(--muted); fon
   .mobile-cta .button { width: 100%; min-height: 54px; }
   .legal-content { padding-top: 62px; }
   .contact-card dl div { grid-template-columns: 1fr; gap: 3px; }
+  .payment-status-page { padding-bottom: 0; }
+  .payment-status-main { min-height: calc(100vh - 72px); min-height: calc(100svh - 72px); padding: 34px 14px 54px; }
+  .payment-status-card { padding: 32px 24px; border-radius: 24px; }
+  .payment-status-actions { align-items: stretch; flex-direction: column; }
+  .payment-status-actions .button { width: 100%; }
 }
 
 @media (max-width: 430px) {

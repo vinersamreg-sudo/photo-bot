@@ -433,6 +433,12 @@ def load_settings(
         raise ValueError("PAYMENT_SUCCESS_URL and PAYMENT_FAIL_URL must be configured together")
     if any(url and not url.startswith("https://") for url in (success_url, fail_url)):
         raise ValueError("Payment return URLs must use HTTPS")
+    for name, url in (
+        ("PAYMENT_SUCCESS_URL", success_url),
+        ("PAYMENT_FAIL_URL", fail_url),
+    ):
+        if url and urlsplit(url).query:
+            raise ValueError(f"{name} must not contain query parameters")
     if refunds_enabled and not values.get("ROBOKASSA_PASSWORD3", "").strip():
         raise ValueError("Enabled refunds require ROBOKASSA_PASSWORD3")
     if refunds_enabled:

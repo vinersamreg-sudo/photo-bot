@@ -91,6 +91,19 @@ class SettingsTests(TestCase):
         with self.assertRaisesRegex(ValueError, "while payments are disabled"):
             load_settings(environ={"PAYMENT_REFUNDS_ENABLED": "true"})
 
+    def test_payment_return_urls_reject_query_parameters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must not contain query parameters"):
+            load_settings(environ={
+                "PAYMENT_SUCCESS_URL": "https://pixoraai.ru/payment-success.html?payment=success",
+                "PAYMENT_FAIL_URL": "https://pixoraai.ru/payment-failed.html",
+            })
+        settings = load_settings(environ={
+            "PAYMENT_SUCCESS_URL": "https://pixoraai.ru/payment-success.html",
+            "PAYMENT_FAIL_URL": "https://pixoraai.ru/payment-failed.html",
+        })
+        self.assertEqual(settings.payment_success_url, "https://pixoraai.ru/payment-success.html")
+        self.assertEqual(settings.payment_fail_url, "https://pixoraai.ru/payment-failed.html")
+
     def test_business_webhook_requires_listener(self) -> None:
         with self.assertRaisesRegex(ValueError, "LISTENER"):
             load_settings(environ={"PAYMENT_WEBHOOK_ENABLED": "true"})

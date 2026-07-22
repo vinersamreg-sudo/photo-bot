@@ -14,9 +14,9 @@
 | Encoding | UTF-8 |
 | ResultURL | `https://pixoraai.ru/payments/robokassa/result` |
 | ResultURL method | POST only |
-| SuccessURL | `https://pixoraai.ru/legal/payment-refund.html?payment=success` |
+| SuccessURL | `https://pixoraai.ru/payment-success.html` |
 | SuccessURL method | GET; информационный redirect, не подтверждает оплату |
-| FailURL | `https://pixoraai.ru/legal/payment-refund.html?payment=failed` |
+| FailURL | `https://pixoraai.ru/payment-failed.html` |
 | FailURL method | GET; не меняет локальный статус на paid |
 | Режим до go-live | sandbox / `IsTest=1` |
 | Production approval | `ROBOKASSA_PRODUCTION_APPROVED=false` до отдельного решения владельца |
@@ -74,8 +74,8 @@ ROBOKASSA_HASH_ALGORITHM=sha256
 PAYMENT_WEBHOOK_LISTENER_ENABLED=true
 PAYMENT_WEBHOOK_ENABLED=false
 PAYMENT_RESULT_URL=https://pixoraai.ru/payments/robokassa/result
-PAYMENT_SUCCESS_URL=https://pixoraai.ru/legal/payment-refund.html?payment=success
-PAYMENT_FAIL_URL=https://pixoraai.ru/legal/payment-refund.html?payment=failed
+PAYMENT_SUCCESS_URL=https://pixoraai.ru/payment-success.html
+PAYMENT_FAIL_URL=https://pixoraai.ru/payment-failed.html
 PAYMENT_RECEIPT_ITEM_NAME=Пакет Pixora: 2 варианта обработки и 1 оригинал
 PAYMENT_RECEIPT_TAX=none
 PAYMENT_RECEIPT_PAYMENT_METHOD=

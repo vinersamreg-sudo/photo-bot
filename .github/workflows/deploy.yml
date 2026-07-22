@@ -347,8 +347,8 @@ jobs:
             set_env CONTINUATION_PACK_PRICE_RUB 49
             set_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2
             set_env PAYMENT_RESULT_URL https://pixoraai.ru/payments/robokassa/result
-            set_env PAYMENT_SUCCESS_URL 'https://pixoraai.ru/legal/payment-refund.html?payment=success'
-            set_env PAYMENT_FAIL_URL 'https://pixoraai.ru/legal/payment-refund.html?payment=failed'
+            set_env PAYMENT_SUCCESS_URL https://pixoraai.ru/payment-success.html
+            set_env PAYMENT_FAIL_URL https://pixoraai.ru/payment-failed.html
             set_env ROBOKASSA_HASH_ALGORITHM sha256
             set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'
             set_env PAYMENT_RECEIPT_TAX none
@@ -537,10 +537,10 @@ jobs:
           assert settings.robokassa_hash_algorithm == "sha256"
           assert settings.payment_result_url == "https://pixoraai.ru/payments/robokassa/result"
           assert settings.payment_success_url == (
-              "https://pixoraai.ru/legal/payment-refund.html?payment=success"
+              "https://pixoraai.ru/payment-success.html"
           )
           assert settings.payment_fail_url == (
-              "https://pixoraai.ru/legal/payment-refund.html?payment=failed"
+              "https://pixoraai.ru/payment-failed.html"
           )
           assert settings.payment_receipt_item_name == (
               "Пакет Pixora: 2 варианта обработки и 1 оригинал"

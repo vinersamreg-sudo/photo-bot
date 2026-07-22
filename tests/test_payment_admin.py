@@ -89,12 +89,15 @@ class PaymentAdminTests(TestCase):
                 robokassa_password2="private-two",
                 robokassa_password3="private-three",
                 payment_result_url="https://pixoraai.ru/payments/robokassa/result",
-                payment_success_url="https://pixoraai.ru/payment/success",
-                payment_fail_url="https://pixoraai.ru/payment/fail",
+                payment_success_url="https://pixoraai.ru/payment-success.html",
+                payment_fail_url="https://pixoraai.ru/payment-failed.html",
             )
             report = robokassa_health(settings, Database(settings.database_path))
             rendered = json.dumps(report)
             self.assertTrue(report["checks"]["credentials_present"])
+            self.assertTrue(report["checks"]["success_url_exact"])
+            self.assertTrue(report["checks"]["fail_url_exact"])
+            self.assertTrue(report["checks"]["return_urls_without_query"])
             for secret in (
                 settings.robokassa_merchant_login,
                 settings.robokassa_password1,

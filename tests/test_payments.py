@@ -582,11 +582,11 @@ class PaymentTests(TestCase):
         self.addCleanup(server.stop)
         base = f"http://127.0.0.1:{server.bound_port}"
         self.assertEqual(
-            httpx.get(f"{base}/legal/payment-refund.html?payment=success").status_code,
+            httpx.get(f"{base}/payment-success.html").status_code,
             404,
         )
         self.assertEqual(
-            httpx.get(f"{base}/legal/payment-refund.html?payment=failed").status_code,
+            httpx.get(f"{base}/payment-failed.html").status_code,
             404,
         )
         with self.database.read() as connection:
