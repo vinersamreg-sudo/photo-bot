@@ -116,6 +116,7 @@ class PixoraSiteTests(unittest.TestCase):
         combined = "\n".join(public_pages).lower()
         self.assertNotIn("генерац", combined)
         self.assertNotIn("пакет pixora: 2 варианта", combined)
+        self.assertNotIn("continuation_pack_2_plus_1", combined)
         self.assertIn("пакет доступа pixora", combined)
 
     # 06

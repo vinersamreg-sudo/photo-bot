@@ -9,6 +9,7 @@ from app.commerce import (
     MAX_ACCOUNT_BALANCE,
     PRICE_MINOR,
     PRODUCT_CODE,
+    PRODUCT_NAME,
     UNLOCK_ENTITLEMENTS_PER_PACK,
     CommerceService,
     migrate_legacy_credit_accounts,
@@ -156,6 +157,7 @@ class CommerceLedgerTests(TestCase):
 
     def test_product_constants_are_the_permanent_two_plus_one_model(self) -> None:
         self.assertEqual(PRODUCT_CODE, "continuation_pack_2_plus_1")
+        self.assertEqual(PRODUCT_NAME, "Pixora Access Pack")
         self.assertEqual(PRICE_MINOR, 4_900)
         self.assertEqual(INITIAL_GENERATION_CREDITS, 2)
         self.assertEqual(GENERATION_CREDITS_PER_PACK, 2)
