@@ -2,45 +2,42 @@
 
 ## Components
 
-- `PaymentProvider` / `RobokassaProvider`: signed link, ResultURL validation and provider refund boundary.
-- `PaymentService`: durable payment intent/order/event/receipt/audit transitions and atomic package grant.
-- `CommerceService`: initial grant, credit lots/reservations/ledger, package grants, unlock entitlements, rollback and admin audit.
-- `PaymentWebhookServer`: loopback-only POST ResultURL listener behind trusted HTTPS.
-- `MaxApplication`: package purchase UX and later user-selected original unlock.
-- `payment_admin` and commerce CLI: masked reconciliation and dry-run-first operations.
+- `RobokassaProvider`: deterministic GET payment link, canonical Receipt and SHA-256 signatures.
+- `PaymentService`: durable order/event/webhook/receipt/audit state and atomic +2/+1 grant.
+- `CommerceService`: credit lots, reservations, entitlements, rollback and admin audit.
+- `PaymentWebhookServer`: loopback POST ResultURL behind Nginx.
+- `MaxApplication`: package UX and later user-selected original.
 
-## Durable entities
+## Sale boundary
 
-Migration v8 retains PaymentIntent/Order/Attempt/Event/Webhook/Receipt/Audit and RefundIntent/Audit. Migration v9 adds:
+Order creation writes exactly one `payment_receipts` row with `receipt_type=payment`, item «Пакет доступа Pixora», quantity 1, amount 4900 and tax `none`. Legacy `payment_method` and `payment_object` columns remain in SQLite for schema compatibility but new sale rows store empty values and the provider never serializes those fields.
 
-- `user_credit_accounts`: aggregate available/reserved/granted/consumed/refunded/adjusted totals and a lifetime `free_grant_applied` bit;
-- `generation_credit_lots`: initial, paid and admin sources, so refund affects only its package;
-- `generation_credit_reservations`: one attempt/idempotency key per reserved credit;
-- `credit_ledger`: append-only balance changes;
-- `continuation_pack_grants`: atomic +2/+1 grant and usage/refund status;
-- `unlock_entitlements`: available/reserved/consumed/cancelled/refunded and optional selected version;
-- `commerce_admin_audit`: hashed subject, reason, delta and idempotency.
+The provider renders the canonical Receipt:
 
-## Generation transaction boundary
+`{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]}`
 
-Before provider, one active lot is atomically moved available → reserved. A second concurrent request cannot use it. After successful MAX preview delivery, the reservation and lot become consumed and GalleryVersion remains durable. Every failure path releases the same reservation. Startup recovery releases only reservations whose attempts are no longer pending/processing; it cannot mint new value.
+The once-encoded Receipt is signed. The GET query contains its twice-encoded form.
 
-## Payment transaction boundary
+## Confirmation boundary
 
-Callback processing validates invoice, amount, signature, merchant binding, token and local state. In one SQLite transaction it records the callback, confirms the payment and creates exactly one package grant, a two-credit lot and one entitlement. A repeated callback returns idempotent success. Browser redirect does not call this boundary.
+ResultURL validates Password #2, invoice, amount, merchant/provider binding, currency and opaque token. One SQLite transaction:
 
-The package is not version-scoped. Later, original delivery checks user ownership,
-non-deleted state and private-original presence, reserves the oldest available
-entitlement, and sends the file through MAX. Only a successful MAX delivery commits
-the reservation and marks that exact version unlocked. A failed delivery releases
-the reservation, so the right remains available and no payment is required to retry.
-Startup recovery releases any delivery reservation left by an interrupted runtime;
-refund holds are distinct because they have no selected GalleryVersion and remain held.
+1. records the callback;
+2. marks order/intent paid;
+3. marks the existing sale-receipt audit row confirmed;
+4. creates one `continuation_pack_grant`;
+5. adds two credits and one entitlement.
 
-## Refund and concurrency
+Only then is `OK<InvId>` returned. Unique constraints and event digests make callback replay idempotent. SuccessURL and FailURL do not enter this boundary.
 
-SQLite serializes writers. Unique invoice, event digest, package payment ID, reservation key, ledger key and entitlement source constraints prevent replay. An unused package rollback removes only its available lot and entitlement. Used/reserved value is manual review. A refund hold makes the specific package non-spendable while retaining audit evidence.
+## Use of the paid package
 
-## Retention and privacy
+Processing uses the existing credit ledger. Original selection uses the entitlement ledger. Neither path calls a fiscal provider nor inserts another `receipt_type=payment` row. Original redelivery is also receipt-free. This is one paid package being consumed, not a second sale.
 
-Paid originals use paid retention. Financial/ledger audit survives gallery cleanup but stores opaque internal IDs, hashed subject and bounded enums—not images, prompt text, platform IDs, credentials or private paths. Statutory retention and fiscal wording still require specialist confirmation.
+## Refund boundary
+
+Refund preparation and audit remain separate and disabled. A `receipt_type=refund` row, if a separately approved refund succeeds, is return audit and cannot be counted as a second sale receipt. The existing sale row is never duplicated.
+
+## Privacy and retention
+
+Financial audit contains internal IDs, bounded enums and hashes—not images, prompts, MAX IDs, signed URLs or credentials. Historical schema columns are retained for old test/production records.

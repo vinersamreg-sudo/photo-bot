@@ -28,8 +28,6 @@ class RobokassaPaymentRequest:
     expires_at: datetime
     receipt_name: str
     receipt_tax: str
-    receipt_payment_method: str
-    receipt_payment_object: str
 
 
 @dataclass(frozen=True)
@@ -136,10 +134,6 @@ class RobokassaProvider:
             raise ValueError("Receipt item name must contain 1 to 128 characters")
         if not request.receipt_tax:
             raise ValueError("Receipt tax must be configured")
-        if not request.receipt_payment_method:
-            raise ValueError("Receipt payment method must be confirmed")
-        if not request.receipt_payment_object:
-            raise ValueError("Receipt payment object must be confirmed")
         # Robokassa requires JSON numbers. Render the canonical two-decimal value
         # directly from integer minor units so no binary float enters the receipt.
         money = amount_text(request.amount_minor)
@@ -147,11 +141,8 @@ class RobokassaProvider:
             '{"items":[{'
             f'"name":{json.dumps(name, ensure_ascii=False)},'
             '"quantity":1,'
-            f'"cost":{money},'
             f'"sum":{money},'
-            f'"tax":{json.dumps(request.receipt_tax)},'
-            f'"payment_method":{json.dumps(request.receipt_payment_method)},'
-            f'"payment_object":{json.dumps(request.receipt_payment_object)}'
+            f'"tax":{json.dumps(request.receipt_tax)}'
             '}]}'
         )
 

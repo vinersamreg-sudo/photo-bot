@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
 from PIL import Image
@@ -46,12 +46,9 @@ class Clock:
 
 
 class PaymentTests(TestCase):
-    def test_public_product_name_is_decoupled_from_unchanged_fiscal_receipt(self) -> None:
+    def test_public_and_fiscal_product_name_are_the_same_single_item(self) -> None:
         self.assertEqual(USER_PRODUCT_NAME, "Пакет доступа Pixora")
-        self.assertEqual(
-            RECEIPT_ITEM_NAME,
-            "Пакет Pixora: 2 варианта обработки и 1 оригинал",
-        )
+        self.assertEqual(RECEIPT_ITEM_NAME, USER_PRODUCT_NAME)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -67,12 +64,12 @@ class PaymentTests(TestCase):
             payment_webhook_listener_enabled=True,
             payment_webhook_enabled=True,
             payment_result_url="https://example.test/payments/robokassa/result",
+            payment_success_url="https://pixoraai.ru/payment-success.html",
+            payment_fail_url="https://pixoraai.ru/payment-failed.html",
             robokassa_merchant_login="pixora-test",
             robokassa_password1="password-one",
             robokassa_password2="password-two",
             robokassa_password3="password-three",
-            payment_receipt_payment_method="full_payment",
-            payment_receipt_payment_object="service",
         )
         self.clock = Clock()
         self.database = Database(self.settings.database_path)
@@ -86,17 +83,17 @@ class PaymentTests(TestCase):
             FakeImageProvider(),
             clock=self.clock,
         )
-        session = self.demo.start_session("max", "owner", source)
-        first = self.demo.generate(session.session_id, "Замени фон", "first")
+        self.session = self.demo.start_session("max", "owner", source)
+        first = self.demo.generate(self.session.session_id, "Замени фон", "first")
         self.clock.advance(seconds=2)
         second = self.demo.generate(
-            session.session_id, "Поменяй куртку", "second", correction=True
+            self.session.session_id, "Поменяй куртку", "second", correction=True
         )
         with self.database.read() as connection:
             self.versions = connection.execute(
                 "SELECT id,attempt_id FROM gallery_versions ORDER BY version_number"
             ).fetchall()
-        self.user_id = session.user_id
+        self.user_id = self.session.user_id
         self.service = build_payment_service(
             self.settings, self.database, clock=self.clock
         )
@@ -117,41 +114,132 @@ class PaymentTests(TestCase):
 
     def test_payment_link_uses_test_mode_receipt_and_bound_order_token(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
-        query = parse_qs(urlparse(order.payment_url).query)
+        raw_query = urlparse(order.payment_url).query
+        query = parse_qs(raw_query)
         self.assertEqual(query["MerchantLogin"], ["pixora-test"])
         self.assertEqual(query["OutSum"], ["49.00"])
         self.assertEqual(query["InvId"], [str(order.provider_invoice_id)])
         self.assertEqual(query["IsTest"], ["1"])
         self.assertEqual(query["Shp_order"], [order.public_token])
         self.assertEqual(query["Description"], ["Пакет доступа Pixora"])
+        self.assertEqual(
+            query["SuccessUrl2"], ["https://pixoraai.ru/payment-success.html"]
+        )
+        self.assertEqual(query["SuccessUrl2Method"], ["GET"])
+        self.assertEqual(
+            query["FailUrl2"], ["https://pixoraai.ru/payment-failed.html"]
+        )
+        self.assertEqual(query["FailUrl2Method"], ["GET"])
         self.assertIn("Receipt", query)
-        receipt_text = unquote(query["Receipt"][0])
-        self.assertIn('"cost":49.00', receipt_text)
+        receipt_once_encoded = query["Receipt"][0]
+        receipt_text = unquote(receipt_once_encoded)
         self.assertIn('"sum":49.00', receipt_text)
         self.assertNotIn("149", receipt_text)
         receipt = json.loads(receipt_text)
         self.assertEqual(receipt, {
             "items": [{
-                "name": "Пакет Pixora: 2 варианта обработки и 1 оригинал",
+                "name": "Пакет доступа Pixora",
                 "quantity": 1,
-                "cost": 49.0,
                 "sum": 49.0,
                 "tax": "none",
-                "payment_method": "full_payment",
-                "payment_object": "service",
             }]
         })
+        self.assertNotIn("sno", receipt)
+        self.assertNotIn("cost", receipt["items"][0])
+        self.assertNotIn("payment_method", receipt["items"][0])
+        self.assertNotIn("payment_object", receipt["items"][0])
+        self.assertEqual(
+            sum(int(round(item["sum"] * 100)) for item in receipt["items"]),
+            int(round(float(query["OutSum"][0]) * 100)),
+        )
+        raw_receipt = next(
+            part.split("=", 1)[1]
+            for part in raw_query.split("&")
+            if part.startswith("Receipt=")
+        )
+        self.assertIn("%25", raw_receipt)
+        self.assertEqual(unquote(raw_receipt), receipt_once_encoded)
+        self.assertEqual(unquote(unquote(raw_receipt)), receipt_text)
+        self.assertEqual(receipt["items"][0]["name"], "Пакет доступа Pixora")
         expected_signature_base = (
             f"pixora-test:49.00:{order.provider_invoice_id}:"
-            f"{query['Receipt'][0]}:password-one:Shp_order={order.public_token}"
+            f"{receipt_once_encoded}:"
+            f"{quote('https://pixoraai.ru/payment-success.html', safe='')}:GET:"
+            f"{quote('https://pixoraai.ru/payment-failed.html', safe='')}:GET:"
+            f"password-one:Shp_order={order.public_token}"
         )
         self.assertEqual(
             query["SignatureValue"][0],
             hashlib.sha256(expected_signature_base.encode("utf-8")).hexdigest().upper(),
         )
+        wrongly_double_encoded_signature_base = (
+            f"pixora-test:49.00:{order.provider_invoice_id}:"
+            f"{raw_receipt}:"
+            f"{quote('https://pixoraai.ru/payment-success.html', safe='')}:GET:"
+            f"{quote('https://pixoraai.ru/payment-failed.html', safe='')}:GET:"
+            f"password-one:Shp_order={order.public_token}"
+        )
+        self.assertNotEqual(
+            query["SignatureValue"][0],
+            hashlib.sha256(
+                wrongly_double_encoded_signature_base.encode("utf-8")
+            ).hexdigest().upper(),
+        )
+        tampered_receipt = receipt_once_encoded.replace("Pixora", "Pixorb", 1)
+        tampered_signature_base = (
+            f"pixora-test:49.00:{order.provider_invoice_id}:"
+            f"{tampered_receipt}:"
+            f"{quote('https://pixoraai.ru/payment-success.html', safe='')}:GET:"
+            f"{quote('https://pixoraai.ru/payment-failed.html', safe='')}:GET:"
+            f"password-one:Shp_order={order.public_token}"
+        )
+        self.assertNotEqual(
+            query["SignatureValue"][0],
+            hashlib.sha256(tampered_signature_base.encode("utf-8")).hexdigest().upper(),
+        )
         self.assertNotIn("password-one", order.payment_url)
         again = self.service.create_order(self.user_id, self.versions[0]["id"], "event-2")
         self.assertEqual(again.id, order.id)
+
+    def test_receipt_json_is_canonical_stable_and_nonempty(self) -> None:
+        request = RobokassaPaymentRequest(
+            invoice_id=1,
+            amount_minor=4900,
+            description="Пакет доступа Pixora",
+            public_token="token",
+            expires_at=self.clock(),
+            receipt_name="Пакет доступа Pixora",
+            receipt_tax="none",
+        )
+        expected = (
+            '{"items":[{"name":"Пакет доступа Pixora",'
+            '"quantity":1,"sum":49.00,"tax":"none"}]}'
+        )
+        self.assertEqual(RobokassaProvider._receipt(request), expected)
+        self.assertEqual(RobokassaProvider._receipt(request), expected)
+        self.assertEqual(expected.encode("utf-8").decode("utf-8"), expected)
+        for forbidden in (
+            '"cost"',
+            '"sno"',
+            '"payment_method"',
+            '"payment_object"',
+            "prepayment",
+            "full_prepayment",
+            "advance",
+            "full_payment",
+        ):
+            self.assertNotIn(forbidden, expected)
+        empty = RobokassaPaymentRequest(
+            invoice_id=1,
+            amount_minor=4900,
+            description="Пакет доступа Pixora",
+            public_token="token",
+            expires_at=self.clock(),
+            receipt_name=" ",
+            receipt_tax="none",
+        )
+        with self.assertRaisesRegex(ValueError, "item name"):
+            RobokassaProvider._receipt(empty)
 
     def test_paid_webhook_grants_pack_without_auto_unlock_and_is_idempotent(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
@@ -193,9 +281,63 @@ class PaymentTests(TestCase):
         )
         self.assertTrue(duplicate.accepted)
         self.assertTrue(duplicate.duplicate)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    """SELECT COUNT(*) FROM payment_receipts
+                       WHERE order_id=? AND receipt_type='payment'""",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    """SELECT COUNT(*) FROM payment_audit
+                       WHERE order_id=? AND event_type='payment_confirmed'""",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
         self.assertEqual(
             self.service.history(order.id).order.status, PaymentStatus.PAID
         )
+
+    def test_using_package_and_redelivering_original_create_no_new_sale_receipts(self) -> None:
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "event-single-receipt"
+        )
+        self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        self.clock.advance(seconds=2)
+        self.demo.generate(
+            self.session.session_id,
+            "Сделай фон светлее",
+            "paid-processing",
+            correction=True,
+        )
+        self.demo.commerce.unlock_version(self.user_id, self.versions[0]["id"])
+        original = self.service.original_for_order(order.id, self.user_id)
+        self.assertTrue(original.is_file())
+        self.assertEqual(self.service.original_for_order(order.id, self.user_id), original)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM payment_receipts WHERE order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    """SELECT COUNT(*) FROM payment_receipts
+                       WHERE order_id=? AND receipt_type='payment'""",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
 
     def test_forged_wrong_amount_and_token_fail_closed_but_late_signed_payment_is_honored(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
@@ -507,6 +649,8 @@ class PaymentTests(TestCase):
         self.assertEqual(paid["status"], "refunded")
         self.assertEqual(paid["refunded_amount_minor"], 4900)
         self.assertEqual(receipt_types, ["payment", "refund"])
+        self.assertEqual(receipt_types.count("payment"), 1)
+        self.assertEqual(receipt_types.count("refund"), 1)
         self.assertEqual(version_unlock, "demo")
         self.assertEqual(grant, "refunded")
         self.assertEqual(entitlement, "refunded")
@@ -608,20 +752,21 @@ class PaymentTests(TestCase):
         self.assertEqual(status, "pending")
         self.assertEqual(webhooks, 0)
 
-    def test_receipt_requires_explicit_confirmed_fiscal_fields(self) -> None:
+    def test_receipt_omits_self_employed_receipt_fields(self) -> None:
         request = RobokassaPaymentRequest(
             invoice_id=1,
             amount_minor=4900,
             description="description",
             public_token="token",
             expires_at=self.clock(),
-            receipt_name="Пакет Pixora: 2 варианта обработки и 1 оригинал",
+            receipt_name="Пакет доступа Pixora",
             receipt_tax="none",
-            receipt_payment_method="",
-            receipt_payment_object="",
         )
-        with self.assertRaisesRegex(ValueError, "payment method"):
-            RobokassaProvider._receipt(request)
+        receipt = json.loads(RobokassaProvider._receipt(request))
+        self.assertEqual(len(receipt["items"]), 1)
+        self.assertNotIn("sno", receipt)
+        self.assertNotIn("payment_method", receipt["items"][0])
+        self.assertNotIn("payment_object", receipt["items"][0])
 
 
 class RobokassaSignatureTests(TestCase):

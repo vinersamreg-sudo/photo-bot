@@ -410,8 +410,6 @@ class MaxApplicationTests(TestCase):
             robokassa_merchant_login="pixora-test",
             robokassa_password1="one",
             robokassa_password2="two",
-            payment_receipt_payment_method="full_payment",
-            payment_receipt_payment_object="service",
         )
         payments = build_payment_service(
             paid_settings, self.database, clock=self.clock

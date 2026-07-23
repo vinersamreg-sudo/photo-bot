@@ -18,7 +18,8 @@ Current v1 contract:
 - the public digital product is «Пакет доступа Pixora» for 49 ₽; user copy says it contains two processing operations and one original and never sells “generations”;
 - a verified 49 ₽ ResultURL atomically grants two internal generation credits and one user-selected original entitlement; it never auto-selects a version;
 - the entitlement may unlock one owned available GalleryVersion created before or after purchase; MAX delivery failure preserves unlocked state and allows re-delivery;
-- public product wording is independent from the unchanged fiscal Receipt item; never change Receipt, ResultURL, credits or 2+1 grant logic as a copy-only task;
+- the written 23.07.2026 Robokassa support decision is fiscal source of truth: one sale receipt `{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]`, with no `sno`, `payment_method`, `payment_object` or second sale receipt;
+- GET signs the once-encoded Receipt and transports it twice encoded; never change this, ResultURL, credits or 2+1 grant logic as a copy-only task;
 
 Latest production evidence (17.07.2026): owner-only E2E used exactly 5/5 approved
 real image requests; all succeeded and created GalleryVersions 11–15. Corrections,
@@ -41,7 +42,7 @@ Official website context (updated 23.07.2026): `site/public` is the only site im
 
 Commercial operations: `payment-status`, `payment-history`, `payment-show`, `payment-reconcile`, dry-run-first `payment-resend-original`, `payment-mark-delivery-retry`, `refund-create`, `refund-history/status`, `robokassa-health`, `pilot-status/report`, storage/backup/cleanup/cost and `health-report`. Read `docs/PAYMENTS.md`, `ROBOKASSA.md`, `PAYMENT_GO_LIVE_AUDIT.md`, `ROBOKASSA_CABINET_SETUP.md`, `ROBOKASSA_SANDBOX_E2E.md`, `PAYMENT_SUPPORT_RUNBOOK.md`, `PILOT_5_USERS_RUNBOOK.md` and `PILOT_UNIT_ECONOMICS.md`. The public ResultURL transport may exist fail-closed while business callbacks remain disabled. Never enable sandbox business processing, production payments or public bot handlers without the corresponding separate owner authorization.
 
-Current commercial gate (22.07.2026): site may be submitted for Robokassa moderation. Code and Nginx implement a fail-closed POST ResultURL transport; production deployment evidence is required. Pixora uses SHA-256 while the cabinet was observed on MD5. Robokassa test secrets are absent from the GitHub production environment, exact Робочеки СМЗ payment method/object are not confirmed, and sandbox evidence does not exist. Real payment/refund/reconciliation remain unverified; handlers are observe-only and pilot limit is 0. `launch-status` reports those gates separately and always keeps `public_launch_ready=false`.
+Current commercial gate (23.07.2026): site may be submitted for Robokassa moderation. Code and Nginx implement a fail-closed POST ResultURL transport. Pixora uses SHA-256; the owner must confirm the cabinet also uses SHA-256 and install test MerchantLogin/Password #1/#2 before a separately authorized owner-only sandbox. The written support answer resolved the former `payment_method`/`payment_object` and second-check questions. Sandbox evidence, real payment/refund/reconciliation and final production approval still do not exist; handlers are observe-only and pilot limit is 0. `launch-status` keeps `public_launch_ready=false`.
 
 Content Studio context (21.07.2026): `app/content_studio` is an independent
 operator-only demonstration-content subsystem with separate SQLite/storage. It

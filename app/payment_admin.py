@@ -216,13 +216,8 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
         "webhook_path_exact": settings.payment_webhook_path == "/payments/robokassa/result",
         "currency_rub": settings.payment_currency == "RUB",
         "price_49_rub": settings.continuation_pack_price_rub == 49,
-        "receipt_describes_2_plus_1": (
-            "2" in settings.payment_receipt_item_name
-            and "1" in settings.payment_receipt_item_name
-        ),
-        "receipt_tax_configured": settings.payment_receipt_tax in {
-            "none", "vat0", "vat5", "vat7", "vat10", "vat20", "vat105", "vat107", "vat110", "vat120"
-        },
+        "receipt_name_exact": settings.payment_receipt_item_name == "Пакет доступа Pixora",
+        "receipt_tax_none": settings.payment_receipt_tax == "none",
     }
     with database.read() as connection:
         pending_delivery = int(connection.execute(
@@ -244,6 +239,10 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
         and checks["return_urls_without_query"]
         and checks["listener_loopback"]
         and checks["webhook_path_exact"]
+        and checks["currency_rub"]
+        and checks["price_49_rub"]
+        and checks["receipt_name_exact"]
+        and checks["receipt_tax_none"]
         and settings.payments_enabled
         and settings.payment_webhook_enabled
         and not settings.max_poll_observe_only

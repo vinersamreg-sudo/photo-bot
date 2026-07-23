@@ -1,22 +1,31 @@
 # Current State
 
+## 23.07.2026 — Robokassa support decision implemented
+
+- письменный ответ Robokassa для самозанятого с активными «Робочеками СМЗ» зафиксирован в `ROBOKASSA_SUPPORT_DECISION.md` как текущий source of truth;
+- sale Receipt теперь ровно `{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]}`;
+- `sno`, `payment_method`, `payment_object`, `cost` и признаки предоплаты отсутствуют; конфигурационные блокеры этих полей удалены;
+- GET builder подписывает один раз URL-кодированный Receipt и передаёт его дважды URL-кодированным в query; кириллица и оба слоя декодирования покрыты тестами;
+- подтверждён один чек продажи: использование обработок, original и redelivery новых чеков не создаёт;
+- цена 49 ₽, SHA-256, ResultURL/SuccessURL/FailURL, credit/entitlement ledger и +2/+1 grant не изменены;
+- payment/webhook/refund flags остаются false, Robokassa sandbox, observe-only true и pilot 0; платежей и OpenAI-запросов не выполнялось.
+
 ## 23.07.2026 — public product is «Пакет доступа Pixora»
 
 - пользователь покупает цифровой продукт «Пакет доступа Pixora», а не отдельные генерации;
 - после подтверждения оплаты пакет начисляет две обработки и один оригинал без водяного знака;
 - MAX, сайт, FAQ, оферта, условия оплаты, onboarding, Content Studio CTA и продуктовая документация используют слово «обработка»;
 - цена 49 ₽, код `continuation_pack_2_plus_1`, credit/entitlement ledger, ResultURL и логика атомарного начисления 2+1 не изменены;
-- фискальная строка `Receipt` намеренно не изменена в этом спринте;
+- на момент copy-спринта Receipt не менялся; это решение позднее заменено письменным ответом Robokassa выше;
 - payments/webhook/refunds и пользовательские handlers остаются выключенными; OpenAI-запросов не выполнялось.
 
 ## 22.07.2026 — Robokassa ResultURL and Receipt hardening
 
-- the fiscal Receipt item was fixed as «Пакет Pixora: 2 варианта обработки и 1 оригинал»; the later public product name is documented above and does not alter this fiscal field;
-- Receipt contains one item, quantity 1, cost 49.00 and sum 49.00, all derived from integer `price_minor=4900`; Receipt participates in the Password1 signature;
+- the then-current Receipt had an extended name and extra fields; this historical model is superseded by the 23.07.2026 support decision above;
 - Pixora is hard-locked to SHA-256: configuration rejects MD5/SHA-512 and the provider calls SHA-256 directly; the Robokassa cabinet was observed on MD5, so sandbox payment is blocked until the owner deliberately aligns the cabinet and test passwords;
 - Nginx and the loopback listener publish only a fail-closed ResultURL transport: GET 405, disabled POST 503, no ACK, state mutation or package grant;
 - business payment processing, refunds, pilot and public handlers remain off; mode remains sandbox and observe-only remains true;
-- Робочеки СМЗ are owner-confirmed active/FNS-approved with automatic receipt transmission, but exact `payment_method` and `payment_object` are not confirmed by official documentation and remain required empty gates;
+- the former `payment_method`/`payment_object` gate was unresolved at this point and is superseded by the written support answer above;
 - no Robokassa cabinet setting, sandbox payment, real payment, refund or OpenAI image request was performed in this audit.
 
 ## 21.07.2026 — Pixora Content Studio v1 implemented, dry-run only

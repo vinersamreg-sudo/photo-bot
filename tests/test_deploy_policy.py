@@ -135,14 +135,19 @@ class DeployPolicyTests(TestCase):
         )
         self.assertNotIn("legal/payment-refund.html?payment=", self.workflow)
         self.assertIn(
-            "set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'",
+            "set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'",
             self.workflow,
         )
-        self.assertIn("set_env PAYMENT_RECEIPT_PAYMENT_METHOD ''", self.workflow)
-        self.assertIn("set_env PAYMENT_RECEIPT_PAYMENT_OBJECT ''", self.workflow)
+        self.assertNotIn("PAYMENT_RECEIPT_PAYMENT_METHOD", self.workflow)
+        self.assertNotIn("PAYMENT_RECEIPT_PAYMENT_OBJECT", self.workflow)
         self.assertIn("Verify fail-closed ResultURL transport", self.workflow)
         self.assertIn('test "$GET_STATUS" = 405', self.workflow)
         self.assertIn('test "$POST_STATUS" = 503', self.workflow)
+        self.assertIn("payment-status --format json", self.workflow)
+        self.assertIn("payment_orders_total", self.workflow)
+        self.assertIn("paid_payment_orders", self.workflow)
+        self.assertIn("sale_receipts_total", self.workflow)
+        self.assertIn("continuation_pack_grants_total", self.workflow)
 
     def test_nginx_resulturl_deploy_is_root_scoped_and_rolls_back(self) -> None:
         script = self.nginx_resulturl_deploy

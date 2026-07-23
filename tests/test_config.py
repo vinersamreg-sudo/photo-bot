@@ -62,8 +62,6 @@ class SettingsTests(TestCase):
             "PAYMENT_WEBHOOK_LISTENER_ENABLED": "true",
             "PAYMENT_WEBHOOK_ENABLED": "true",
             "PAYMENT_RESULT_URL": "https://pixora.example/payments/robokassa/result",
-            "PAYMENT_RECEIPT_PAYMENT_METHOD": "full_payment",
-            "PAYMENT_RECEIPT_PAYMENT_OBJECT": "service",
             "ROBOKASSA_MERCHANT_LOGIN": "shop",
             "ROBOKASSA_PASSWORD1": "one",
             "ROBOKASSA_PASSWORD2": "two",
@@ -113,13 +111,16 @@ class SettingsTests(TestCase):
                 "PAYMENT_WEBHOOK_ENABLED": "true",
             })
 
-    def test_permanent_receipt_product_and_fiscal_fields_are_validated(self) -> None:
+    def test_permanent_receipt_product_is_validated_without_npd_only_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "permanent Pixora package"):
             load_settings(environ={"PAYMENT_RECEIPT_ITEM_NAME": "Другая услуга"})
-        with self.assertRaisesRegex(ValueError, "PAYMENT_RECEIPT_PAYMENT_METHOD"):
-            load_settings(environ={"PAYMENT_RECEIPT_PAYMENT_METHOD": "unknown"})
-        with self.assertRaisesRegex(ValueError, "PAYMENT_RECEIPT_PAYMENT_OBJECT"):
-            load_settings(environ={"PAYMENT_RECEIPT_PAYMENT_OBJECT": "unknown"})
+        settings = load_settings(environ={
+            "PAYMENT_RECEIPT_ITEM_NAME": "Пакет доступа Pixora",
+            "PAYMENT_RECEIPT_TAX": "none",
+        })
+        self.assertEqual(settings.payment_receipt_item_name, "Пакет доступа Pixora")
+        self.assertFalse(hasattr(settings, "payment_receipt_payment_method"))
+        self.assertFalse(hasattr(settings, "payment_receipt_payment_object"))
 
     def test_robokassa_commission_cannot_be_negative(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be non-negative"):

@@ -1,56 +1,45 @@
 # Pixora Payments
 
-## Permanent v1 product
+## Product
 
-The only v1 payment product is the digital product «Пакет доступа Pixora», internal code `continuation_pack_2_plus_1`. User-facing copy says: «После оплаты вам начисляется пакет доступа Pixora. В пакет входят две обработки и один оригинал. Пакет начисляется сразу после подтверждения оплаты.» The price is 49 ₽; there is no subscription or automatic renewal. A verified payment atomically grants two internal generation credits and one independent original entitlement. It never auto-unlocks a result.
+Pixora sells one digital service: «Пакет доступа Pixora» for 49 ₽. It includes two photo processing operations and one original without a watermark. There is no subscription or automatic renewal. A verified ResultURL atomically grants two internal credits and one independent original entitlement; it never auto-selects a version.
 
-The user sees these credits only as available photo processing operations and may use them on Correction, Repeat, a ready scenario or a different photograph. The entitlement may later unlock one owned, existing, non-deleted GalleryVersion with a private original, whether created before or after purchase. Repeat purchases stack.
+## Fiscal model
 
-`Receipt` is a separately controlled fiscal field. Its existing item name is intentionally unchanged by the public-copy migration. Do not derive user-facing product copy from the Receipt string and do not change fiscal fields without a separate approved task.
+The mandatory single-item Receipt is:
 
-Real payments are fail-closed. Every deploy sets `PAYMENTS_ENABLED=false`, `PAYMENT_PROVIDER=disabled`, `PAYMENT_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, `ROBOKASSA_MODE=sandbox` and `ROBOKASSA_PRODUCTION_APPROVED=false`. The independently controlled `PAYMENT_WEBHOOK_LISTENER_ENABLED=true` publishes only a loopback-backed readiness transport returning 503 while business callbacks are off. Enabling production requires a separate owner decision, credentials, HTTPS ResultURL, sandbox evidence, legal/fiscal review and a controlled real-payment smoke.
+```json
+{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]}
+```
 
-## Accounting boundaries
+This is the final model confirmed in writing by Robokassa support for a self-employed merchant using active «Робочеки СМЗ». `sno`, `payment_method` and `payment_object` are omitted. `PRICE_MINOR=4900` is the money source; rendered item sum and `OutSum` are both 49.00. See [the support decision](ROBOKASSA_SUPPORT_DECISION.md).
 
-- initial grant: exactly two successful deliveries once per MAX user identity;
-- generation: reserve one credit before provider, consume after delivered preview, release for provider/network/policy/storage/internal/MAX/cancel/restart failure;
-- ResultURL: validate and commit +2 credits and +1 entitlement in one SQLite transaction;
-- SuccessURL/browser redirect: display only, grants nothing;
-- entitlement: atomically links to a selected version; missing original consumes nothing;
-- original delivery: entitlement is reserved before MAX send and consumed only after
-  successful delivery; failure returns it to available without another payment;
-- duplicate callback/event/consumption/release: idempotent.
+One confirmed payment creates one sale receipt. Package use and original delivery do not create more sale receipts. Do not reintroduce a two-check model without a new direct written requirement from Robokassa or the FNS.
 
-## Refund
+## Transaction boundaries
 
-A completely unused package may be rolled back atomically: its two available credits are removed and its available entitlement becomes refunded. If a generation credit or entitlement from that package was used or reserved, automatic rollback is rejected and the case requires manual review. A refund hold temporarily removes the specific package lot and entitlement from the spendable set. Payment evidence and audit are never deleted.
+- initial free access: exactly two successful deliveries once per MAX identity;
+- processing: reserve one credit before provider, consume only after preview delivery, release on every failure;
+- ResultURL: verify SHA-256 Password #2, invoice, amount and ownership, then commit +2/+1 once;
+- browser redirects: informational only;
+- original: reserve entitlement before MAX send, consume after delivery, release on failure;
+- duplicate callback, reservation, consumption, release and delivery: idempotent;
+- refund: completely unused package may be rolled back; used value requires review.
+
+## Safe deployment
+
+Every normal deploy keeps `MAX_POLL_OBSERVE_ONLY=true`, `PILOT_USER_LIMIT=0`, `PAYMENTS_ENABLED=false`, `PAYMENT_PROVIDER=disabled`, `PAYMENT_WEBHOOK_ENABLED=false`, `PAYMENT_REFUNDS_ENABLED=false`, `ROBOKASSA_MODE=sandbox` and production approval false. The listener may remain active only as a fail-closed 405/503 readiness transport.
 
 ## Operator commands
 
 ```bash
-python -m app.main credit-status --platform-user-id <MAX-ID>
-python -m app.main credit-history --platform-user-id <MAX-ID>
-python -m app.main entitlement-status --platform-user-id <MAX-ID>
-python -m app.main entitlement-history --platform-user-id <MAX-ID>
-python -m app.main package-status --platform-user-id <MAX-ID>
-python -m app.main credit-adjust --platform-user-id <MAX-ID> --delta <N> --reason <ticket> --idempotency-key <key> [--apply]
-python -m app.main entitlement-adjust --platform-user-id <MAX-ID> --delta <N> --reason <ticket> --idempotency-key <key> [--apply]
+python -m app.main robokassa-health --format human
 python -m app.main payment-show --invoice <invoice> --format human
 python -m app.main payment-reconcile [--invoice <invoice>] --format human
-python -m app.main refund-create --invoice <invoice> --amount-rub 49 --reason customer_request --idempotency-key <ticket> [--apply|--dry-run]
-python -m app.main pilot-report --format human
-python -m app.main cost-status --format human
+python -m app.main payment-status --format human
+python -m app.main launch-status
 ```
 
-Dangerous commands are dry-run by default and require explicit `--apply`, reason and idempotency key. Output masks user/order/version references and never prints credentials, signed URLs, MAX IDs, prompts or private paths.
+These commands do not create payments. Mutating commercial commands remain dry-run-first and require explicit `--apply`, reason and idempotency key.
 
-## Evidence required before first real payment
-
-- Robokassa merchant, Password1/2/3, receipt/tax settings and exact product description verified in the cabinet;
-- public POST-only ResultURL behind trusted TLS and a loopback listener;
-- sandbox evidence for successful +2/+1 grant, callback replay, wrong amount/signature, later version selection, original retry and refund review;
-- offer/privacy/payment-refund text reviewed by qualified specialists;
-- alerts, support owner, reconciliation and backup/restore evidence;
-- explicit owner approval for the bounded real-money smoke.
-
-Detailed procedures: [Robokassa](ROBOKASSA.md), [go-live audit](PAYMENT_GO_LIVE_AUDIT.md), [cabinet setup](ROBOKASSA_CABINET_SETUP.md), [sandbox E2E](ROBOKASSA_SANDBOX_E2E.md), [support](PAYMENT_SUPPORT_RUNBOOK.md).
+Before the first sandbox transaction: align the cabinet to SHA-256, provide test MerchantLogin/Password #1/Password #2, verify the URLs and explicitly authorize one owner-only sandbox payment. Password #3 is needed only for a separately approved Refund API test.

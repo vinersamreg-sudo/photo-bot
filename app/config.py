@@ -83,8 +83,6 @@ class Settings:
     payment_fail_url: str = ""
     payment_receipt_tax: str = "none"
     payment_receipt_item_name: str = RECEIPT_ITEM_NAME
-    payment_receipt_payment_method: str = ""
-    payment_receipt_payment_object: str = ""
     demo_retention_days: int = 30
     paid_retention_days: int = 180
     trash_retention_days: int = 30
@@ -371,27 +369,6 @@ def load_settings(
     }
     if receipt_tax not in allowed_taxes:
         raise ValueError("PAYMENT_RECEIPT_TAX is not supported by Robokassa")
-    receipt_payment_method = values.get(
-        "PAYMENT_RECEIPT_PAYMENT_METHOD", ""
-    ).strip()
-    allowed_payment_methods = {
-        "full_prepayment", "prepayment", "advance", "full_payment",
-        "partial_payment", "credit", "credit_payment",
-    }
-    if receipt_payment_method and receipt_payment_method not in allowed_payment_methods:
-        raise ValueError("PAYMENT_RECEIPT_PAYMENT_METHOD is not supported by Robokassa")
-    receipt_payment_object = values.get(
-        "PAYMENT_RECEIPT_PAYMENT_OBJECT", ""
-    ).strip()
-    allowed_payment_objects = {
-        "commodity", "excise", "job", "service", "gambling_bet",
-        "gambling_prize", "lottery", "lottery_prize",
-        "intellectual_activity", "payment", "agent_commission", "composite",
-        "resort_fee", "another", "property_right", "non-operating_gain",
-        "insurance_premium", "sales_tax", "tovar_mark",
-    }
-    if receipt_payment_object and receipt_payment_object not in allowed_payment_objects:
-        raise ValueError("PAYMENT_RECEIPT_PAYMENT_OBJECT is not supported by Robokassa")
     if payments_enabled:
         required = {
             "ROBOKASSA_MERCHANT_LOGIN": values.get("ROBOKASSA_MERCHANT_LOGIN", "").strip(),
@@ -404,10 +381,6 @@ def load_settings(
             raise ValueError("Enabled payments are missing: " + ", ".join(missing))
         if not webhook_enabled:
             raise ValueError("Enabled payments require PAYMENT_WEBHOOK_ENABLED=true")
-        if not receipt_payment_method or not receipt_payment_object:
-            raise ValueError(
-                "Enabled payments require confirmed Receipt payment method and object"
-            )
         if not required["PAYMENT_RESULT_URL"].startswith("https://"):
             raise ValueError("PAYMENT_RESULT_URL must use HTTPS")
         payment_provider_url = values.get(
@@ -543,8 +516,6 @@ def load_settings(
         payment_fail_url=fail_url,
         payment_receipt_tax=receipt_tax,
         payment_receipt_item_name=receipt_item_name,
-        payment_receipt_payment_method=receipt_payment_method,
-        payment_receipt_payment_object=receipt_payment_object,
         demo_retention_days=_positive_int(values, "DEMO_RETENTION_DAYS", 30),
         paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),
         trash_retention_days=_positive_int(values, "TRASH_RETENTION_DAYS", 30),

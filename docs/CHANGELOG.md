@@ -1,5 +1,19 @@
 # Changelog
 
+## 23.07.2026 — final «Робочеки СМЗ» Receipt model
+
+- recorded the anonymized written Robokassa support answer as the fiscal source of truth;
+- changed the one-item Receipt name to «Пакет доступа Pixora» and removed `cost`,
+  `sno`, `payment_method`, `payment_object` and advance/prepayment markers;
+- removed the configuration and deploy blockers for payment method/object while
+  retaining empty legacy SQLite columns for historical records;
+- locked down the GET encoding contract: once-encoded Receipt in SHA-256, twice-
+  encoded Receipt in the query, stable UTF-8 Cyrillic recovery;
+- added regressions for the 25 required receipt, signature, idempotency, one-check,
+  package-use, original-redelivery and refund-boundary conditions;
+- kept price, URLs, SHA-256, +2/+1 grant and all disabled production flags unchanged;
+  no sandbox/real payment, refund API or OpenAI request was executed.
+
 ## 23.07.2026 — Pixora access-package product language
 
 - renamed the public digital product to «Пакет доступа Pixora» without changing

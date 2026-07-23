@@ -1,5 +1,18 @@
 # Decisions
 
+## ADR-044 — One-check «Робочеки СМЗ» Receipt is the fiscal source of truth
+
+Принято 23.07.2026 на основании официального письменного ответа Robokassa для
+самозанятого с активными «Робочеками СМЗ». Один платёж 49 ₽ продаёт одну цифровую
+услугу «Пакет доступа Pixora» и формирует один чек продажи. Receipt содержит одну
+позицию `name`, `quantity=1`, `sum=49.00`, `tax=none`; `sno`,
+`payment_method`, `payment_object`, `cost` и признаки аванса/предоплаты не
+передаются. Использование двух обработок, получение original и redelivery новых
+чеков не создают. Для GET один раз URL-кодированный Receipt участвует в SHA-256
+Password #1 signature, а query содержит вторично закодированное значение.
+ResultURL и атомарный +2/+1 grant не меняются. Не возвращаться к двухчековой
+модели без нового прямого письменного требования Robokassa или ФНС.
+
 ## ADR-043 — Public product is «Пакет доступа Pixora»
 
 Принято 23.07.2026 и уточняет ADR-041 только на уровне продуктовой модели и
@@ -9,7 +22,7 @@ Pixora» за 49 ₽, а не отдельные генерации. После 
 MAX, сайт, onboarding, FAQ, оферта и поддержка используют слово «обработка».
 Внутренний код `continuation_pack_2_plus_1`, generation-credit ledger,
 original-entitlement ledger, ResultURL и атомарное начисление 2+1 не меняются.
-Фискальное наименование Receipt также не меняется без отдельного решения.
+Фискальная часть позднее уточнена отдельным ADR-044.
 
 ## ADR-042 — Demonstration content is a separate review-first operator domain
 

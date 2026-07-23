@@ -1,37 +1,39 @@
 # Robokassa Integration
 
-Implementation follows the classic payment form and ResultURL contract from the official [payment interface](https://docs.robokassa.ru/ru/pay-interface) and [notification documentation](https://docs.robokassa.ru/ru/notifications-and-redirects). Refund preparation follows the official [Refund API](https://docs.robokassa.ru/ru/refund-api).
+Current source of truth: [ROBOKASSA_SUPPORT_DECISION.md](ROBOKASSA_SUPPORT_DECISION.md), the written Robokassa support decision received on 23.07.2026 for a self-employed merchant using active «Робочеки СМЗ». Protocol details are also checked against the official [payment interface](https://docs.robokassa.ru/ru/pay-interface.html), [redirects](https://docs.robokassa.ru/ru/notifications-and-redirects.html) and [fiscalization](https://docs.robokassa.ru/ru/fiscalization.html).
 
-## Payment form
+## Payment initialization
 
-`RobokassaProvider` builds `https://auth.robokassa.ru/Merchant/Index.aspx` with `MerchantLogin`, server-calculated `OutSum`, numeric `InvId`, receipt, expiry, `Shp_order` opaque token and a Password1 signature. Sandbox adds `IsTest=1`. Passwords never enter the URL, database audit or logs.
+Pixora uses a classic GET payment link to `https://auth.robokassa.ru/Merchant/Index.aspx`. `RobokassaProvider` sends `MerchantLogin`, server-calculated `OutSum`, numeric `InvId`, `Description`, mandatory `Receipt`, expiry, `Shp_order`, optional URL2 return fields and SHA-256 `SignatureValue`. Sandbox adds `IsTest=1`.
+
+The only sale item is:
+
+```json
+{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]}
+```
+
+It has no `sno`, `payment_method`, `payment_object`, `cost`, advance or prepayment marker. The amount source is integer `PRICE_MINOR=4900`; binary float is not a financial source of truth.
+
+## Receipt encoding and Password #1 signature
+
+The canonical UTF-8 JSON is stable, compact and keeps Cyrillic unescaped. It is URL-encoded once. That once-encoded value is included in the signature. Because Pixora sends `SuccessUrl2` and `FailUrl2`, the actual base is:
+
+`MerchantLogin:OutSum:InvId:Receipt:SuccessUrl2:GET:FailUrl2:GET:Password1:Shp_order=...`
+
+The encoded return URLs and alphabetically sorted `Shp_*` fields are the same values sent in the request. The GET query builder URL-encodes the already encoded `Receipt` a second time. One query decode returns the signed value; the second returns the original JSON. Tests reject signing the twice-encoded query value.
 
 ## ResultURL
 
-The public HTTPS proxy must forward **POST only** to the loopback path `/payments/robokassa/result`. GET on the configured path returns 405; bodies over 64 KiB or malformed UTF-8 are rejected. The application validates the Password2 signature, known invoice, exact amount, local merchant/provider binding, RUB order, internal expiry, opaque order token and idempotency digest. It returns `OK<InvId>` only after the SQLite transaction commits.
+Nginx forwards POST only to the loopback `/payments/robokassa/result`. GET returns 405. While `PAYMENT_WEBHOOK_ENABLED=false`, POST returns 503 without writing payment state.
 
-The classic ResultURL does not itself provide a separately signed merchant field, currency, success status or provider timestamp. Therefore merchant/currency are validated against the locally created order; success is the documented meaning of a valid ResultURL; timestamp protection is the internal order expiry. These checks must not be described as ResultURL2/JWS validation.
+When separately enabled for an approved sandbox, the backend verifies the Password #2 SHA-256 signature, exact 49.00 amount, `InvId`, local merchant/provider binding, RUB order and `Shp_order`. One SQLite transaction confirms the payment, creates one +2/+1 package grant and marks the single sale-receipt audit record confirmed. `OK<InvId>` is returned only after commit. Duplicate callbacks are idempotent.
 
-Duplicate callbacks are safe. An exact replay returns the prior acknowledgement without another unlock or delivery. A second valid callback for an already paid order is audited as a duplicate payment and also cannot widen unlock scope.
+SuccessURL and FailURL do not grant value. Receipt from the browser or callback is never the source of truth.
 
-## Product grant
+## One-check model
 
-The public digital product is «Пакет доступа Pixora», internal code `continuation_pack_2_plus_1`, price 49 ₽. User-facing copy says it includes two processing operations and one original. The separately controlled fiscal Receipt name remains «Пакет Pixora: 2 варианта обработки и 1 оригинал», quantity 1, cost 49.00 RUB and sum 49.00 RUB. Receipt money is rendered from integer `price_minor=4900`; binary floating-point is not used. A verified ResultURL atomically grants two internal generation credits and one available original entitlement. It does not unlock or deliver a version. The user later selects an owned available GalleryVersion; browser SuccessURL never grants value. Replayed callbacks return idempotent success without a second package.
+One payment buys one «Пакет доступа Pixora» and creates one sale receipt. Using either processing operation, selecting the original or redelivering it creates no new sale receipt. A separate `receipt_type=refund` database record is return audit only, not a second receipt of sale.
 
-Every payment link includes a URL-encoded `Receipt`. Its encoded value participates in the Password1 signature in the documented order. `tax=none` maps the owner-confirmed NPD/no-VAT sale to Robokassa's documented “without VAT” value. `payment_method` and `payment_object` remain deliberately unset until Robokassa confirms the exact Робочеки СМЗ values; configuration refuses to enable payments while either field is empty.
+## Safety state
 
-## Current transport and hash gate
-
-The repository publishes only a fail-closed ResultURL transport while payments are disabled. `PAYMENT_WEBHOOK_LISTENER_ENABLED=true` starts a loopback listener; `PAYMENT_WEBHOOK_ENABLED=false` makes valid-path POST requests return `503 Retry-After` without parsing a signature, writing payment state, granting a package or returning `OK<InvId>`. GET returns `405 Allow: POST`. Business processing is enabled only in a separately approved sandbox window.
-
-Pixora signs and verifies only with `ROBOKASSA_HASH_ALGORITHM=sha256`. Configuration and provider construction reject `md5`, `sha512` and every other value, while the digest implementation calls `hashlib.sha256` directly. The cabinet was observed using MD5, so a payment test is blocked until the cabinet algorithm and Password1/Password2 test credentials are deliberately aligned with SHA-256. No cabinet setting was changed by this audit.
-
-## Refund limitation
-
-Robokassa refund execution needs an operation key (`OpKey`) and Password3. Classic ResultURL may not supply `OpKey`; until ResultURL2 or a documented operation-status reconciliation supplies it, automatic refund submission is intentionally blocked. A local `RefundIntent` can still be prepared and audited for manual handling.
-
-## Rollout
-
-Production mode additionally requires `ROBOKASSA_PRODUCTION_APPROVED=true`; deployment never sets it automatically. Provider endpoints, signatures and receipts must be rechecked against the merchant cabinet before activation because cabinet settings are external state.
-
-Exact target fields and the fail-closed Nginx transport are documented in [ROBOKASSA_CABINET_SETUP.md](ROBOKASSA_CABINET_SETUP.md). A passing unit suite is not sandbox evidence; use [ROBOKASSA_SANDBOX_E2E.md](ROBOKASSA_SANDBOX_E2E.md).
+Deploy forces payments, business callbacks and refunds off, sandbox mode on, production approval off, MAX observe-only on for a normal push and pilot limit 0. SHA-256 is the only accepted algorithm. No payment or refund may be executed without separate owner approval and credentials.

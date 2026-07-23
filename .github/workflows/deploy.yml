@@ -321,7 +321,7 @@ jobs:
             ensure_env ROBOKASSA_REFUND_URL https://services.robokassa.ru/RefundService/Refund/Create
             ensure_env ROBOKASSA_REFUND_STATUS_URL https://services.robokassa.ru/RefundService/Refund/GetState
             ensure_env PAYMENT_RECEIPT_TAX none
-            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'
+            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'
             ensure_env DEMO_RETENTION_DAYS 30
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
@@ -350,10 +350,8 @@ jobs:
             set_env PAYMENT_SUCCESS_URL https://pixoraai.ru/payment-success.html
             set_env PAYMENT_FAIL_URL https://pixoraai.ru/payment-failed.html
             set_env ROBOKASSA_HASH_ALGORITHM sha256
-            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет Pixora: 2 варианта обработки и 1 оригинал'
+            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'
             set_env PAYMENT_RECEIPT_TAX none
-            set_env PAYMENT_RECEIPT_PAYMENT_METHOD ''
-            set_env PAYMENT_RECEIPT_PAYMENT_OBJECT ''
             # Commercial integrations require a separate, explicit rollout.
             set_env PAYMENTS_ENABLED false
             set_env PAYMENT_PROVIDER disabled
@@ -520,6 +518,22 @@ jobs:
                   """SELECT COUNT(*) FROM user_credit_accounts
                      WHERE available_generation_credits<0 OR reserved_generation_credits<0"""
               ).fetchone()[0]
+              payment_orders_total = connection.execute(
+                  "SELECT COUNT(*) FROM payment_orders"
+              ).fetchone()[0]
+              paid_payment_orders = connection.execute(
+                  "SELECT COUNT(*) FROM payment_orders WHERE status IN ('paid','delivered')"
+              ).fetchone()[0]
+              payment_events_total = connection.execute(
+                  "SELECT COUNT(*) FROM payment_events"
+              ).fetchone()[0]
+              sale_receipts_total = connection.execute(
+                  """SELECT COUNT(*) FROM payment_receipts
+                     WHERE receipt_type='payment'"""
+              ).fetchone()[0]
+              continuation_pack_grants_total = connection.execute(
+                  "SELECT COUNT(*) FROM continuation_pack_grants"
+              ).fetchone()[0]
           finally:
               connection.close()
           assert quick_check == "ok"
@@ -543,11 +557,9 @@ jobs:
               "https://pixoraai.ru/payment-failed.html"
           )
           assert settings.payment_receipt_item_name == (
-              "Пакет Pixora: 2 варианта обработки и 1 оригинал"
+              "Пакет доступа Pixora"
           )
           assert settings.payment_receipt_tax == "none"
-          assert settings.payment_receipt_payment_method == ""
-          assert settings.payment_receipt_payment_object == ""
           assert settings.openai_conversation_memory_enabled is False
           assert settings.openai_responses_image_enabled is False
           assert settings.openai_conversation_retention_enabled is False
@@ -599,6 +611,11 @@ jobs:
               "migration_v9": migration_v9,
               "credit_accounts": credit_accounts,
               "negative_credit_accounts": negative_credit_accounts,
+              "payment_orders_total": payment_orders_total,
+              "paid_payment_orders": paid_payment_orders,
+              "payment_events_total": payment_events_total,
+              "sale_receipts_total": sale_receipts_total,
+              "continuation_pack_grants_total": continuation_pack_grants_total,
               "payments_enabled": settings.payments_enabled,
               "payment_webhook_listener_enabled": settings.payment_webhook_listener_enabled,
               "payment_webhook_enabled": settings.payment_webhook_enabled,
@@ -615,12 +632,6 @@ jobs:
               "payment_fail_url": settings.payment_fail_url,
               "payment_receipt_item_name": settings.payment_receipt_item_name,
               "payment_receipt_tax": settings.payment_receipt_tax,
-              "payment_receipt_payment_method_configured": bool(
-                  settings.payment_receipt_payment_method
-              ),
-              "payment_receipt_payment_object_configured": bool(
-                  settings.payment_receipt_payment_object
-              ),
               "openai_conversation_memory_enabled": settings.openai_conversation_memory_enabled,
               "openai_responses_image_enabled": settings.openai_responses_image_enabled,
               "openai_conversation_retention_enabled": (
@@ -642,6 +653,7 @@ jobs:
           assert status["external_ai_requests"] == 0
           print("content_studio_audit=" + json.dumps(status, sort_keys=True))
           PY
+            "$ROOT"/venv/bin/python -m app.main payment-status --format json
             "$ROOT"/venv/bin/python -m app.main launch-status
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
