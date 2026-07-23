@@ -17,7 +17,7 @@ cd /opt/photo-bot
 |---|---|---|---|
 | 1 | Owner receives a demo: «Готово — демо…» | succeeded version, demo quota decremented, `result_delivered` | Gallery shows exact version; fail if no original+preview |
 | 2 | Owner taps «Получить оригинал» | `unlock_clicked`; no unlock yet | selected version ID is fixed; fail if sibling unlocks |
-| 3 | Bot offers «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽» | new pending order/intent/attempt/receipt, audit `order_created` | `payment-show`; name exact, quantity 1, cost/sum exactly 49.00 RUB and Receipt total equals OutSum |
+| 3 | Bot offers «Пакет доступа Pixora — 49 ₽» and explains 2 processing operations + 1 original | new pending order/intent/attempt/receipt, audit `order_created` | `payment-show`; fiscal Receipt name remains separately configured, quantity 1, cost/sum exactly 49.00 RUB and Receipt total equals OutSum |
 | 4 | Bot sends sandbox payment URL | provider link contains `IsTest=1`, masked URL never logged | `payment-history`; fail if production URL lacks sandbox marker |
 | 5 | Owner completes test payment | browser redirect may appear; DB may still be pending | do not treat browser page as success |
 | 6 | Robokassa POSTs ResultURL | one callback event received | webhook log has request ID only; fail on GET acceptance |

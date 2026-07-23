@@ -1,11 +1,22 @@
 # Changelog
 
+## 23.07.2026 — Pixora access-package product language
+
+- renamed the public digital product to «Пакет доступа Pixora» without changing
+  price, internal product code, credits, entitlements or grant logic;
+- aligned MAX, onboarding, Content Studio CTA, site, FAQ, offer, payment/refund
+  pages and product documentation on «две обработки и один оригинал»;
+- removed «генерация» from ordinary user-facing copy and added regression coverage
+  against the legacy public wording;
+- kept Receipt, ResultURL, Robokassa, fiscal fields and all payment feature flags
+  unchanged; no payment or OpenAI request was executed.
+
 - hard-locked every Robokassa payment signature to SHA-256 and made configuration/provider construction reject MD5 and SHA-512;
 
 ## 22.07.2026 — Robokassa fail-closed ResultURL transport
 
 - added a separately gated loopback ResultURL listener and exact Nginx proxy; GET returns 405 and disabled POST returns 503 without state mutation or ACK;
-- aligned MAX, site, offer, payment terms and Receipt to «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽»;
+- aligned the then-current MAX/site copy and fiscal Receipt before the later public-language decision in ADR-043;
 - removed binary float from Receipt money and added exact quantity/cost/sum/signature regression coverage;
 - made confirmed Receipt payment method/object mandatory before payments can enable;
 - documented that Pixora uses SHA-256 while the cabinet was observed on MD5 and that test credentials are not configured in GitHub production secrets;

@@ -13,6 +13,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.commercial_operations import cost_status, payment_status
+from app.commerce import RECEIPT_ITEM_NAME, USER_PRODUCT_NAME
 from app.payment_admin import payment_reconcile, payment_show
 from app.database import Database
 from app.demo_service import DemoService
@@ -45,6 +46,13 @@ class Clock:
 
 
 class PaymentTests(TestCase):
+    def test_public_product_name_is_decoupled_from_unchanged_fiscal_receipt(self) -> None:
+        self.assertEqual(USER_PRODUCT_NAME, "Пакет доступа Pixora")
+        self.assertEqual(
+            RECEIPT_ITEM_NAME,
+            "Пакет Pixora: 2 варианта обработки и 1 оригинал",
+        )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -115,6 +123,7 @@ class PaymentTests(TestCase):
         self.assertEqual(query["InvId"], [str(order.provider_invoice_id)])
         self.assertEqual(query["IsTest"], ["1"])
         self.assertEqual(query["Shp_order"], [order.public_token])
+        self.assertEqual(query["Description"], ["Пакет доступа Pixora"])
         self.assertIn("Receipt", query)
         receipt_text = unquote(query["Receipt"][0])
         self.assertIn('"cost":49.00', receipt_text)

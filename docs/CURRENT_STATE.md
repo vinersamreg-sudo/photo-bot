@@ -1,8 +1,17 @@
 # Current State
 
+## 23.07.2026 — public product is «Пакет доступа Pixora»
+
+- пользователь покупает цифровой продукт «Пакет доступа Pixora», а не отдельные генерации;
+- после подтверждения оплаты пакет начисляет две обработки и один оригинал без водяного знака;
+- MAX, сайт, FAQ, оферта, условия оплаты, onboarding, Content Studio CTA и продуктовая документация используют слово «обработка»;
+- цена 49 ₽, код `continuation_pack_2_plus_1`, credit/entitlement ledger, ResultURL и логика атомарного начисления 2+1 не изменены;
+- фискальная строка `Receipt` намеренно не изменена в этом спринте;
+- payments/webhook/refunds и пользовательские handlers остаются выключенными; OpenAI-запросов не выполнялось.
+
 ## 22.07.2026 — Robokassa ResultURL and Receipt hardening
 
-- the permanent product name is «Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽» across MAX, site, offer, payment terms, Receipt and payment documentation;
+- the fiscal Receipt item was fixed as «Пакет Pixora: 2 варианта обработки и 1 оригинал»; the later public product name is documented above and does not alter this fiscal field;
 - Receipt contains one item, quantity 1, cost 49.00 and sum 49.00, all derived from integer `price_minor=4900`; Receipt participates in the Password1 signature;
 - Pixora is hard-locked to SHA-256: configuration rejects MD5/SHA-512 and the provider calls SHA-256 directly; the Robokassa cabinet was observed on MD5, so sandbox payment is blocked until the owner deliberately aligns the cabinet and test passwords;
 - Nginx and the loopback listener publish only a fail-closed ResultURL transport: GET 405, disabled POST 503, no ACK, state mutation or package grant;
@@ -106,7 +115,7 @@ Provider sandbox/real-payment evidence, operation-key refund reconciliation, о�
 
 - `site/public` — единственная реализация сайта; второй frontend не создаётся;
 - MAX deep link проверен: `https://max.ru/se13572368_bot`;
-- публичный продукт синхронизирован с backend: 49 ₽ за ещё два варианта и один выбранный original без watermark;
+- публичный продукт синхронизирован с backend: пакет доступа Pixora за 49 ₽ включает две обработки и один original без watermark;
 - добавлены оферта, privacy, согласие, правила, оплата/возврат и контакты;
 - оплата и публичный запуск честно обозначены как недоступные в закрытом тестировании;
 - CI проверяет mobile/desktop Lighthouse, ссылки, SEO, legal consistency, отсутствие секретов и atomic deploy;

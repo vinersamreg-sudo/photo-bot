@@ -16,7 +16,7 @@ from app.domain import DemoLimitError, InvalidInputError, PaymentRequiredError
 
 PRODUCT_CODE = "continuation_pack_2_plus_1"
 PRODUCT_NAME = "Pixora Continuation Pack"
-USER_PRODUCT_NAME = "Пакет Pixora: 2 варианта обработки и 1 оригинал"
+USER_PRODUCT_NAME = "Пакет доступа Pixora"
 RECEIPT_ITEM_NAME = "Пакет Pixora: 2 варианта обработки и 1 оригинал"
 PRICE_MINOR = 4_900
 GENERATION_CREDITS_PER_PACK = 2

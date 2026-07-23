@@ -101,12 +101,22 @@ class PixoraSiteTests(unittest.TestCase):
     def test_price_is_49_rubles_for_continuation_pack(self) -> None:
         self.assertIn("49 ₽", self.html)
         self.assertIn(
-            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽",
+            "Пакет доступа Pixora — 49 ₽",
             self.html,
         )
-        self.assertIn("право выбрать 1 оригинал", self.html)
+        self.assertIn("2 обработки и 1 оригинал", self.html)
         forbidden_price = f"{3 * 50 - 1} ₽"
         self.assertNotIn(forbidden_price, self.html)
+
+    def test_public_copy_sells_access_package_not_generations(self) -> None:
+        public_pages = [
+            path.read_text(encoding="utf-8")
+            for path in PUBLIC.rglob("*.html")
+        ]
+        combined = "\n".join(public_pages).lower()
+        self.assertNotIn("генерац", combined)
+        self.assertNotIn("пакет pixora: 2 варианта", combined)
+        self.assertIn("пакет доступа pixora", combined)
 
     # 06
     def test_no_subscription_or_autopay_claim(self) -> None:

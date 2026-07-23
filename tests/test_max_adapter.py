@@ -58,8 +58,9 @@ class MaxAdapterTests(TestCase):
         self.assertIn("соглашаетесь с условиями сервиса", WELCOME_TEXT)
         self.assertEqual(result_actions(4).text, "Демо с водяным знаком.")
         self.assertNotIn("4", result_actions(4).text)
-        self.assertIn("Остался один бесплатный вариант", result_actions(1).text)
-        self.assertIn("Бесплатные варианты закончились", result_actions(0).text)
+        self.assertIn("Осталась одна бесплатная обработка", result_actions(1).text)
+        self.assertIn("Бесплатные обработки закончились", result_actions(0).text)
+        self.assertIn("Пакет доступа Pixora — 49 ₽", result_actions(0).buttons[1].text)
         self.assertEqual(result_actions(4).buttons[0].text, "⬇ Получить оригинал")
         self.assertEqual(len(gallery_item_actions()), 6)
         self.assertEqual(len(gallery_more_actions().buttons), 4)
@@ -86,6 +87,7 @@ class MaxAdapterTests(TestCase):
             "preview",
             "originals",
             "gpt",
+            "генерац",
         )
         for view in views:
             normalized = view.text.lower()

@@ -7,7 +7,7 @@ result, not a model name. Never imply a demonstration is a customer order.
 
 Every post ends with:
 
-> 🎁 Получите 2 бесплатные генерации<br>
+> 🎁 Получите 2 бесплатные обработки<br>
 > 👇 Попробовать Pixora
 
 The link always contains `utm_source=max`, `utm_medium=channel`,

@@ -20,6 +20,7 @@ from app.commerce import (
     PRICE_MINOR,
     PRODUCT_CODE,
     UNLOCK_ENTITLEMENTS_PER_PACK,
+    USER_PRODUCT_NAME,
 )
 from app.database import Database
 from app.domain import InvalidInputError, PaymentRequiredError
@@ -467,7 +468,7 @@ class PaymentService:
         request = RobokassaPaymentRequest(
             invoice_id=order.provider_invoice_id,
             amount_minor=order.amount_minor,
-            description=self.settings.payment_receipt_item_name,
+            description=USER_PRODUCT_NAME,
             public_token=order.public_token,
             expires_at=order.expires_at,
             receipt_name=self.settings.payment_receipt_item_name,

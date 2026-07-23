@@ -75,7 +75,7 @@ python -m app.main demo-stats
 
 Без `--provider fake` команда использует настроенный OpenAI `images.edit`. Она выводит только путь к уменьшенному watermarked preview. Оригинал хранится отдельно в `data/users/<opaque-id>/demo_sessions/<session-id>/originals` и не входит в пользовательский ответ.
 
-Начальный баланс относится к MAX user ID, а не к demo-сессии или фотографии: пользователь однократно получает две успешно доставленные генерации и может распределить их между разными снимками. Технические и policy-ошибки, отмена и ошибка доставки баланс не расходуют.
+Начальный баланс относится к MAX user ID, а не к demo-сессии или фотографии: пользователь однократно получает две успешно доставленные обработки и может распределить их между разными снимками. Технические и policy-ошибки, отмена и ошибка доставки баланс не расходуют.
 
 ## Personal studio API
 
@@ -102,7 +102,7 @@ Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `T
 
 ## Commercial payments
 
-Migration v9 фиксирует постоянный продукт `Pixora Continuation Pack`: 49 ₽ дают ещё две успешные генерации и одно независимое право получить выбранный original без водяного знака. Платёж не выбирает версию автоматически; entitlement можно применить к любой доступной собственной версии, созданной до или после покупки. Повторные пакеты складываются. ResultURL атомарно начисляет обе части пакета и остаётся идемпотентным. Реальные деньги не включены: каждый deploy принудительно оставляет payment/webhook/refund flags off, sandbox mode и no production approval. Read [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
+Публичный цифровой продукт называется **«Пакет доступа Pixora»** и стоит 49 ₽. После подтверждения оплаты пользователю начисляются две обработки и один оригинал без водяного знака. Внутренний код `continuation_pack_2_plus_1`, credit ledger и entitlement ledger не меняются: платёж не выбирает версию автоматически, entitlement можно применить к любой доступной собственной версии, созданной до или после покупки. Повторные пакеты складываются. ResultURL атомарно начисляет обе части пакета и остаётся идемпотентным. Реальные деньги не включены: каждый deploy принудительно оставляет payment/webhook/refund flags off, sandbox mode и no production approval. Read [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
 
 Read-only and dry-run-first operator tools:
 
@@ -153,7 +153,7 @@ Systemd hardening template находится в `ops/photo-bot.service`. Еже
 
 ## Official website
 
-Официальный продуктовый сайт находится в `site/public` и развёртывается отдельно от бота в `/opt/pixora-site`. Он честно описывает закрытое тестирование, ведёт в проверенный MAX-бот и фиксирует единый пакет: 49 ₽ за ещё два варианта и один выбранный original без водяного знака. Платежи остаются выключенными.
+Официальный продуктовый сайт находится в `site/public` и развёртывается отдельно от бота в `/opt/pixora-site`. Он честно описывает закрытое тестирование, ведёт в проверенный MAX-бот и фиксирует единый цифровой продукт: «Пакет доступа Pixora» за 49 ₽, включающий две обработки и один оригинал без водяного знака. Платежи остаются выключенными.
 
 Site workflow закрыт переменной production environment `PIXORA_SITE_DEPLOY_ENABLED`. Её нельзя включать до переноса DNS на Hetzner, выпуска доверенного TLS-сертификата, внешнего HTTPS smoke и подтверждения неизменности backend. Начинать с [site README](site/README.md), [production runbook](docs/SITE_PRODUCTION_RUNBOOK.md), [TLS runbook](docs/TLS_CERTIFICATE_RUNBOOK.md) и [Robokassa checklist](docs/ROBOKASSA_SITE_MODERATION_CHECKLIST.md).
 

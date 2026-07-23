@@ -1,5 +1,16 @@
 # Decisions
 
+## ADR-043 — Public product is «Пакет доступа Pixora»
+
+Принято 23.07.2026 и уточняет ADR-041 только на уровне продуктовой модели и
+пользовательского языка. Пользователь покупает цифровой продукт «Пакет доступа
+Pixora» за 49 ₽, а не отдельные генерации. После подтверждения оплаты пакет
+начисляется сразу и включает две обработки и один оригинал без водяного знака.
+MAX, сайт, onboarding, FAQ, оферта и поддержка используют слово «обработка».
+Внутренний код `continuation_pack_2_plus_1`, generation-credit ledger,
+original-entitlement ledger, ResultURL и атомарное начисление 2+1 не меняются.
+Фискальное наименование Receipt также не меняется без отдельного решения.
+
 ## ADR-042 — Demonstration content is a separate review-first operator domain
 
 Принято 21.07.2026. Content Studio не использует пользовательскую Gallery, MAX
@@ -10,9 +21,9 @@ Platform adapter не имеет сетевого transport, production deploy �
 ставит publishing false. До первого реального asset обязателен отдельный encrypted
 restore-tested backup подсистемы.
 
-## ADR-041 — Permanent v1 package is 2 generations plus 1 selected original
+## ADR-041 — Internal v1 grant is 2 processing credits plus 1 selected original
 
-Принято 20.07.2026 и заменяет ADR-035/036/038 в части состава продукта и момента выбора версии. Новый MAX user ID однократно получает две успешно доставленные генерации, глобальные для всех фотографий. Пакет `continuation_pack_2_plus_1` за 49 ₽ атомарно добавляет две generation credits и одно independent unlock entitlement. Покупка не привязывается к версии: пользователь позднее применяет entitlement к любой своей доступной GalleryVersion, созданной до или после покупки. Повторные пакеты складываются; подписки и auto-unlock нет. Reservation создаётся до provider и расходуется только после успешной доставки preview. Полностью неиспользованный пакет можно откатить атомарно; использованный пакет требует ручного возврата.
+Принято 20.07.2026 и заменяет ADR-035/036/038 в части состава продукта и момента выбора версии. Новый MAX user ID однократно получает две успешно доставленные обработки, глобальные для всех фотографий. Внутренний пакет `continuation_pack_2_plus_1` за 49 ₽ атомарно добавляет две generation credits и одно independent unlock entitlement. Покупка не привязывается к версии: пользователь позднее применяет entitlement к любой своей доступной GalleryVersion, созданной до или после покупки. Повторные пакеты складываются; подписки и auto-unlock нет. Reservation создаётся до provider и расходуется только после успешной доставки preview. Полностью неиспользованный пакет можно откатить атомарно; использованный пакет требует ручного возврата. Публичное название и пользовательский язык позднее уточнены ADR-043.
 
 ## ADR-040 — Moderation, sandbox, production payments and pilot are separate gates
 

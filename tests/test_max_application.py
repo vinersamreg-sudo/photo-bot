@@ -372,7 +372,7 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(delivered_path.is_file())
         self.assertEqual(
             self.transport.images[-1][2],
-            "Демо с водяным знаком.\n\nОстался один бесплатный вариант.",
+            "Демо с водяным знаком.\n\nОсталась одна бесплатная обработка.",
         )
         self.assertEqual(self.transport.edits[-1][1], "✨ Готово")
         with self.database.read() as connection:
@@ -390,7 +390,7 @@ class MaxApplicationTests(TestCase):
 
         unlock_event = self.callback("result:unlock")
         self.assertIn(
-            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽",
+            "Пакет доступа Pixora — 49 ₽",
             self.transport.messages[-1][1],
         )
         self.assertNotIn(str(attempt["original_result_path"]), self.transport.messages[-1][1])

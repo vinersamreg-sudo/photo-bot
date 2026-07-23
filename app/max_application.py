@@ -283,10 +283,10 @@ class MaxApplication:
         if isinstance(exc, DemoLimitError):
             self._send_error(
                 event.user_id,
-                "Бесплатные варианты закончились.",
+                "Бесплатные обработки закончились.",
                 (
                     Button("⬇ Получить оригинал", "result:unlock"),
-                    Button("Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽", "package:buy"),
+                    Button("Пакет доступа Pixora — 49 ₽", "package:buy"),
                     Button("📂 Мои работы", "studio:works"),
                 ),
             )
@@ -449,7 +449,9 @@ class MaxApplication:
         if action == "legal:offer":
             self.transport.send_message(
                 event.user_id,
-                "Условия использования\n\nСервис создаёт демо-обработку. Оплата оригинала пока недоступна.",
+                "Условия использования\n\n"
+                "Сервис создаёт демо-обработку. Пакет доступа Pixora включает "
+                "две обработки и один оригинал. Оплата пока недоступна.",
                 (Button("← Назад", "settings"),),
             )
             return
@@ -991,12 +993,14 @@ class MaxApplication:
 
     def _offer_continuation_pack(self, platform_user_id: str) -> None:
         text = (
-            "Чтобы продолжить, нужен пакет:\n\n"
-            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽.\n\n"
-            "Оригинал можно выбрать позже в любой своей работе."
+            "Пакет доступа Pixora — 49 ₽.\n\n"
+            "После оплаты вам начисляется пакет доступа Pixora.\n"
+            "В пакет входят две обработки и один оригинал.\n"
+            "Пакет начисляется сразу после подтверждения оплаты.\n\n"
+            "Оригинал можно выбрать позже в любой своей работе; он будет без водяного знака."
         )
         buttons = (
-            Button("Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽", "package:buy"),
+            Button("Пакет доступа Pixora — 49 ₽", "package:buy"),
             Button("📂 Мои работы", "studio:works"),
         )
         self.transport.send_message(platform_user_id, text, buttons)
@@ -1012,7 +1016,10 @@ class MaxApplication:
         if not self.settings.payments_enabled:
             self.transport.send_message(
                 event.user_id,
-                "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽.\n\n"
+                "Пакет доступа Pixora — 49 ₽.\n\n"
+                "После оплаты вам начисляется пакет доступа Pixora.\n"
+                "В пакет входят две обработки и один оригинал.\n"
+                "Пакет начисляется сразу после подтверждения оплаты.\n\n"
                 "Оплата пока недоступна — идёт закрытое тестирование.",
                 (Button("📂 Мои работы", "studio:works"),),
             )
@@ -1046,8 +1053,11 @@ class MaxApplication:
             return
         self.transport.send_message(
             event.user_id,
-            "Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽.\n\n"
-            "После оплаты вы сами выберете, какой оригинал получить.",
+            "Пакет доступа Pixora — 49 ₽.\n\n"
+            "После оплаты вам начисляется пакет доступа Pixora.\n"
+            "В пакет входят две обработки и один оригинал.\n"
+            "Пакет начисляется сразу после подтверждения оплаты.\n\n"
+            "Вы сами выберете, какой оригинал без водяного знака получить.",
             (Button("Оплатить 49 ₽ в Robokassa", order.payment_url or "package:buy"),),
         )
 
@@ -1067,9 +1077,11 @@ class MaxApplication:
         self.transport.send_message(
             row["platform_user_id"],
             "Оплата прошла ✅\n\n"
-            "Доступно:\n"
-            f"• ещё {balance.available} варианта;\n"
-            f"• {entitlements.available} оригинал без водяного знака.\n\n"
+            "Пакет доступа Pixora начислен.\n"
+            "В пакет входят две обработки и один оригинал.\n\n"
+            "Сейчас доступно:\n"
+            f"• обработок: {balance.available};\n"
+            f"• оригиналов без водяного знака: {entitlements.available}.\n\n"
             "Можно продолжить текущую работу или загрузить другую фотографию.",
             (
                 Button("📂 Мои работы", "studio:works"),

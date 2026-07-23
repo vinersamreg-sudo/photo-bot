@@ -6,9 +6,9 @@ Calm, short, adult and concrete. One screen has one primary action. Explain the 
 
 ## Terms
 
-Use: фотография, изменение, вариант, демо, водяной знак, работа, версия, оригинал.
+Use: фотография, изменение, обработка, вариант, демо, водяной знак, работа, версия, оригинал, пакет доступа Pixora.
 
-Do not show: GPT, provider, API, HTTP, SceneIntent, EditPlan, parser, mode, storage, quota internals, request ID or stack trace.
+Do not show: генерация, GPT, provider, API, HTTP, SceneIntent, EditPlan, parser, mode, storage, quota internals, request ID or stack trace.
 
 Allowed core symbols: ✨ 📷 ✏️ 🎲 ⭐ 📂 ⬇ 🗑 ℹ️ and the required confirmation mark ✅. Do not decorate every line.
 
@@ -25,9 +25,11 @@ Primary result CTA order: original, correction, repeat, works. Favorite, current
 
 ## Payment copy
 
-- Before redirect: `Оригинал без водяного знака — 49 ₽.` + link button `Оплатить в Robokassa`.
+- Before redirect: `Пакет доступа Pixora — 49 ₽.` + `После оплаты вам начисляется пакет доступа Pixora. В пакет входят две обработки и один оригинал. Пакет начисляется сразу после подтверждения оплаты.` + link button `Оплатить 49 ₽ в Robokassa`.
 - Paid delivery failure: say that payment is confirmed, the original remains available in «Мои работы», and retry does not charge again.
-- Disabled payments: `Оплата оригинала пока недоступна.` Do not imply that money was accepted.
+- Disabled payments: explain the same package composition, then say `Оплата пока недоступна — идёт закрытое тестирование.` Do not imply that money was accepted.
+- After confirmation: `Пакет доступа Pixora начислен.` and show balances as `обработок` and `оригиналов`, never `генераций`.
+- The public product name and Robokassa `Description` are «Пакет доступа Pixora». The separately controlled fiscal Receipt item is not user-interface copy.
 - Never show merchant login, invoice, signature, operation key, provider payload or internal order/version IDs.
 - Refund messages must distinguish `подготовлен`, `отправлен` and `подтверждён`; a local draft is not a completed refund.
 

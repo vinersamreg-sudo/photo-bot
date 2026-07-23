@@ -194,7 +194,7 @@ class ContentStudioTests(unittest.TestCase):
                 copy = generator.generate(transformation, post_id="post", platform="max")
                 self.assertIn("Демонстрационный пример Pixora.", copy.body)
                 self.assertIn("Изображения созданы специально", copy.body)
-                self.assertIn("2 бесплатные генерации", copy.cta)
+                self.assertIn("2 бесплатные обработки", copy.cta)
 
     def test_non_english_transformation_prompt_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "English"):

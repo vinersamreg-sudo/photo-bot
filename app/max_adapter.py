@@ -166,7 +166,7 @@ def result_actions(remaining: int) -> View:
     if remaining > 0:
         text = "Демо с водяным знаком."
         if remaining == 1:
-            text += "\n\nОстался один бесплатный вариант."
+            text += "\n\nОсталась одна бесплатная обработка."
         buttons = (
             Button("⬇ Получить оригинал", "result:unlock"),
             Button("✏️ Исправить", "result:correct"),
@@ -174,10 +174,10 @@ def result_actions(remaining: int) -> View:
             Button("📂 Мои работы", "studio:works"),
         )
     else:
-        text = "Бесплатные варианты закончились."
+        text = "Бесплатные обработки закончились."
         buttons = (
             Button("⬇ Получить оригинал", "result:unlock"),
-            Button("Пакет Pixora: 2 варианта обработки и 1 оригинал — 49 ₽", "package:buy"),
+            Button("Пакет доступа Pixora — 49 ₽", "package:buy"),
             Button("📂 Мои работы", "studio:works"),
             Button("Начать заново", "new:source"),
         )
