@@ -104,6 +104,16 @@ jobs:
             set_env ROBOKASSA_MODE sandbox
             set_env ROBOKASSA_PRODUCTION_APPROVED false
             set_env ROBOKASSA_HASH_ALGORITHM sha256
+            BASELINE_ORDER_COUNT=$(cd "$ROOT" && venv/bin/python - <<'PY'
+          from app.config import load_settings
+          from app.database import Database
+
+          settings = load_settings()
+          with Database(settings.database_path).read() as connection:
+              print(connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0])
+          PY
+            )
+            set_env ROBOKASSA_SANDBOX_ORDER_BASELINE "$BASELINE_ORDER_COUNT"
             set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE true
             set_env MAX_POLL_OBSERVE_ONLY false
             set_env PILOT_USER_LIMIT 0
@@ -119,6 +129,10 @@ jobs:
           assert report["sandbox_runtime_ready"] is True
           assert settings.robokassa_hash_algorithm == "sha256"
           assert settings.robokassa_sandbox_duplicate_probe is True
+          with Database(settings.database_path).read() as connection:
+              assert settings.robokassa_sandbox_order_baseline == int(
+                  connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0]
+              )
           assert settings.max_allowed_user_ids == settings.max_owner_user_ids
           assert settings.pilot_user_limit == 0
           assert settings.payment_refunds_enabled is False
@@ -181,6 +195,7 @@ jobs:
             set_env PAYMENT_WEBHOOK_ENABLED false
             set_env PAYMENT_REFUNDS_ENABLED false
             set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
+            set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
             cd "$ROOT"
             venv/bin/python -m scripts.set_robokassa_test_secrets \
               --env-file "$ROOT/.env" --clear
@@ -261,6 +276,7 @@ jobs:
             set_env ROBOKASSA_PRODUCTION_APPROVED false
             set_env ROBOKASSA_HASH_ALGORITHM sha256
             set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
+            set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
             cd "$ROOT"
             venv/bin/python -m scripts.set_robokassa_test_secrets \
               --env-file "$ROOT/.env" --clear

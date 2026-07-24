@@ -243,6 +243,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn(
             "set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false", self.workflow
         )
+        self.assertIn(
+            "set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0", self.workflow
+        )
         self.assertIn('printf \'%s\\n\' "$DEPLOY_SHA" > "$ROOT/.deploy-sha"', self.workflow)
         self.assertIn('chmod 600 "$ROOT/.deploy-sha"', self.workflow)
 

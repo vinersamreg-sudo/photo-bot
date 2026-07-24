@@ -351,6 +351,7 @@ jobs:
             set_env PAYMENT_FAIL_URL https://pixoraai.ru/payment-failed.html
             set_env ROBOKASSA_HASH_ALGORITHM sha256
             set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
+            set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
             set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'
             set_env PAYMENT_RECEIPT_TAX none
             # Commercial integrations require a separate, explicit rollout.

@@ -4,6 +4,10 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
+from scripts.robokassa_sandbox_e2e import (
+    SandboxEvidenceError,
+    _require_single_run_payment_deltas,
+)
 from scripts.set_robokassa_test_secrets import NAMES, update_env
 
 
@@ -13,6 +17,30 @@ HARNESS = ROOT / "scripts" / "robokassa_sandbox_e2e.py"
 
 
 class RobokassaSandboxE2ETests(TestCase):
+    def test_single_run_payment_deltas_require_exactly_one_commercial_chain(self) -> None:
+        baseline = {
+            "payment_intents": 1,
+            "payment_orders": 1,
+            "payment_events": 0,
+            "payment_webhooks": 0,
+            "payment_receipts": 1,
+            "continuation_pack_grants": 0,
+            "refund_intents": 0,
+        }
+        current = {
+            name: count + (0 if name == "refund_intents" else 1)
+            for name, count in baseline.items()
+        }
+        _require_single_run_payment_deltas(current, baseline)
+
+        duplicate_callback = {**current, "payment_events": 2}
+        with self.assertRaises(SandboxEvidenceError):
+            _require_single_run_payment_deltas(duplicate_callback, baseline)
+
+        unexpected_refund = {**current, "refund_intents": 1}
+        with self.assertRaises(SandboxEvidenceError):
+            _require_single_run_payment_deltas(unexpected_refund, baseline)
+
     def test_secret_installer_updates_only_runtime_names_and_clears_them(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             env_file = Path(temporary) / ".env"
@@ -45,6 +73,10 @@ class RobokassaSandboxE2ETests(TestCase):
         self.assertIn("set_env ROBOKASSA_PRODUCTION_APPROVED false", workflow)
         self.assertIn("set_env ROBOKASSA_HASH_ALGORITHM sha256", workflow)
         self.assertIn("set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE true", workflow)
+        self.assertIn(
+            'set_env ROBOKASSA_SANDBOX_ORDER_BASELINE "$BASELINE_ORDER_COUNT"',
+            workflow,
+        )
         self.assertIn("wait-order", workflow)
         self.assertIn("wait-paid", workflow)
         self.assertIn("prepare-owner-checkout", workflow)
@@ -57,6 +89,9 @@ class RobokassaSandboxE2ETests(TestCase):
         self.assertGreaterEqual(workflow.count("set_env PAYMENT_WEBHOOK_ENABLED false"), 2)
         self.assertGreaterEqual(
             workflow.count("set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false"), 2
+        )
+        self.assertGreaterEqual(
+            workflow.count("set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0"), 2
         )
         self.assertIn("--clear", workflow)
         self.assertIn('test "$GET_STATUS" = 405', workflow)
@@ -86,3 +121,4 @@ class RobokassaSandboxE2ETests(TestCase):
         self.assertIn("quick_check", harness)
         self.assertIn("generation_attempts", harness)
         self.assertIn("payment_receipts", harness)
+        self.assertIn("baseline_payment_counts", harness)

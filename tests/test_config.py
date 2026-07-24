@@ -151,6 +151,7 @@ class SettingsTests(TestCase):
         settings = load_settings(environ={
             "ROBOKASSA_MODE": "sandbox",
             "ROBOKASSA_SANDBOX_DUPLICATE_PROBE": "true",
+            "ROBOKASSA_SANDBOX_ORDER_BASELINE": "4",
             "PAYMENTS_ENABLED": "true",
             "PAYMENT_PROVIDER": "robokassa",
             "PAYMENT_WEBHOOK_LISTENER_ENABLED": "true",
@@ -161,3 +162,4 @@ class SettingsTests(TestCase):
             "ROBOKASSA_PASSWORD2": "two",
         })
         self.assertTrue(settings.robokassa_sandbox_duplicate_probe)
+        self.assertEqual(settings.robokassa_sandbox_order_baseline, 4)

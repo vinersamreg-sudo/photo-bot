@@ -808,6 +808,42 @@ class PaymentTests(TestCase):
                 1,
             )
 
+    def test_sandbox_probe_allows_one_new_order_after_historical_baseline(self) -> None:
+        historical = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "historical-sandbox-order"
+        )
+        self.clock.advance(minutes=31)
+        object.__setattr__(
+            self.settings, "robokassa_sandbox_duplicate_probe", True
+        )
+        object.__setattr__(
+            self.settings, "robokassa_sandbox_order_baseline", 1
+        )
+
+        current = self.service.create_order(
+            self.user_id, self.versions[1]["id"], "current-sandbox-order"
+        )
+        self.service.process_webhook(
+            self.signed_callback(current),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+
+        self.assertNotEqual(
+            current.provider_invoice_id, historical.provider_invoice_id
+        )
+        with self.assertRaisesRegex(PaymentError, "sandbox order cap"):
+            self.service.create_order(
+                self.user_id, self.versions[0]["id"], "extra-sandbox-order"
+            )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM payment_orders"
+                ).fetchone()[0],
+                2,
+            )
+
     def test_original_delivery_follows_consumed_entitlement_version(self) -> None:
         order = self.service.create_order(
             self.user_id, self.versions[0]["id"], "event-selected-version"

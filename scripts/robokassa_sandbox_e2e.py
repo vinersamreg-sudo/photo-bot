@@ -139,10 +139,43 @@ def _payment_counts(connection: Any) -> dict[str, int]:
     }
 
 
-def _single_order(connection: Any) -> Any:
+def _baseline_payment_counts(settings: Settings) -> dict[str, int]:
+    evidence = _read_json(_evidence_path(settings))
+    counts = evidence.get("stages", {}).get("preflight", {}).get("payment_counts")
+    _require(isinstance(counts, dict), "Preflight payment baseline is unavailable")
+    return {str(name): int(value) for name, value in counts.items()}
+
+
+def _require_single_run_payment_deltas(
+    counts: dict[str, int],
+    baseline: dict[str, int],
+) -> None:
+    for table in (
+        "payment_intents",
+        "payment_orders",
+        "payment_events",
+        "payment_webhooks",
+        "payment_receipts",
+        "continuation_pack_grants",
+    ):
+        _require(
+            counts[table] == baseline[table] + 1,
+            f"Sandbox run did not create exactly one {table} row",
+        )
+    _require(
+        counts["refund_intents"] == baseline["refund_intents"],
+        "Refund API state was created",
+    )
+
+
+def _run_order(settings: Settings, connection: Any) -> Any:
+    baseline = _baseline_payment_counts(settings)["payment_orders"]
     rows = connection.execute("SELECT * FROM payment_orders ORDER BY created_at").fetchall()
-    _require(len(rows) == 1, "Exactly one sandbox payment order is required")
-    return rows[0]
+    _require(
+        len(rows) == baseline + 1,
+        "Exactly one new sandbox payment order is required",
+    )
+    return rows[-1]
 
 
 def _wait_for(
@@ -227,6 +260,23 @@ def preflight(settings: Settings, expected_sha: str) -> dict[str, Any]:
             ).fetchone()[0]
         )
         payment_counts = _payment_counts(connection)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        unsafe_prior_orders = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM payment_orders
+                   WHERE NOT (
+                       status IN ('expired','failed','cancelled')
+                       OR (status='pending' AND expires_at<?)
+                   )""",
+                (now_iso,),
+            ).fetchone()[0]
+        )
+        unsafe_prior_receipts = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM payment_receipts
+                   WHERE status!='prepared'"""
+            ).fetchone()[0]
+        )
         complete_versions = int(
             connection.execute(
                 """SELECT COUNT(*) FROM gallery_versions v
@@ -250,7 +300,20 @@ def preflight(settings: Settings, expected_sha: str) -> dict[str, Any]:
         baseline_attempts = _table_count(connection, "generation_attempts")
     _require(quick_check == "ok", "SQLite quick_check failed")
     _require(processing == 0, "Production has active processing")
-    _require(all(value == 0 for value in payment_counts.values()), "Payment state is not empty")
+    _require(unsafe_prior_orders == 0, "Prior payment state is not safely terminal")
+    _require(
+        payment_counts["payment_intents"] == payment_counts["payment_orders"]
+        and payment_counts["payment_receipts"] == payment_counts["payment_orders"],
+        "Prior unpaid payment rows are incomplete",
+    )
+    _require(unsafe_prior_receipts == 0, "Prior receipt state is not safely prepared")
+    _require(
+        payment_counts["payment_events"] == 0
+        and payment_counts["payment_webhooks"] == 0
+        and payment_counts["continuation_pack_grants"] == 0
+        and payment_counts["refund_intents"] == 0,
+        "Prior sandbox attempt contains paid, callback, grant, or refund state",
+    )
     _require(complete_versions > 0, "Owner has no completed GalleryVersion")
     _require(_orphan_count(settings, database) == 0, "Private storage has orphan files")
     result = {
@@ -376,14 +439,18 @@ def _validated_link(settings: Settings, database: Database, order: Any) -> dict[
 
 def wait_order(settings: Settings, timeout_seconds: int) -> dict[str, Any]:
     database = Database(settings.database_path)
+    baseline = _baseline_payment_counts(settings)["payment_orders"]
 
     def check() -> dict[str, Any] | None:
         with database.read() as connection:
             count = _table_count(connection, "payment_orders")
-            _require(count <= 1, "More than one sandbox order was created")
-            if count == 0:
+            _require(
+                count <= baseline + 1,
+                "More than one new sandbox order was created",
+            )
+            if count == baseline:
                 return None
-            order = _single_order(connection)
+            order = _run_order(settings, connection)
             _require(
                 str(order["status"]) in {"pending", "paid"},
                 "Sandbox order entered an unexpected state",
@@ -433,7 +500,7 @@ def _paid_facts(settings: Settings, database: Database) -> dict[str, Any]:
     evidence = _read_json(_evidence_path(settings))
     baseline = evidence.get("stages", {}).get("preflight", {})
     with database.read() as connection:
-        order = _single_order(connection)
+        order = _run_order(settings, connection)
         order_id = str(order["id"])
         intent = connection.execute(
             "SELECT * FROM payment_intents WHERE id=?", (order["intent_id"],)
@@ -534,7 +601,8 @@ def _paid_facts(settings: Settings, database: Database) -> dict[str, Any]:
     _require(len(entitlements) == 1, "Exactly one original entitlement was not granted")
     _require(confirmed == 1, "Payment confirmation audit is not unique")
     _require(duplicate >= 1, "Real callback duplicate probe did not pass")
-    _require(counts["refund_intents"] == 0, "Refund API state was created")
+    payment_baseline = _baseline_payment_counts(settings)
+    _require_single_run_payment_deltas(counts, payment_baseline)
     _require(
         attempts == int(baseline.get("baseline_generation_attempts", -1)),
         "An OpenAI image attempt appeared during the payment test",
@@ -580,14 +648,18 @@ def _paid_facts(settings: Settings, database: Database) -> dict[str, Any]:
 
 def wait_paid(settings: Settings, timeout_seconds: int) -> dict[str, Any]:
     database = Database(settings.database_path)
+    baseline = _baseline_payment_counts(settings)["payment_orders"]
 
     def check() -> dict[str, Any] | None:
         with database.read() as connection:
             count = _table_count(connection, "payment_orders")
-            _require(count <= 1, "More than one sandbox order was created")
-            if count == 0:
+            _require(
+                count <= baseline + 1,
+                "More than one new sandbox order was created",
+            )
+            if count == baseline:
                 return None
-            order = _single_order(connection)
+            order = _run_order(settings, connection)
             if str(order["status"]) == "pending":
                 return None
         return _paid_facts(settings, database)
@@ -628,7 +700,7 @@ def wait_first_original(settings: Settings, timeout_seconds: int) -> dict[str, A
 
     def check() -> dict[str, Any] | None:
         with database.read() as connection:
-            order = _single_order(connection)
+            order = _run_order(settings, connection)
             entitlement = connection.execute(
                 """SELECT status,gallery_version_id FROM unlock_entitlements
                    WHERE source_payment_order_id=?""",
@@ -645,10 +717,14 @@ def wait_first_original(settings: Settings, timeout_seconds: int) -> dict[str, A
             _require(version is not None, "Unlocked GalleryVersion is absent")
             if version["unlock_status"] != "unlocked" or int(version["delivery_count"]) < 1:
                 return None
+            baseline = _baseline_payment_counts(settings)
             _require(
-                _table_count(connection, "payment_orders") == 1
-                and _table_count(connection, "payment_receipts") == 1
-                and _table_count(connection, "continuation_pack_grants") == 1,
+                _table_count(connection, "payment_orders")
+                == baseline["payment_orders"] + 1
+                and _table_count(connection, "payment_receipts")
+                == baseline["payment_receipts"] + 1
+                and _table_count(connection, "continuation_pack_grants")
+                == baseline["continuation_pack_grants"] + 1,
                 "Original delivery created new commercial state",
             )
         return {
@@ -671,7 +747,7 @@ def wait_first_original(settings: Settings, timeout_seconds: int) -> dict[str, A
 def resend_original(settings: Settings) -> dict[str, Any]:
     database = Database(settings.database_path)
     with database.read() as connection:
-        order = _single_order(connection)
+        order = _run_order(settings, connection)
         receipt_count = _table_count(connection, "payment_receipts")
         entitlement = connection.execute(
             """SELECT gallery_version_id,status FROM unlock_entitlements
@@ -702,10 +778,14 @@ def resend_original(settings: Settings) -> dict[str, Any]:
             ).fetchone()[0]
         )
         _require(after_delivery == before_delivery + 1, "Delivery count did not increase once")
+        baseline = _baseline_payment_counts(settings)
         _require(
-            _table_count(connection, "payment_orders") == 1
-            and _table_count(connection, "payment_receipts") == receipt_count == 1
-            and _table_count(connection, "continuation_pack_grants") == 1,
+            _table_count(connection, "payment_orders")
+            == baseline["payment_orders"] + 1
+            and _table_count(connection, "payment_receipts")
+            == receipt_count == baseline["payment_receipts"] + 1
+            and _table_count(connection, "continuation_pack_grants")
+            == baseline["continuation_pack_grants"] + 1,
             "Repeated original delivery created new commercial state",
         )
     result = {
@@ -721,7 +801,7 @@ def resend_original(settings: Settings) -> dict[str, Any]:
 def reconcile(settings: Settings) -> dict[str, Any]:
     database = Database(settings.database_path)
     with database.read() as connection:
-        order = _single_order(connection)
+        order = _run_order(settings, connection)
         invoice = int(order["provider_invoice_id"])
     report = payment_reconcile(database, invoice)
     _require(
@@ -756,6 +836,10 @@ def final_safety(settings: Settings) -> dict[str, Any]:
         "Duplicate probe was not disabled",
     )
     _require(
+        settings.robokassa_sandbox_order_baseline == 0,
+        "Sandbox order baseline was not cleared",
+    )
+    _require(
         not settings.robokassa_merchant_login
         and not settings.robokassa_password1
         and not settings.robokassa_password2,
@@ -773,15 +857,14 @@ def final_safety(settings: Settings) -> dict[str, Any]:
             ).fetchone()[0]
         )
         counts = _payment_counts(connection)
-        order = _single_order(connection)
+        order = _run_order(settings, connection)
         refund_rows = _table_count(connection, "refund_intents")
     _require(quick_check == "ok", "SQLite quick_check failed after E2E")
     _require(processing == 0, "Processing state remains after E2E")
     _require(_orphan_count(settings, database) == 0, "Orphan files remain after E2E")
-    _require(counts["payment_orders"] == 1, "Sandbox order count changed")
-    _require(counts["payment_receipts"] == 1, "Sale receipt audit count changed")
-    _require(counts["continuation_pack_grants"] == 1, "Pack grant count changed")
-    _require(refund_rows == 0, "Refund state exists")
+    baseline = _baseline_payment_counts(settings)
+    _require_single_run_payment_deltas(counts, baseline)
+    _require(refund_rows == baseline["refund_intents"], "Refund state exists")
     result = {
         "invoice_ref": mask_reference(order["provider_invoice_id"], prefix="inv"),
         "max_poll_observe_only": True,
@@ -822,6 +905,10 @@ def runtime_safety(settings: Settings) -> dict[str, Any]:
     _require(
         not settings.robokassa_sandbox_duplicate_probe,
         "Duplicate probe was not disabled",
+    )
+    _require(
+        settings.robokassa_sandbox_order_baseline == 0,
+        "Sandbox order baseline was not cleared",
     )
     _require(
         not settings.robokassa_merchant_login

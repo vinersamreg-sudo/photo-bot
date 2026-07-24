@@ -400,7 +400,10 @@ class PaymentService:
                                 "SELECT COUNT(*) FROM payment_orders"
                             ).fetchone()[0]
                         )
-                        if sandbox_order_count:
+                        if (
+                            sandbox_order_count
+                            > self.settings.robokassa_sandbox_order_baseline
+                        ):
                             raise PaymentError(
                                 "The bounded Robokassa sandbox order cap was reached"
                             )

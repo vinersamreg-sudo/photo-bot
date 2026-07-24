@@ -76,6 +76,7 @@ class Settings:
     robokassa_password3: str = ""
     robokassa_hash_algorithm: str = "sha256"
     robokassa_sandbox_duplicate_probe: bool = False
+    robokassa_sandbox_order_baseline: int = 0
     robokassa_payment_url: str = "https://auth.robokassa.ru/Merchant/Index.aspx"
     robokassa_refund_url: str = "https://services.robokassa.ru/RefundService/Refund/Create"
     robokassa_refund_status_url: str = "https://services.robokassa.ru/RefundService/Refund/GetState"
@@ -347,6 +348,9 @@ def load_settings(
     sandbox_duplicate_probe = _boolean(
         values, "ROBOKASSA_SANDBOX_DUPLICATE_PROBE", False
     )
+    sandbox_order_baseline = _nonnegative_int(
+        values, "ROBOKASSA_SANDBOX_ORDER_BASELINE", 0
+    )
     if payments_enabled and payment_provider != "robokassa":
         raise ValueError("Enabled payments require PAYMENT_PROVIDER=robokassa")
     if robokassa_mode == "production" and payments_enabled and not production_approved:
@@ -512,6 +516,7 @@ def load_settings(
         robokassa_password3=values.get("ROBOKASSA_PASSWORD3", "").strip(),
         robokassa_hash_algorithm=robokassa_hash_algorithm,
         robokassa_sandbox_duplicate_probe=sandbox_duplicate_probe,
+        robokassa_sandbox_order_baseline=sandbox_order_baseline,
         robokassa_payment_url=(
             values.get("ROBOKASSA_PAYMENT_URL", "https://auth.robokassa.ru/Merchant/Index.aspx").strip()
             or "https://auth.robokassa.ru/Merchant/Index.aspx"
