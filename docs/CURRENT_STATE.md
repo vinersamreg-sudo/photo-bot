@@ -1,5 +1,14 @@
 # Current State
 
+## 24.07.2026 — Robokassa sandbox RCA: expired `ExpirationDate`
+
+- owner-only sandbox reached the Robokassa payment page, but the provider rejected the invoice before payment with error 33; ResultURL was not called and no package, receipt or refund was created;
+- production evidence showed a 30-minute UTC deadline rendered as an offset-free wall-clock value; Robokassa interpreted it as Moscow time (UTC+03), so a fresh invoice appeared already expired;
+- payment links now require a timezone-aware deadline, convert it to UTC+03 and only then render `YYYY-MM-DDThh:mm`;
+- regression coverage proves `08:30 UTC -> 11:30` and retains merchant-wide unique `InvId`;
+- sandbox cleanup now also restores polling, while the temporary credential writer preserves `.env` ownership;
+- no post-fix sandbox payment has run. Production remains observe-only/payment fail-closed, and a new invoice requires separate explicit owner approval.
+
 ## 23.07.2026 — Robokassa support decision implemented
 
 - письменный ответ Robokassa для самозанятого с активными «Робочеками СМЗ» зафиксирован в `ROBOKASSA_SUPPORT_DECISION.md` как текущий source of truth;

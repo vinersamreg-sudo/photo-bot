@@ -47,6 +47,7 @@ class RobokassaSandboxE2ETests(TestCase):
             env_file.write_text(
                 "KEEP=value\nROBOKASSA_PASSWORD1=old\n", encoding="utf-8"
             )
+            original_stat = env_file.stat()
             values = ("merchant-test", "test-password-one", "test-password-two")
             update_env(env_file, values)
             configured = env_file.read_text(encoding="utf-8")
@@ -56,6 +57,8 @@ class RobokassaSandboxE2ETests(TestCase):
                 self.assertIn(f"{name}={value}\n", configured)
             if os.name != "nt":
                 self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(env_file.stat().st_uid, original_stat.st_uid)
+                self.assertEqual(env_file.stat().st_gid, original_stat.st_gid)
             update_env(env_file, None)
             cleared = env_file.read_text(encoding="utf-8")
             self.assertEqual(cleared, "KEEP=value\n")
@@ -83,6 +86,7 @@ class RobokassaSandboxE2ETests(TestCase):
         self.assertEqual(workflow.count("ServerAliveInterval=20"), 3)
         self.assertEqual(workflow.count("ServerAliveCountMax=6"), 3)
         self.assertIn("if: always()", workflow)
+        self.assertGreaterEqual(workflow.count("set_env MAX_TRANSPORT_MODE polling"), 2)
         self.assertGreaterEqual(workflow.count("MAX_POLL_OBSERVE_ONLY true"), 1)
         self.assertGreaterEqual(workflow.count("set_env PAYMENTS_ENABLED false"), 2)
         self.assertGreaterEqual(workflow.count("set_env PAYMENT_PROVIDER disabled"), 2)

@@ -7,12 +7,15 @@ import hashlib
 import hmac
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping
 from urllib.parse import quote, urlencode
 
 import httpx
+
+
+ROBOKASSA_TIMEZONE = timezone(timedelta(hours=3))
 
 
 class RobokassaError(RuntimeError):
@@ -151,6 +154,11 @@ class RobokassaProvider:
         return "".join(f":{key}={params[key]}" for key in sorted(params))
 
     def payment_link(self, request: RobokassaPaymentRequest) -> str:
+        if request.expires_at.tzinfo is None:
+            raise ValueError("Robokassa expiration date must be timezone-aware")
+        expiration_date = request.expires_at.astimezone(
+            ROBOKASSA_TIMEZONE
+        ).strftime("%Y-%m-%dT%H:%M")
         receipt_encoded = quote(self._receipt(request), safe="")
         shp = {"Shp_order": request.public_token}
         modifiers = [receipt_encoded]
@@ -174,7 +182,9 @@ class RobokassaProvider:
             "Receipt": receipt_encoded,
             "Culture": "ru",
             "Encoding": "utf-8",
-            "ExpirationDate": request.expires_at.strftime("%Y-%m-%dT%H:%M"),
+            # The classic Robokassa form does not accept an offset in this
+            # parameter and interprets the wall-clock value as Moscow time.
+            "ExpirationDate": expiration_date,
             **shp,
         }
         if self.mode == "sandbox":

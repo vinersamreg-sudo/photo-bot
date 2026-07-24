@@ -265,6 +265,7 @@ jobs:
               chmod 600 "$TMP"
               mv "$TMP" "$ROOT/.env"
             }
+            set_env MAX_TRANSPORT_MODE polling
             set_env MAX_POLL_OBSERVE_ONLY true
             set_env PILOT_USER_LIMIT 0
             set_env PAYMENTS_ENABLED false

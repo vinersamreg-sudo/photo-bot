@@ -29,6 +29,7 @@ def update_env(path: Path, values: tuple[str, str, str] | None) -> None:
     """Atomically replace only the three sandbox credential entries."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    original_stat = path.stat() if path.exists() else None
     existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     prefixes = tuple(f"{name}=" for name in NAMES)
     lines = [line for line in existing if not line.startswith(prefixes)]
@@ -45,6 +46,8 @@ def update_env(path: Path, values: tuple[str, str, str] | None) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         temporary.chmod(0o600)
+        if original_stat is not None and os.name != "nt":
+            os.chown(temporary, original_stat.st_uid, original_stat.st_gid)
         temporary.replace(path)
         path.chmod(0o600)
     finally:

@@ -6,6 +6,14 @@ Current source of truth: [ROBOKASSA_SUPPORT_DECISION.md](ROBOKASSA_SUPPORT_DECIS
 
 Pixora uses a classic GET payment link to `https://auth.robokassa.ru/Merchant/Index.aspx`. `RobokassaProvider` sends `MerchantLogin`, server-calculated `OutSum`, numeric `InvId`, `Description`, mandatory `Receipt`, expiry, `Shp_order`, optional URL2 return fields and SHA-256 `SignatureValue`. Sandbox adds `IsTest=1`.
 
+`ExpirationDate` is a timezone-sensitive boundary. The classic form accepts
+`YYYY-MM-DDThh:mm` without an offset, while Robokassa treats an absent timezone
+as Moscow time (UTC+03). Pixora therefore requires a timezone-aware internal
+deadline, converts it to UTC+03, and only then renders the offset-free value.
+Never format a UTC datetime directly: that made fresh invoices immediately
+expire with provider error 33 on 24.07.2026. The regression fixture is
+`08:30 UTC -> 11:30`.
+
 The only sale item is:
 
 ```json

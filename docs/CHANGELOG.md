@@ -1,5 +1,14 @@
 # Changelog
 
+## 24.07.2026 — Robokassa expiration timezone RCA
+
+- fixed provider error 33 by converting internal timezone-aware payment expiry
+  to Moscow time before rendering Robokassa's offset-free `ExpirationDate`;
+- added a regression for `08:30 UTC -> 11:30` and rejected naive deadlines;
+- hardened sandbox cleanup to restore polling and preserve `.env` ownership;
+- recorded that the pre-fix owner sandbox produced no callback, grant, receipt
+  or refund and that a post-fix sandbox still requires separate approval.
+
 ## 23.07.2026 — final «Робочеки СМЗ» Receipt model
 
 - recorded the anonymized written Robokassa support answer as the fiscal source of truth;

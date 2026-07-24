@@ -120,6 +120,7 @@ class PaymentTests(TestCase):
         self.assertEqual(query["OutSum"], ["49.00"])
         self.assertEqual(query["InvId"], [str(order.provider_invoice_id)])
         self.assertEqual(query["IsTest"], ["1"])
+        self.assertEqual(query["ExpirationDate"], ["2026-07-19T11:30"])
         self.assertEqual(query["Shp_order"], [order.public_token])
         self.assertEqual(query["Description"], ["Пакет доступа Pixora"])
         self.assertEqual(
@@ -200,6 +201,24 @@ class PaymentTests(TestCase):
         self.assertNotIn("password-one", order.payment_url)
         again = self.service.create_order(self.user_id, self.versions[0]["id"], "event-2")
         self.assertEqual(again.id, order.id)
+
+    def test_payment_link_rejects_timezone_naive_expiration(self) -> None:
+        provider = RobokassaProvider(
+            merchant_login="pixora-test",
+            password1="password-one",
+            password2="password-two",
+        )
+        request = RobokassaPaymentRequest(
+            invoice_id=1,
+            amount_minor=4900,
+            description="Pixora",
+            public_token="token",
+            expires_at=datetime(2026, 7, 19, 8, 30),
+            receipt_name="Pixora",
+            receipt_tax="none",
+        )
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            provider.payment_link(request)
 
     def test_invoice_id_uses_merchant_wide_timestamp_namespace(self) -> None:
         order = self.service.create_order(
