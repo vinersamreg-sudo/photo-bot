@@ -133,6 +133,7 @@ jobs:
             GET_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
               https://pixoraai.ru/payments/robokassa/result)
             test "$GET_STATUS" = 405
+            venv/bin/python -m scripts.robokassa_sandbox_e2e prepare-owner-checkout
             echo "owner_only_sandbox_window_ready=true"
           REMOTE
       - name: Wait for exactly one owner sandbox order

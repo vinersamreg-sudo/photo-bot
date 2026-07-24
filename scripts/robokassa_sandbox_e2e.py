@@ -22,6 +22,7 @@ from app.commerce import (
 from app.config import Settings, load_settings
 from app.database import Database
 from app.maintenance import _referenced_private_files
+from app.max_adapter import Button
 from app.max_runtime import build_max_application
 from app.payment_admin import mask_reference, payment_reconcile
 from app.payments import PaymentError, build_payment_service
@@ -391,6 +392,40 @@ def wait_order(settings: Settings, timeout_seconds: int) -> dict[str, Any]:
 
     result = _wait_for(check, timeout_seconds, "Owner did not create the sandbox order in time")
     _update_evidence(settings, "payment_link", result)
+    return result
+
+
+def prepare_owner_checkout(settings: Settings) -> dict[str, Any]:
+    """Send a state-independent owner-only entry point into the existing gallery."""
+
+    database = Database(settings.database_path)
+    owner_user_id = _owner_user_id(settings, database)
+    with database.read() as connection:
+        owner = connection.execute(
+            "SELECT platform_user_id FROM users WHERE id=?",
+            (owner_user_id,),
+        ).fetchone()
+    _require(owner is not None, "Owner MAX account is unavailable")
+    application, client, _store = build_max_application(settings)
+    try:
+        delivered = application.transport.send_message(
+            str(owner["platform_user_id"]),
+            (
+                "Тестовая оплата готова.\n\n"
+                "Откройте существующую работу и нажмите «Получить оригинал». "
+                "Новую обработку запускать не нужно."
+            ),
+            (Button("📂 Мои работы", "studio:works"),),
+        )
+    finally:
+        client.close()
+    _require(delivered, "Owner checkout entry point was not delivered through MAX")
+    result = {
+        "owner_only_checkout_entry_delivered": True,
+        "dialog_state_mutated": False,
+        "new_processing_started": False,
+    }
+    _update_evidence(settings, "owner_checkout_entry", result)
     return result
 
 
@@ -832,6 +867,7 @@ def main() -> int:
     for name in (
         "verify-paid-after-restart",
         "verify-success-page",
+        "prepare-owner-checkout",
         "resend-original",
         "reconcile",
         "final-safety",
@@ -847,6 +883,7 @@ def main() -> int:
         "wait-first-original": lambda: wait_first_original(settings, args.timeout),
         "verify-paid-after-restart": lambda: verify_paid_after_restart(settings),
         "verify-success-page": lambda: verify_success_page(settings),
+        "prepare-owner-checkout": lambda: prepare_owner_checkout(settings),
         "resend-original": lambda: resend_original(settings),
         "reconcile": lambda: reconcile(settings),
         "final-safety": lambda: final_safety(settings),
