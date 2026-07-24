@@ -40,6 +40,30 @@ class PaymentUnavailable(PaymentError):
     pass
 
 
+def _next_provider_invoice_id(connection, now: datetime) -> int:
+    """Allocate a merchant-wide invoice id that survives fresh local databases."""
+
+    timestamp_floor = int(
+        now.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S")
+    ) * 1000
+    last_sequence = int(
+        connection.execute(
+            "SELECT COALESCE(MAX(id),0) FROM payment_invoice_sequence"
+        ).fetchone()[0]
+    )
+    last_order = int(
+        connection.execute(
+            "SELECT COALESCE(MAX(provider_invoice_id),0) FROM payment_orders"
+        ).fetchone()[0]
+    )
+    invoice_id = max(timestamp_floor, last_sequence + 1, last_order + 1)
+    connection.execute(
+        "INSERT INTO payment_invoice_sequence(id,created_at) VALUES(?,?)",
+        (invoice_id, _iso(now)),
+    )
+    return invoice_id
+
+
 class PaymentProvider(Protocol):
     name: str
     merchant_login: str
@@ -395,12 +419,7 @@ class PaymentService:
                             _iso(expires_at), PRODUCT_CODE,
                         ),
                     )
-                    connection.execute(
-                        "INSERT INTO payment_invoice_sequence(created_at) VALUES(?)", (_iso(now),)
-                    )
-                    invoice_id = int(
-                        connection.execute("SELECT last_insert_rowid()").fetchone()[0]
-                    )
+                    invoice_id = _next_provider_invoice_id(connection, now)
                     order_id = uuid4().hex
                     public_token = uuid4().hex
                     connection.execute(

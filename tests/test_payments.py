@@ -201,6 +201,42 @@ class PaymentTests(TestCase):
         again = self.service.create_order(self.user_id, self.versions[0]["id"], "event-2")
         self.assertEqual(again.id, order.id)
 
+    def test_invoice_id_uses_merchant_wide_timestamp_namespace(self) -> None:
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "global-invoice-1"
+        )
+
+        expected_floor = int(
+            self.clock().astimezone(timezone.utc).strftime("%Y%m%d%H%M%S")
+        ) * 1000
+        self.assertEqual(order.provider_invoice_id, expected_floor)
+        self.assertNotEqual(order.provider_invoice_id, 1)
+
+        self.clock.advance(minutes=31)
+        next_order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "global-invoice-2"
+        )
+
+        self.assertGreater(
+            next_order.provider_invoice_id, order.provider_invoice_id
+        )
+
+    def test_invoice_id_stays_monotonic_after_sequence_restore(self) -> None:
+        restored_high_watermark = 880000000000000000
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO payment_invoice_sequence(id,created_at) VALUES(?,?)",
+                (restored_high_watermark, self.clock().isoformat()),
+            )
+
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "restored-invoice"
+        )
+
+        self.assertEqual(
+            order.provider_invoice_id, restored_high_watermark + 1
+        )
+
     def test_receipt_json_is_canonical_stable_and_nonempty(self) -> None:
         request = RobokassaPaymentRequest(
             invoice_id=1,
