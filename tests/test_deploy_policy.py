@@ -239,6 +239,13 @@ class DeployPolicyTests(TestCase):
         stop = self.workflow.index("systemctl stop photo-bot.service")
         self.assertLess(idle_check, stop)
 
+    def test_normal_deploy_disables_sandbox_probe_and_records_exact_sha(self) -> None:
+        self.assertIn(
+            "set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false", self.workflow
+        )
+        self.assertIn('printf \'%s\\n\' "$DEPLOY_SHA" > "$ROOT/.deploy-sha"', self.workflow)
+        self.assertIn('chmod 600 "$ROOT/.deploy-sha"', self.workflow)
+
     def test_systemd_template_uses_least_privilege_and_restart_safety(self) -> None:
         service = SERVICE.read_text(encoding="utf-8")
         self.assertIn("User=photoapp", service)

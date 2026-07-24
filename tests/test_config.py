@@ -136,3 +136,28 @@ class SettingsTests(TestCase):
             with self.subTest(rejected=rejected):
                 with self.assertRaisesRegex(ValueError, "must be sha256"):
                     load_settings(environ={"ROBOKASSA_HASH_ALGORITHM": rejected})
+
+    def test_sandbox_duplicate_probe_is_strictly_bounded(self) -> None:
+        with self.assertRaisesRegex(ValueError, "only in sandbox"):
+            load_settings(environ={
+                "ROBOKASSA_MODE": "production",
+                "ROBOKASSA_SANDBOX_DUPLICATE_PROBE": "true",
+            })
+        with self.assertRaisesRegex(ValueError, "requires PAYMENT_WEBHOOK_ENABLED"):
+            load_settings(environ={
+                "ROBOKASSA_MODE": "sandbox",
+                "ROBOKASSA_SANDBOX_DUPLICATE_PROBE": "true",
+            })
+        settings = load_settings(environ={
+            "ROBOKASSA_MODE": "sandbox",
+            "ROBOKASSA_SANDBOX_DUPLICATE_PROBE": "true",
+            "PAYMENTS_ENABLED": "true",
+            "PAYMENT_PROVIDER": "robokassa",
+            "PAYMENT_WEBHOOK_LISTENER_ENABLED": "true",
+            "PAYMENT_WEBHOOK_ENABLED": "true",
+            "PAYMENT_RESULT_URL": "https://pixora.example/payments/robokassa/result",
+            "ROBOKASSA_MERCHANT_LOGIN": "shop",
+            "ROBOKASSA_PASSWORD1": "one",
+            "ROBOKASSA_PASSWORD2": "two",
+        })
+        self.assertTrue(settings.robokassa_sandbox_duplicate_probe)

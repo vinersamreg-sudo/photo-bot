@@ -83,6 +83,9 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                     settings.payment_webhook_port,
                     settings.payment_webhook_path,
                     accepting_callbacks=settings.payment_webhook_enabled,
+                    verify_duplicate_callback=(
+                        settings.robokassa_sandbox_duplicate_probe
+                    ),
                     on_paid=(
                         application.notify_continuation_pack_paid
                         if application is not None else None

@@ -350,6 +350,7 @@ jobs:
             set_env PAYMENT_SUCCESS_URL https://pixoraai.ru/payment-success.html
             set_env PAYMENT_FAIL_URL https://pixoraai.ru/payment-failed.html
             set_env ROBOKASSA_HASH_ALGORITHM sha256
+            set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
             set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'
             set_env PAYMENT_RECEIPT_TAX none
             # Commercial integrations require a separate, explicit rollout.
@@ -366,6 +367,8 @@ jobs:
             ensure_env ROBOKASSA_COMMISSION_PERCENT 0
             set_env APP_ENV production
             set_env BASE_DIR /opt/photo-bot
+            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/.deploy-sha"
+            chmod 600 "$ROOT/.deploy-sha"
             if grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
               set_env MAX_TRANSPORT_MODE polling
             else

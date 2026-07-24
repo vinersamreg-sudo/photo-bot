@@ -1,0 +1,320 @@
+name: One owner Robokassa sandbox E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      wait_minutes:
+        description: Minutes allowed for each owner interaction stage
+        required: true
+        type: choice
+        options: ['10', '15', '20']
+        default: '15'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: photo-bot-production
+  cancel-in-progress: false
+
+jobs:
+  sandbox-e2e:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 75
+    env:
+      INFRA_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' }}
+      ROBOKASSA_TEST_SECRETS_CONFIGURED: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN != '' && secrets.ROBOKASSA_TEST_PASSWORD_1 != '' && secrets.ROBOKASSA_TEST_PASSWORD_2 != '' }}
+    steps:
+      - name: Require bounded sandbox configuration
+        run: |
+          test "$INFRA_CONFIGURED" = true
+          test "$ROBOKASSA_TEST_SECRETS_CONFIGURED" = true
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Run payment and workflow regression tests
+        run: |
+          python -m pip install -r requirements.txt
+          python -m unittest \
+            tests.test_config \
+            tests.test_payments \
+            tests.test_payment_admin \
+            tests.test_robokassa_sandbox_e2e -v
+      - name: Configure SSH
+        id: ssh_config
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+      - name: Verify safe production preflight
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "cd /opt/photo-bot && scripts/healthcheck.sh >/dev/null && venv/bin/python -m scripts.robokassa_sandbox_e2e preflight --expected-sha '$GITHUB_SHA'"
+      - name: Configure sandbox secrets through stdin
+        env:
+          MERCHANT_LOGIN: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN }}
+          TEST_PASSWORD_1: ${{ secrets.ROBOKASSA_TEST_PASSWORD_1 }}
+          TEST_PASSWORD_2: ${{ secrets.ROBOKASSA_TEST_PASSWORD_2 }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          {
+            printf '%s\n' "$MERCHANT_LOGIN"
+            printf '%s\n' "$TEST_PASSWORD_1"
+            printf '%s\n' "$TEST_PASSWORD_2"
+          } | ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            'cd /opt/photo-bot && venv/bin/python -m scripts.set_robokassa_test_secrets --env-file /opt/photo-bot/.env'
+      - name: Open owner-only sandbox payment window
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            ROOT=/opt/photo-bot
+            set_env() {
+              NAME="$1"
+              VALUE="$2"
+              TMP="$ROOT/.env.sandbox.tmp"
+              grep -v "^$NAME=" "$ROOT/.env" > "$TMP" || true
+              printf '%s=%s\n' "$NAME" "$VALUE" >> "$TMP"
+              chmod 600 "$TMP"
+              mv "$TMP" "$ROOT/.env"
+            }
+            set_env PAYMENT_PROVIDER robokassa
+            set_env PAYMENTS_ENABLED true
+            set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
+            set_env PAYMENT_WEBHOOK_ENABLED true
+            set_env PAYMENT_REFUNDS_ENABLED false
+            set_env ROBOKASSA_MODE sandbox
+            set_env ROBOKASSA_PRODUCTION_APPROVED false
+            set_env ROBOKASSA_HASH_ALGORITHM sha256
+            set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE true
+            set_env MAX_POLL_OBSERVE_ONLY false
+            set_env PILOT_USER_LIMIT 0
+            set_env MAX_TRANSPORT_MODE polling
+            cd "$ROOT"
+            venv/bin/python - <<'PY'
+          from app.config import load_settings
+          from app.database import Database
+          from app.payment_admin import robokassa_health
+
+          settings = load_settings()
+          report = robokassa_health(settings, Database(settings.database_path))
+          assert report["sandbox_runtime_ready"] is True
+          assert settings.robokassa_hash_algorithm == "sha256"
+          assert settings.robokassa_sandbox_duplicate_probe is True
+          assert settings.max_allowed_user_ids == settings.max_owner_user_ids
+          assert settings.pilot_user_limit == 0
+          assert settings.payment_refunds_enabled is False
+          PY
+            sudo -n systemctl restart photo-bot.service
+            READY=0
+            for attempt in $(seq 1 30); do
+              if scripts/healthcheck.sh >/dev/null; then READY=1; break; fi
+              sleep 2
+            done
+            test "$READY" = 1
+            GET_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
+              https://pixoraai.ru/payments/robokassa/result)
+            test "$GET_STATUS" = 405
+            echo "owner_only_sandbox_window_ready=true"
+          REMOTE
+      - name: Wait for exactly one owner sandbox order
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes }}
+        run: |
+          TIMEOUT=$((WAIT_MINUTES * 60))
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "cd /opt/photo-bot && venv/bin/python -m scripts.robokassa_sandbox_e2e wait-order --timeout '$TIMEOUT'"
+      - name: Wait for real Robokassa ResultURL
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes }}
+        run: |
+          TIMEOUT=$((WAIT_MINUTES * 60))
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "cd /opt/photo-bot && venv/bin/python -m scripts.robokassa_sandbox_e2e wait-paid --timeout '$TIMEOUT'"
+      - name: Stop payment intake and prove restart persistence
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            ROOT=/opt/photo-bot
+            set_env() {
+              NAME="$1"
+              VALUE="$2"
+              TMP="$ROOT/.env.sandbox.tmp"
+              grep -v "^$NAME=" "$ROOT/.env" > "$TMP" || true
+              printf '%s=%s\n' "$NAME" "$VALUE" >> "$TMP"
+              chmod 600 "$TMP"
+              mv "$TMP" "$ROOT/.env"
+            }
+            set_env PAYMENTS_ENABLED false
+            set_env PAYMENT_PROVIDER disabled
+            set_env PAYMENT_WEBHOOK_ENABLED false
+            set_env PAYMENT_REFUNDS_ENABLED false
+            set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
+            cd "$ROOT"
+            venv/bin/python -m scripts.set_robokassa_test_secrets \
+              --env-file "$ROOT/.env" --clear
+            sudo -n systemctl restart photo-bot.service
+            READY=0
+            for attempt in $(seq 1 30); do
+              if scripts/healthcheck.sh >/dev/null; then READY=1; break; fi
+              sleep 2
+            done
+            test "$READY" = 1
+            venv/bin/python -m scripts.robokassa_sandbox_e2e verify-paid-after-restart
+          REMOTE
+      - name: Verify static browser SuccessURL grants nothing
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            'cd /opt/photo-bot && venv/bin/python -m scripts.robokassa_sandbox_e2e verify-success-page'
+      - name: Wait for owner original delivery
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes }}
+        run: |
+          TIMEOUT=$((WAIT_MINUTES * 60))
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "cd /opt/photo-bot && venv/bin/python -m scripts.robokassa_sandbox_e2e wait-first-original --timeout '$TIMEOUT'"
+      - name: Restart, redeliver original, and reconcile
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            cd /opt/photo-bot
+            sudo -n systemctl restart photo-bot.service
+            READY=0
+            for attempt in $(seq 1 30); do
+              if scripts/healthcheck.sh >/dev/null; then READY=1; break; fi
+              sleep 2
+            done
+            test "$READY" = 1
+            venv/bin/python -m scripts.robokassa_sandbox_e2e resend-original
+            venv/bin/python -m scripts.robokassa_sandbox_e2e reconcile
+          REMOTE
+      - name: Restore production fail-closed state
+        if: always() && steps.ssh_config.outputs.configured == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            ROOT=/opt/photo-bot
+            set_env() {
+              NAME="$1"
+              VALUE="$2"
+              TMP="$ROOT/.env.sandbox.tmp"
+              grep -v "^$NAME=" "$ROOT/.env" > "$TMP" || true
+              printf '%s=%s\n' "$NAME" "$VALUE" >> "$TMP"
+              chmod 600 "$TMP"
+              mv "$TMP" "$ROOT/.env"
+            }
+            set_env MAX_POLL_OBSERVE_ONLY true
+            set_env PILOT_USER_LIMIT 0
+            set_env PAYMENTS_ENABLED false
+            set_env PAYMENT_PROVIDER disabled
+            set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
+            set_env PAYMENT_WEBHOOK_ENABLED false
+            set_env PAYMENT_REFUNDS_ENABLED false
+            set_env ROBOKASSA_MODE sandbox
+            set_env ROBOKASSA_PRODUCTION_APPROVED false
+            set_env ROBOKASSA_HASH_ALGORITHM sha256
+            set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
+            cd "$ROOT"
+            venv/bin/python -m scripts.set_robokassa_test_secrets \
+              --env-file "$ROOT/.env" --clear
+            sudo -n systemctl restart photo-bot.service
+          REMOTE
+      - name: Verify restored runtime and public fail-closed endpoint
+        if: always() && steps.ssh_config.outputs.configured == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            cd /opt/photo-bot
+            READY=0
+            for attempt in $(seq 1 30); do
+              if scripts/healthcheck.sh >/dev/null; then READY=1; break; fi
+              sleep 2
+            done
+            test "$READY" = 1
+            venv/bin/python -m scripts.robokassa_sandbox_e2e runtime-safety
+            GET_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
+              https://pixoraai.ru/payments/robokassa/result)
+            POST_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -X POST -d '' https://pixoraai.ru/payments/robokassa/result)
+            test "$GET_STATUS" = 405
+            test "$POST_STATUS" = 503
+            test "$(pgrep -u photoapp -f '^/opt/photo-bot/venv/bin/python -m app.main run$' | wc -l)" -eq 1
+            echo "result_url_get=405"
+            echo "result_url_post=503"
+            echo "runtime_count=1"
+          REMOTE
+      - name: Finalize successful sandbox evidence
+        if: success()
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            'cd /opt/photo-bot && venv/bin/python -m scripts.robokassa_sandbox_e2e final-safety'
+      - name: Copy redacted evidence
+        if: always() && steps.ssh_config.outputs.configured == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          install -d artifact
+          scp -P "$SSH_PORT" \
+            "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/robokassa_sandbox_evidence.json" \
+            artifact/robokassa_sandbox_evidence.json || true
+      - name: Store redacted evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robokassa-owner-sandbox-${{ github.run_id }}
+          path: artifact/robokassa_sandbox_evidence.json
+          if-no-files-found: warn
+          retention-days: 30

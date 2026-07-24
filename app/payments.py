@@ -370,6 +370,16 @@ class PaymentService:
                 if existing is not None:
                     order = _row_order(existing)
                 else:
+                    if self.settings.robokassa_sandbox_duplicate_probe:
+                        sandbox_order_count = int(
+                            connection.execute(
+                                "SELECT COUNT(*) FROM payment_orders"
+                            ).fetchone()[0]
+                        )
+                        if sandbox_order_count:
+                            raise PaymentError(
+                                "The bounded Robokassa sandbox order cap was reached"
+                            )
                     attempt_id = str(version["attempt_id"])
                     intent_id = uuid4().hex
                     connection.execute(
@@ -518,6 +528,21 @@ class PaymentService:
                     ).fetchone() if duplicate["order_id"] else None
                 )
                 response = f"OK{order['provider_invoice_id']}" if order and duplicate["status"] == "processed" else "REJECTED"
+                if order and duplicate["status"] == "processed":
+                    current = connection.execute(
+                        "SELECT status FROM payment_orders WHERE id=?",
+                        (duplicate["order_id"],),
+                    ).fetchone()
+                    self._audit(
+                        connection,
+                        duplicate["order_id"],
+                        "duplicate_callback_accepted",
+                        str(current["status"]) if current else None,
+                        str(current["status"]) if current else None,
+                        "duplicate_event",
+                        "provider",
+                        source,
+                    )
                 return PaymentWebhook(
                     accepted=bool(order and duplicate["status"] == "processed"),
                     duplicate=True,
@@ -682,7 +707,9 @@ class PaymentService:
         with self.database.read() as connection:
             row = connection.execute(
                 """SELECT o.status,o.user_id,v.original_path,v.unlock_status
-                   FROM payment_orders o JOIN gallery_versions v ON v.id=o.version_id
+                   FROM payment_orders o
+                   LEFT JOIN unlock_entitlements e ON e.source_payment_order_id=o.id
+                   JOIN gallery_versions v ON v.id=COALESCE(e.gallery_version_id,o.version_id)
                    WHERE o.id=?""",
                 (order_id,),
             ).fetchone()
@@ -702,7 +729,13 @@ class PaymentService:
     def mark_delivery(self, order_id: str, *, delivered: bool, error_code: str | None = None) -> None:
         now = self.clock()
         with self.database.transaction() as connection:
-            order = connection.execute("SELECT * FROM payment_orders WHERE id=?", (order_id,)).fetchone()
+            order = connection.execute(
+                """SELECT o.*,COALESCE(e.gallery_version_id,o.version_id) AS delivery_version_id
+                   FROM payment_orders o
+                   LEFT JOIN unlock_entitlements e ON e.source_payment_order_id=o.id
+                   WHERE o.id=?""",
+                (order_id,),
+            ).fetchone()
             if order is None or order["status"] not in {
                 PaymentStatus.PAID.value, PaymentStatus.DELIVERY_PENDING.value,
                 PaymentStatus.DELIVERED.value,
@@ -728,7 +761,7 @@ class PaymentService:
                 connection.execute(
                     """UPDATE gallery_versions SET delivery_count=delivery_count+1,last_delivered_at=?
                        WHERE id=?""",
-                    (_iso(now), order["version_id"]),
+                    (_iso(now), order["delivery_version_id"]),
                 )
             self._audit(
                 connection, order_id,
@@ -736,7 +769,8 @@ class PaymentService:
                 str(order["status"]), next_status, error_code, "application",
             )
             item = connection.execute(
-                "SELECT gallery_item_id FROM gallery_versions WHERE id=?", (order["version_id"],)
+                "SELECT gallery_item_id FROM gallery_versions WHERE id=?",
+                (order["delivery_version_id"],),
             ).fetchone()
             self._record_product_event(
                 connection, "original_delivered" if delivered else "original_delivery_failed",

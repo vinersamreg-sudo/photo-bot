@@ -683,6 +683,141 @@ class PaymentTests(TestCase):
         missing = httpx.get(f"http://127.0.0.1:{server.bound_port}/wrong")
         self.assertEqual(missing.status_code, 404)
 
+    def test_http_webhook_runs_one_bounded_duplicate_probe_without_double_grant(self) -> None:
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "event-http-probe"
+        )
+        delivered = []
+        server = PaymentWebhookServer(
+            self.service,
+            "127.0.0.1",
+            0,
+            "/payments/robokassa/result",
+            verify_duplicate_callback=True,
+            on_paid=delivered.append,
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        response = httpx.post(
+            f"http://127.0.0.1:{server.bound_port}/payments/robokassa/result",
+            data=self.signed_callback(order),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, f"OK{order.provider_invoice_id}")
+        self.assertEqual(delivered, [order.id])
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM payment_events WHERE order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM payment_webhooks WHERE event_id IN "
+                    "(SELECT id FROM payment_events WHERE order_id=?)",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants "
+                    "WHERE payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM payment_receipts "
+                    "WHERE order_id=? AND receipt_type='payment'",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM payment_audit "
+                    "WHERE order_id=? AND event_type='duplicate_callback_accepted'",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+
+    def test_sandbox_probe_caps_runtime_at_one_order(self) -> None:
+        object.__setattr__(
+            self.settings, "robokassa_sandbox_duplicate_probe", True
+        )
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "event-capped"
+        )
+        self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        with self.assertRaisesRegex(PaymentError, "sandbox order cap"):
+            self.service.create_order(
+                self.user_id, self.versions[1]["id"], "event-capped-second"
+            )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                1,
+            )
+
+    def test_original_delivery_follows_consumed_entitlement_version(self) -> None:
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "event-selected-version"
+        )
+        self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        selected_version_id = self.versions[1]["id"]
+        selected = self.demo.commerce.unlock_version(
+            self.user_id, selected_version_id
+        )
+        self.assertTrue(selected.consumed_now)
+        with self.database.read() as connection:
+            before = {
+                row["id"]: row["delivery_count"]
+                for row in connection.execute(
+                    "SELECT id,delivery_count FROM gallery_versions"
+                )
+            }
+            selected_path = Path(
+                connection.execute(
+                    "SELECT original_path FROM gallery_versions WHERE id=?",
+                    (selected_version_id,),
+                ).fetchone()[0]
+            )
+        self.assertEqual(
+            self.service.original_for_order(order.id, self.user_id),
+            selected_path,
+        )
+        self.service.mark_delivery(order.id, delivered=True)
+        with self.database.read() as connection:
+            after = {
+                row["id"]: row["delivery_count"]
+                for row in connection.execute(
+                    "SELECT id,delivery_count FROM gallery_versions"
+                )
+            }
+        self.assertEqual(
+            after[selected_version_id], before[selected_version_id] + 1
+        )
+        self.assertEqual(
+            after[self.versions[0]["id"]], before[self.versions[0]["id"]]
+        )
+
     def test_http_webhook_rejects_wrong_method_oversize_and_malformed_encoding(self) -> None:
         server = PaymentWebhookServer(
             self.service, "127.0.0.1", 0, "/payments/robokassa/result"

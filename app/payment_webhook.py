@@ -26,6 +26,7 @@ class PaymentWebhookServer:
         path: str,
         *,
         accepting_callbacks: bool = True,
+        verify_duplicate_callback: bool = False,
         on_paid: Callable[[str], object] | None = None,
     ) -> None:
         self.service = service
@@ -33,6 +34,7 @@ class PaymentWebhookServer:
         self.port = port
         self.path = path
         self.accepting_callbacks = accepting_callbacks
+        self.verify_duplicate_callback = verify_duplicate_callback
         self.on_paid = on_paid
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -96,6 +98,32 @@ class PaymentWebhookServer:
                     LOGGER.warning("Payment webhook rejected safely")
                     self.send_error(503)
                     return
+                if (
+                    owner.verify_duplicate_callback
+                    and result.accepted
+                    and not result.duplicate
+                ):
+                    try:
+                        duplicate = owner.service.process_webhook(
+                            values,
+                            method=self.command,
+                            path=parsed.path,
+                            source=self.client_address[0] if self.client_address else None,
+                        )
+                    except (PaymentError, PaymentUnavailable):
+                        LOGGER.error("Sandbox duplicate callback probe failed safely")
+                        self.send_error(503)
+                        return
+                    if not (
+                        duplicate.accepted
+                        and duplicate.duplicate
+                        and duplicate.http_status == 200
+                        and duplicate.response_text == result.response_text
+                    ):
+                        LOGGER.error("Sandbox duplicate callback probe invariant failed")
+                        self.send_error(503)
+                        return
+                    LOGGER.info("Sandbox duplicate callback probe passed")
                 if result.accepted and not result.duplicate and result.order_id and owner.on_paid:
                     try:
                         owner.on_paid(result.order_id)

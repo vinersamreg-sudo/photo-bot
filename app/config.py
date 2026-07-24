@@ -75,6 +75,7 @@ class Settings:
     robokassa_password2: str = ""
     robokassa_password3: str = ""
     robokassa_hash_algorithm: str = "sha256"
+    robokassa_sandbox_duplicate_probe: bool = False
     robokassa_payment_url: str = "https://auth.robokassa.ru/Merchant/Index.aspx"
     robokassa_refund_url: str = "https://services.robokassa.ru/RefundService/Refund/Create"
     robokassa_refund_status_url: str = "https://services.robokassa.ru/RefundService/Refund/GetState"
@@ -343,10 +344,21 @@ def load_settings(
     webhook_enabled = _boolean(values, "PAYMENT_WEBHOOK_ENABLED", False)
     refunds_enabled = _boolean(values, "PAYMENT_REFUNDS_ENABLED", False)
     production_approved = _boolean(values, "ROBOKASSA_PRODUCTION_APPROVED", False)
+    sandbox_duplicate_probe = _boolean(
+        values, "ROBOKASSA_SANDBOX_DUPLICATE_PROBE", False
+    )
     if payments_enabled and payment_provider != "robokassa":
         raise ValueError("Enabled payments require PAYMENT_PROVIDER=robokassa")
     if robokassa_mode == "production" and payments_enabled and not production_approved:
         raise ValueError("Production Robokassa requires explicit ROBOKASSA_PRODUCTION_APPROVED=true")
+    if sandbox_duplicate_probe and robokassa_mode != "sandbox":
+        raise ValueError(
+            "ROBOKASSA_SANDBOX_DUPLICATE_PROBE is allowed only in sandbox mode"
+        )
+    if sandbox_duplicate_probe and not webhook_enabled:
+        raise ValueError(
+            "ROBOKASSA_SANDBOX_DUPLICATE_PROBE requires PAYMENT_WEBHOOK_ENABLED=true"
+        )
     if refunds_enabled and not payments_enabled:
         raise ValueError("Refunds cannot be enabled while payments are disabled")
     if webhook_enabled and not webhook_listener_enabled:
@@ -499,6 +511,7 @@ def load_settings(
         robokassa_password2=values.get("ROBOKASSA_PASSWORD2", "").strip(),
         robokassa_password3=values.get("ROBOKASSA_PASSWORD3", "").strip(),
         robokassa_hash_algorithm=robokassa_hash_algorithm,
+        robokassa_sandbox_duplicate_probe=sandbox_duplicate_probe,
         robokassa_payment_url=(
             values.get("ROBOKASSA_PAYMENT_URL", "https://auth.robokassa.ru/Merchant/Index.aspx").strip()
             or "https://auth.robokassa.ru/Merchant/Index.aspx"
