@@ -47,6 +47,8 @@ class RobokassaSandboxE2ETests(TestCase):
         self.assertIn("set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE true", workflow)
         self.assertIn("wait-order", workflow)
         self.assertIn("wait-paid", workflow)
+        self.assertEqual(workflow.count("ServerAliveInterval=20"), 3)
+        self.assertEqual(workflow.count("ServerAliveCountMax=6"), 3)
         self.assertIn("if: always()", workflow)
         self.assertGreaterEqual(workflow.count("MAX_POLL_OBSERVE_ONLY true"), 1)
         self.assertGreaterEqual(workflow.count("set_env PAYMENTS_ENABLED false"), 2)
