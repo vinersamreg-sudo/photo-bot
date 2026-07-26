@@ -1,5 +1,14 @@
 # Current State
 
+## 24.07.2026 — Robokassa sandbox RCA: signature rejected after expiry fix
+
+- the separately authorized post-fix sandbox run created exactly one new owner order and reached Robokassa with a non-expired deadline;
+- Robokassa rejected payment initialization with error 29 (`SignatureValue` invalid), before the payment form, ResultURL callback or any money movement;
+- Pixora's emitted link was locally revalidated against its configured Password #1, SHA-256, amount, invoice, once-encoded Receipt, URL2 modifiers and `Shp_order`; the implementation and regression fixture match Robokassa's current documented formula;
+- the remaining boundary is the write-only configuration shared by the Robokassa test cabinet and GitHub Environment: their actual secret values cannot be read back and therefore equality is not yet proven;
+- no package grant, receipt, original delivery or refund was created; the workflow was cancelled after the provider rejection and its `always()` cleanup restored the fail-closed production state;
+- no further sandbox invoice is authorized. Before a new attempt, the test Password #1/#2 and SHA-256 selection must be deliberately re-saved identically in both systems.
+
 ## 24.07.2026 — Robokassa sandbox RCA: expired `ExpirationDate`
 
 - owner-only sandbox reached the Robokassa payment page, but the provider rejected the invoice before payment with error 33; ResultURL was not called and no package, receipt or refund was created;
@@ -7,7 +16,7 @@
 - payment links now require a timezone-aware deadline, convert it to UTC+03 and only then render `YYYY-MM-DDThh:mm`;
 - regression coverage proves `08:30 UTC -> 11:30` and retains merchant-wide unique `InvId`;
 - sandbox cleanup now also restores polling, while the temporary credential writer preserves `.env` ownership;
-- no post-fix sandbox payment has run. Production remains observe-only/payment fail-closed, and a new invoice requires separate explicit owner approval.
+- the post-fix result and current blocker are recorded in the section above.
 
 ## 23.07.2026 — Robokassa support decision implemented
 

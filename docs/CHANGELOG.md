@@ -1,5 +1,19 @@
 # Changelog
 
+## 24.07.2026 — Robokassa post-fix sandbox reached signature gate
+
+- executed exactly one separately authorized owner-only sandbox order after the
+  expiration timezone fix;
+- provider error changed from expired invoice (33) to invalid `SignatureValue`
+  (29), proving that the deadline fix reached the next validation boundary;
+- revalidated the emitted link against the configured Password #1 and the
+  documented SHA-256 Receipt/URL2/`Shp_order` formula;
+- recorded the remaining unproved write-only credential boundary without
+  claiming a code fix or a successful payment;
+- cancelled the wait after provider rejection; `always()` cleanup restored
+  observe-only/payment fail-closed and no callback, grant, receipt or refund
+  occurred.
+
 ## 24.07.2026 — Robokassa expiration timezone RCA
 
 - fixed provider error 33 by converting internal timezone-aware payment expiry

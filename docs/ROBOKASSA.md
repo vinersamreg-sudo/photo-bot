@@ -45,3 +45,17 @@ One payment buys one «Пакет доступа Pixora» and creates one sale r
 ## Safety state
 
 Deploy forces payments, business callbacks and refunds off, sandbox mode on, production approval off, MAX observe-only on for a normal push and pilot limit 0. SHA-256 is the only accepted algorithm. No payment or refund may be executed without separate owner approval and credentials.
+
+The post-expiry-fix sandbox attempt on 24.07.2026 was rejected by Robokassa
+before the payment form with error 29 (`SignatureValue` invalid). The generated
+link passed Pixora's independent reconstruction of the documented SHA-256 base,
+but the actual test passwords are write-only in both the cabinet and GitHub
+Environment, so equality across those systems is not proven. Re-save the same
+test Password #1/#2 and SHA-256 selection in both systems before requesting a
+separately authorized retry. Do not diagnose this state by creating unapproved
+probe invoices.
+
+The side-effect-free local A–E builder is documented in
+[ROBOKASSA_SIGNATURE_BISECT.md](ROBOKASSA_SIGNATURE_BISECT.md). In the official
+modifier contract, absent `StepByStep` and `ResultUrl2` are omitted rather than
+represented by empty slots. Only an absent `InvId` leaves an empty position.
