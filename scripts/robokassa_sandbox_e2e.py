@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 
@@ -365,17 +365,12 @@ def _validated_link(settings: Settings, database: Database, order: Any) -> dict[
         "",
     )
     shp = f":Shp_order={order['public_token']}"
-    modifiers = [receipt_encoded]
-    if settings.payment_success_url:
-        modifiers.extend((quote(settings.payment_success_url, safe=""), "GET"))
-    if settings.payment_fail_url:
-        modifiers.extend((quote(settings.payment_fail_url, safe=""), "GET"))
     base = ":".join(
         (
             settings.robokassa_merchant_login,
             amount_text(int(order["amount_minor"])),
             str(order["provider_invoice_id"]),
-            *modifiers,
+            receipt_encoded,
             settings.robokassa_password1,
         )
     ) + shp
@@ -389,10 +384,16 @@ def _validated_link(settings: Settings, database: Database, order: Any) -> dict[
     _require(params.get("IsTest") == ["1"], "IsTest=1 is absent")
     _require("%25" in raw_receipt, "Receipt is not double URL-encoded")
     _require(params.get("SignatureValue") == [expected_signature], "SHA-256 signature mismatch")
-    _require(params.get("SuccessUrl2") == [SUCCESS_URL], "SuccessUrl2 is incorrect")
-    _require(params.get("SuccessUrl2Method") == ["GET"], "SuccessUrl2 method is not GET")
-    _require(params.get("FailUrl2") == [FAIL_URL], "FailUrl2 is incorrect")
-    _require(params.get("FailUrl2Method") == ["GET"], "FailUrl2 method is not GET")
+    _require("SuccessUrl2" not in params, "SuccessUrl2 must use the shop setting")
+    _require(
+        "SuccessUrl2Method" not in params,
+        "SuccessUrl2Method must use the shop setting",
+    )
+    _require("FailUrl2" not in params, "FailUrl2 must use the shop setting")
+    _require(
+        "FailUrl2Method" not in params,
+        "FailUrl2Method must use the shop setting",
+    )
     _require(
         item
         == {

@@ -161,16 +161,11 @@ class RobokassaProvider:
         ).strftime("%Y-%m-%dT%H:%M")
         receipt_encoded = quote(self._receipt(request), safe="")
         shp = {"Shp_order": request.public_token}
-        modifiers = [receipt_encoded]
-        if self.success_url:
-            modifiers.extend((quote(self.success_url, safe=""), "GET"))
-        if self.fail_url:
-            modifiers.extend((quote(self.fail_url, safe=""), "GET"))
         base = ":".join((
             self.merchant_login,
             amount_text(request.amount_minor),
             str(request.invoice_id),
-            *modifiers,
+            receipt_encoded,
             self.password1,
         )) + self._shp(shp)
         params: dict[str, str] = {
@@ -189,12 +184,6 @@ class RobokassaProvider:
         }
         if self.mode == "sandbox":
             params["IsTest"] = "1"
-        if self.success_url:
-            params["SuccessUrl2"] = self.success_url
-            params["SuccessUrl2Method"] = "GET"
-        if self.fail_url:
-            params["FailUrl2"] = self.fail_url
-            params["FailUrl2Method"] = "GET"
         return f"{self.payment_url}?{urlencode(params)}"
 
     def parse_notification(self, values: Mapping[str, str]) -> RobokassaNotification:

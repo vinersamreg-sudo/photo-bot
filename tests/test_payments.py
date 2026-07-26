@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 from PIL import Image
@@ -123,14 +123,10 @@ class PaymentTests(TestCase):
         self.assertEqual(query["ExpirationDate"], ["2026-07-19T11:30"])
         self.assertEqual(query["Shp_order"], [order.public_token])
         self.assertEqual(query["Description"], ["Пакет доступа Pixora"])
-        self.assertEqual(
-            query["SuccessUrl2"], ["https://pixoraai.ru/payment-success.html"]
-        )
-        self.assertEqual(query["SuccessUrl2Method"], ["GET"])
-        self.assertEqual(
-            query["FailUrl2"], ["https://pixoraai.ru/payment-failed.html"]
-        )
-        self.assertEqual(query["FailUrl2Method"], ["GET"])
+        self.assertNotIn("SuccessUrl2", query)
+        self.assertNotIn("SuccessUrl2Method", query)
+        self.assertNotIn("FailUrl2", query)
+        self.assertNotIn("FailUrl2Method", query)
         self.assertIn("Receipt", query)
         receipt_once_encoded = query["Receipt"][0]
         receipt_text = unquote(receipt_once_encoded)
@@ -165,8 +161,6 @@ class PaymentTests(TestCase):
         expected_signature_base = (
             f"pixora-test:49.00:{order.provider_invoice_id}:"
             f"{receipt_once_encoded}:"
-            f"{quote('https://pixoraai.ru/payment-success.html', safe='')}:GET:"
-            f"{quote('https://pixoraai.ru/payment-failed.html', safe='')}:GET:"
             f"password-one:Shp_order={order.public_token}"
         )
         self.assertEqual(
@@ -176,8 +170,6 @@ class PaymentTests(TestCase):
         wrongly_double_encoded_signature_base = (
             f"pixora-test:49.00:{order.provider_invoice_id}:"
             f"{raw_receipt}:"
-            f"{quote('https://pixoraai.ru/payment-success.html', safe='')}:GET:"
-            f"{quote('https://pixoraai.ru/payment-failed.html', safe='')}:GET:"
             f"password-one:Shp_order={order.public_token}"
         )
         self.assertNotEqual(
@@ -190,8 +182,6 @@ class PaymentTests(TestCase):
         tampered_signature_base = (
             f"pixora-test:49.00:{order.provider_invoice_id}:"
             f"{tampered_receipt}:"
-            f"{quote('https://pixoraai.ru/payment-success.html', safe='')}:GET:"
-            f"{quote('https://pixoraai.ru/payment-failed.html', safe='')}:GET:"
             f"password-one:Shp_order={order.public_token}"
         )
         self.assertNotEqual(
