@@ -13,9 +13,14 @@ from app.scenarios import SCENARIOS
 
 
 WELCOME_TEXT = (
-    "✨ Pixora\n\n"
-    "Отправьте фотографию и напишите, что хотите изменить.\n\n"
-    "Продолжая, вы соглашаетесь с условиями сервиса и обработкой изображения."
+    "Что хотите сделать с фотографией?\n\n"
+    "Загрузите фотографию и сразу напишите, что нужно сделать.\n\n"
+    "Примеры:\n"
+    "• убрать фон\n"
+    "• поменять одежду\n"
+    "• улучшить качество\n"
+    "• заменить лицо\n"
+    "• сделать фото на памятник"
 )
 
 LEGAL_TEXT = (
@@ -44,11 +49,7 @@ class MaxTransport(Protocol):
 def upload_view() -> View:
     return View(
         WELCOME_TEXT,
-        (
-            Button("✨ Идеи", "catalog:ideas"),
-            Button("📂 Мои работы", "studio:works"),
-            Button("ℹ️ Подробнее", "start:details"),
-        ),
+        (Button("📷 Загрузить фотографию", "upload:ready"),),
     )
 
 
@@ -163,25 +164,27 @@ def studio_menu_contract() -> View:
 
 
 def result_actions(remaining: int) -> View:
-    if remaining > 0:
-        text = "Демо с водяным знаком."
-        if remaining == 1:
-            text += "\n\nОсталась одна бесплатная обработка."
-        buttons = (
-            Button("⬇ Получить оригинал", "result:unlock"),
-            Button("✏️ Исправить", "result:correct"),
-            Button("🎲 Другой вариант", "result:repeat"),
-            Button("📂 Мои работы", "studio:works"),
-        )
-    else:
-        text = "Бесплатные обработки закончились."
-        buttons = (
-            Button("⬇ Получить оригинал", "result:unlock"),
-            Button("Пакет доступа Pixora — 49 ₽", "package:buy"),
-            Button("📂 Мои работы", "studio:works"),
-            Button("Начать заново", "new:source"),
-        )
-    return View(text, buttons)
+    _ = remaining
+    return View(
+        "Готово",
+        (
+            Button("Получить оригинал", "result:unlock"),
+            Button("Исправить", "result:correct"),
+            Button("Другой вариант", "result:repeat"),
+            Button("История версий", "work:history"),
+            Button("Мои работы", "studio:works"),
+        ),
+    )
+
+
+def paid_actions() -> tuple[Button, ...]:
+    return (
+        Button("📥 Скачать оригинал", "result:unlock"),
+        Button("✏ Исправить", "result:correct"),
+        Button("🎲 Другой вариант", "result:repeat"),
+        Button("📁 Мои работы", "studio:works"),
+        Button("📷 Новая фотография", "new:source"),
+    )
 
 
 def delete_confirmation_view() -> View:

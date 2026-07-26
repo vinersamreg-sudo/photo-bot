@@ -17,6 +17,7 @@ from app.max_adapter import (
     legal_details_view,
     legal_view,
     main_menu,
+    paid_actions,
     photoshoot_catalog,
     result_actions,
     scenario_catalog,
@@ -41,7 +42,7 @@ class MaxAdapterTests(TestCase):
         menu = main_menu()
         self.assertEqual(
             [button.text for button in menu.buttons],
-            ["✨ Идеи", "📂 Мои работы", "ℹ️ Подробнее"],
+            ["📷 Загрузить фотографию"],
         )
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
         self.assertGreaterEqual(len(scenario_catalog().buttons), 12)
@@ -54,14 +55,30 @@ class MaxAdapterTests(TestCase):
             [button.text for button in studio_menu_contract().buttons],
             ["📂 Мои работы", "⭐ Избранное", "Последние", "Коллекции", "🗑 Корзина"],
         )
-        self.assertIn("Отправьте фотографию и напишите", WELCOME_TEXT)
-        self.assertIn("соглашаетесь с условиями сервиса", WELCOME_TEXT)
-        self.assertEqual(result_actions(4).text, "Демо с водяным знаком.")
-        self.assertNotIn("4", result_actions(4).text)
-        self.assertIn("Осталась одна бесплатная обработка", result_actions(1).text)
-        self.assertIn("Бесплатные обработки закончились", result_actions(0).text)
-        self.assertIn("Пакет доступа Pixora — 49 ₽", result_actions(0).buttons[1].text)
-        self.assertEqual(result_actions(4).buttons[0].text, "⬇ Получить оригинал")
+        self.assertIn("Что хотите сделать с фотографией?", WELCOME_TEXT)
+        self.assertIn("Загрузите фотографию и сразу напишите", WELCOME_TEXT)
+        self.assertEqual(result_actions(4).text, "Готово")
+        self.assertEqual(result_actions(0).text, "Готово")
+        self.assertEqual(
+            [button.text for button in result_actions(4).buttons],
+            [
+                "Получить оригинал",
+                "Исправить",
+                "Другой вариант",
+                "История версий",
+                "Мои работы",
+            ],
+        )
+        self.assertEqual(
+            [button.text for button in paid_actions()],
+            [
+                "📥 Скачать оригинал",
+                "✏ Исправить",
+                "🎲 Другой вариант",
+                "📁 Мои работы",
+                "📷 Новая фотография",
+            ],
+        )
         self.assertEqual(len(gallery_item_actions()), 6)
         self.assertEqual(len(gallery_more_actions().buttons), 4)
         self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])

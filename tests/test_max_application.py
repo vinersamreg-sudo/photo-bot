@@ -26,7 +26,6 @@ from app.max_application import (
     MaxApplication,
     OWNER_ONLY_TEXT,
     PHOTO_ACCEPTED_TEXT,
-    PHOTO_REUSED_TEXT,
     PROCESSING_TEXT,
 )
 from app.max_conversation import MaxConversationStore
@@ -172,10 +171,10 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("bot_started"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         menu = self.transport.messages[-1]
-        self.assertIn("Отправьте фотографию и напишите", menu[1])
+        self.assertIn("Загрузите фотографию и сразу напишите", menu[1])
         self.assertEqual(
             [button.text for button in menu[2]],
-            ["✨ Идеи", "📂 Мои работы", "ℹ️ Подробнее"],
+            ["📷 Загрузить фотографию"],
         )
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/source")
@@ -184,18 +183,35 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(self.store.legal_is_current("u1"))
 
     def generate_first(self) -> None:
-        self.onboard_to_prompt()
-        self.app.handle(self.event("message_created", text="Сделай светлый фон"))
+        self.app.handle(self.event("bot_started"))
+        self.app.handle(
+            self.event(
+                "message_created",
+                text="Сделай светлый фон",
+                image_url="https://iu.oneme.ru/source",
+            )
+        )
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertFalse(
+            any(message[1] == PHOTO_ACCEPTED_TEXT for message in self.transport.messages)
+        )
         self.assertFalse(any("Я понял задачу" in message[1] for message in self.transport.messages))
         self.assertFalse(any("Бесплатных вариантов доступно" in message[1] for message in self.transport.messages))
 
     def test_start_direct_upload_details_and_implicit_consent(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
-        self.assertIn("Отправьте фотографию и напишите", self.transport.messages[-1][1])
-        self.assertEqual(len(self.transport.messages[-1][2]), 3)
+        self.assertIn("Загрузите фотографию и сразу напишите", self.transport.messages[-1][1])
+        self.assertEqual(len(self.transport.messages[-1][2]), 1)
+        message_count = len(self.transport.messages)
+        self.callback("upload:ready")
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(
+            self.transport.callbacks[-1][1],
+            "Прикрепите фото с описанием",
+        )
         self.callback("start:details")
         self.assertIn("внешнему AI-провайдеру", self.transport.messages[-1][1])
         self.assertNotIn("Продолжить", [button.text for button in self.transport.messages[-1][2]])
@@ -213,7 +229,7 @@ class MaxApplicationTests(TestCase):
         accepted_after_persistence = []
 
         def verify_photo_is_persisted_before_acceptance(text):
-            if text.startswith("Фото загружено ✅"):
+            if text == PHOTO_ACCEPTED_TEXT:
                 with self.database.read() as connection:
                     row = connection.execute(
                         "SELECT source_file_path FROM demo_sessions"
@@ -265,7 +281,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
         self.assertTrue(self.store.legal_is_current("u1"))
 
-    def test_start_resumes_stored_source_without_asking_for_another_photo(self) -> None:
+    def test_start_clears_session_binding_and_returns_to_first_screen(self) -> None:
         self.onboard_to_prompt()
         before_restart = self.store.get("u1")
         self.assertIsNotNone(before_restart.session_id)
@@ -274,12 +290,15 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(len(self.transport.messages), message_count + 1)
         restarted = self.store.get("u1")
-        self.assertEqual(restarted.state, "waiting_for_prompt")
-        self.assertEqual(restarted.session_id, before_restart.session_id)
-        self.assertIsNotNone(restarted.current_gallery_item_id)
+        self.assertEqual(restarted.state, "waiting_for_source")
+        self.assertIsNone(restarted.session_id)
+        self.assertIsNone(restarted.current_gallery_item_id)
         self.assertIsNone(restarted.current_version_id)
         self.assertEqual(self.provider.calls, 0)
-        self.assertEqual(self.transport.messages[-1][1], PHOTO_REUSED_TEXT)
+        self.assertIn(
+            "Загрузите фотографию и сразу напишите",
+            self.transport.messages[-1][1],
+        )
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
 
     def test_custom_requires_upload_when_the_stored_source_is_missing(self) -> None:
@@ -292,7 +311,7 @@ class MaxApplicationTests(TestCase):
         source.unlink()
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
-        self.assertIn("Отправьте фотографию и напишите", self.transport.messages[-1][1])
+        self.assertIn("Загрузите фотографию и сразу напишите", self.transport.messages[-1][1])
         self.assertEqual(self.provider.calls, 0)
 
     def test_photoshoot_catalog_and_new_source_share_global_balance(self) -> None:
@@ -327,7 +346,7 @@ class MaxApplicationTests(TestCase):
         preloaded = self.store.get("u1")
         self.assertEqual(preloaded.state, "waiting_for_prompt")
         self.assertIsNotNone(preloaded.session_id)
-        self.assertIn("Фото загружено", self.transport.messages[-1][1])
+        self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
         with self.database.read() as connection:
             source = Path(connection.execute(
                 "SELECT source_file_path FROM demo_sessions WHERE id=?",
@@ -366,13 +385,23 @@ class MaxApplicationTests(TestCase):
 
     def test_processing_preview_original_guard_duplicate_and_unlock_placeholder(self) -> None:
         self.generate_first()
-        self.assertTrue(any("Создаю новый вариант" in row[1] for row in self.transport.messages))
+        self.assertTrue(any(row[1] == PROCESSING_TEXT for row in self.transport.messages))
         self.assertTrue(self.transport.edits)
         delivered_path = self.transport.images[-1][1]
         self.assertTrue(delivered_path.is_file())
         self.assertEqual(
             self.transport.images[-1][2],
-            "Демо с водяным знаком.\n\nОсталась одна бесплатная обработка.",
+            "Готово",
+        )
+        self.assertEqual(
+            [button.text for button in self.transport.images[-1][3]],
+            [
+                "Получить оригинал",
+                "Исправить",
+                "Другой вариант",
+                "История версий",
+                "Мои работы",
+            ],
         )
         self.assertEqual(self.transport.edits[-1][1], "✨ Готово")
         with self.database.read() as connection:
@@ -420,9 +449,16 @@ class MaxApplicationTests(TestCase):
         )
         event = self.event("message_callback", action="result:unlock")
         paid_app.handle(event)
-        self.assertIn("Оригинал можно выбрать позже", self.transport.messages[-1][1])
-        paid_app.handle(self.event("message_callback", action="package:buy"))
+        self.assertEqual(
+            self.transport.messages[-1][1],
+            "Пакет доступа Pixora — 49 ₽\n\n"
+            "После оплаты начисляется:\n"
+            "• 2 обработки\n"
+            "• 1 оригинал\n\n"
+            "Пакет начисляется сразу после оплаты.",
+        )
         pay_button = self.transport.messages[-1][2][0]
+        self.assertEqual(pay_button.text, "Оплатить 49 ₽")
         self.assertTrue(pay_button.action.startswith("https://auth.robokassa.ru/"))
         with self.database.read() as connection:
             order = connection.execute("SELECT * FROM payment_orders").fetchone()
@@ -440,6 +476,18 @@ class MaxApplicationTests(TestCase):
             "SignatureValue": signature,
         }, method="POST", path="/payments/robokassa/result")
         self.assertTrue(webhook.accepted)
+        self.assertTrue(paid_app.notify_continuation_pack_paid(order["id"]))
+        self.assertIn("Скачать оригинал", self.transport.messages[-1][1])
+        self.assertEqual(
+            [button.text for button in self.transport.messages[-1][2]],
+            [
+                "📥 Скачать оригинал",
+                "✏ Исправить",
+                "🎲 Другой вариант",
+                "📁 Мои работы",
+                "📷 Новая фотография",
+            ],
+        )
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute(
@@ -526,11 +574,11 @@ class MaxApplicationTests(TestCase):
 
     def test_result_feedback_is_optional_and_technical_only(self) -> None:
         self.generate_first()
+        message_count = len(self.transport.messages)
         self.callback("result:feedback:positive")
-        self.assertEqual(self.transport.messages[-1][1], "Спасибо за оценку 👍")
+        self.assertEqual(len(self.transport.messages), message_count)
         self.callback("result:feedback:negative")
-        self.assertEqual(self.transport.messages[-1][1], "Что сделать дальше?")
-        self.assertEqual(len(self.transport.messages[-1][2]), 3)
+        self.assertEqual(len(self.transport.messages), message_count)
         with self.database.read() as connection:
             row = connection.execute("SELECT * FROM version_feedback").fetchone()
         self.assertEqual(row["sentiment"], "negative")

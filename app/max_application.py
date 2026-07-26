@@ -43,6 +43,7 @@ from app.max_adapter import (
     ideas_catalog,
     legal_details_view,
     legal_view,
+    paid_actions,
     photoshoot_catalog,
     result_actions,
     scenario_catalog,
@@ -65,17 +66,12 @@ from app.payments import (
 LOGGER = logging.getLogger(__name__)
 
 PHOTO_ACCEPTED_TEXT = (
-    "Фото загружено ✅\n\n"
-    "Что хотите изменить?"
+    "Добавьте описание к фотографии одним сообщением."
 )
 PHOTO_REUSED_TEXT = (
-    "Фото уже загружено ✅\n\n"
     "Что хотите изменить?"
 )
-PROCESSING_TEXT = (
-    "✨ Создаю новый вариант.\n\n"
-    "Обычно это занимает 1–3 минуты. Можно закрыть MAX — результат придёт сюда."
-)
+PROCESSING_TEXT = "Обрабатываю фотографию…"
 UNLOCK_PLACEHOLDER = (
     "Получение оригинала пока недоступно — идёт закрытое тестирование.\n\n"
     "Работа сохранена в «Моих работах»."
@@ -376,7 +372,13 @@ class MaxApplication:
             return
         if event.event_type == "message_callback":
             if event.callback_id:
-                self.transport.answer_callback(event.callback_id, "Готово")
+                notifications = {
+                    "upload:ready": "Прикрепите фото с описанием",
+                    "prompt:edit": "Напишите изменение",
+                    "result:correct": "Напишите изменение",
+                }
+                notification = notifications.get(event.callback_payload, "Готово")
+                self.transport.answer_callback(event.callback_id, notification)
             self._callback(event, dialog)
             return
         if event.event_type != "message_created":
@@ -399,23 +401,6 @@ class MaxApplication:
 
     def _start(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         self._track("start", session_id=dialog.session_id)
-        if self.store.legal_is_current(event.user_id):
-            stored = self.adapter.resume_demo(event.user_id)
-            if stored is not None:
-                with self.database.read() as connection:
-                    item_id = connection.execute(
-                        "SELECT gallery_item_id FROM demo_sessions WHERE id=?",
-                        (stored.session_id,),
-                    ).fetchone()[0]
-                self.store.transition(
-                    event.user_id, "waiting_for_prompt", event_key=event.event_key,
-                    force=True, user_id=stored.user_id, session_id=stored.session_id,
-                    selected_scenario_id=None, pending_prompt=None,
-                    pending_action="initial", current_gallery_item_id=item_id,
-                    current_version_id=None, status_message_id=None,
-                )
-                self.transport.send_message(event.user_id, PHOTO_REUSED_TEXT)
-                return
         self._show_main(event.user_id, dialog, event.event_key)
 
     def _send_view(self, user_id: str, view: View) -> str:
@@ -445,6 +430,9 @@ class MaxApplication:
         action = event.callback_payload or ""
         if action in {"start:details", "legal:details"}:
             self._send_view(event.user_id, legal_details_view())
+            return
+        if action == "upload:ready":
+            self._reset_dialog_to_main(event.user_id, event.event_key)
             return
         if action == "legal:offer":
             self.transport.send_message(
@@ -481,19 +469,7 @@ class MaxApplication:
             self._show_main(event.user_id, dialog, event.event_key)
             return
         if action == "new:source":
-            self.store.transition(
-                event.user_id,
-                "waiting_for_source",
-                event_key=event.event_key,
-                force=True,
-                selected_scenario_id=None,
-                pending_prompt=None,
-                pending_action="initial",
-                session_id=None,
-                current_gallery_item_id=None,
-                current_version_id=None,
-            )
-            self.transport.send_message(event.user_id, "Пришлите фотографию 📷")
+            self._show_main(event.user_id, dialog, event.event_key)
             return
         if action == "settings":
             self._send_view(event.user_id, settings_view())
@@ -512,7 +488,6 @@ class MaxApplication:
         elif action == "prompt:edit":
             target = "waiting_for_correction" if dialog.pending_action == "correction" else "waiting_for_prompt"
             self.store.transition(event.user_id, target, event_key=event.event_key)
-            self.transport.send_message(event.user_id, "Что изменить?")
         elif action == "prompt:cancel":
             self._show_main(event.user_id, dialog, event.event_key)
         elif action == "prompt:start":
@@ -535,10 +510,6 @@ class MaxApplication:
             self.store.transition(
                 event.user_id, "waiting_for_correction", event_key=event.event_key,
                 pending_prompt=None, pending_action="correction",
-            )
-            self.transport.send_message(
-                event.user_id,
-                "Что нужно поправить?",
             )
         elif action == "result:repeat":
             self._track(
@@ -716,14 +687,20 @@ class MaxApplication:
             )
             self._generate(event, updated, correction=False)
         else:
-            self.store.transition(
+            updated = self.store.transition(
                 event.user_id, "waiting_for_prompt", event_key=event.event_key,
                 force=True,
                 user_id=session.user_id, session_id=session.session_id,
                 current_gallery_item_id=item_id, current_version_id=None,
                 selected_scenario_id=None, pending_action="initial",
             )
-            self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
+            inline_prompt = (event.text or "").strip()
+            if inline_prompt.lower() == "/start":
+                inline_prompt = ""
+            if inline_prompt:
+                self._receive_prompt(event, updated)
+            else:
+                self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
 
     def _session_is_usable(self, session_id: str) -> bool:
         with self.database.read() as connection:
@@ -808,7 +785,7 @@ class MaxApplication:
         )
 
     def _record_feedback(
-        self, platform_user_id: str, dialog: MaxDialog, sentiment: str
+        self, _platform_user_id: str, dialog: MaxDialog, sentiment: str
     ) -> None:
         if not dialog.user_id or not dialog.current_version_id:
             raise InvalidInputError("No current version for feedback")
@@ -820,18 +797,6 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        if sentiment == "positive":
-            self.transport.send_message(platform_user_id, "Спасибо за оценку 👍")
-        else:
-            self.transport.send_message(
-                platform_user_id,
-                "Что сделать дальше?",
-                (
-                    Button("✨ Исправить", "result:correct"),
-                    Button("🎲 Другой вариант", "result:repeat"),
-                    Button("Начать заново", "menu"),
-                ),
-            )
 
     def _generate(
         self,
@@ -948,14 +913,14 @@ class MaxApplication:
                 dialog.user_id, dialog.current_version_id
             )
         except PaymentRequiredError:
-            self._offer_continuation_pack(event.user_id)
+            self._buy_continuation_pack(event, dialog)
             return
         try:
             delivered = self.transport.send_image(
                 event.user_id,
                 reservation.original_path,
                 "Оригинал без водяного знака.",
-                (Button("📂 Мои работы", "studio:works"),),
+                (),
             )
         except MaxTransportError:
             delivered = False
@@ -991,20 +956,6 @@ class MaxApplication:
                 "Нажмите «Получить оригинал» ещё раз.",
             )
 
-    def _offer_continuation_pack(self, platform_user_id: str) -> None:
-        text = (
-            "Пакет доступа Pixora — 49 ₽.\n\n"
-            "После оплаты вам начисляется пакет доступа Pixora.\n"
-            "В пакет входят две обработки и один оригинал.\n"
-            "Пакет начисляется сразу после подтверждения оплаты.\n\n"
-            "Оригинал можно выбрать позже в любой своей работе; он будет без водяного знака."
-        )
-        buttons = (
-            Button("Пакет доступа Pixora — 49 ₽", "package:buy"),
-            Button("📂 Мои работы", "studio:works"),
-        )
-        self.transport.send_message(platform_user_id, text, buttons)
-
     def _buy_continuation_pack(
         self, event: MaxIncomingEvent, dialog: MaxDialog
     ) -> None:
@@ -1016,12 +967,13 @@ class MaxApplication:
         if not self.settings.payments_enabled:
             self.transport.send_message(
                 event.user_id,
-                "Пакет доступа Pixora — 49 ₽.\n\n"
-                "После оплаты вам начисляется пакет доступа Pixora.\n"
-                "В пакет входят две обработки и один оригинал.\n"
-                "Пакет начисляется сразу после подтверждения оплаты.\n\n"
-                "Оплата пока недоступна — идёт закрытое тестирование.",
-                (Button("📂 Мои работы", "studio:works"),),
+                "Пакет доступа Pixora — 49 ₽\n\n"
+                "После оплаты начисляется:\n"
+                "• 2 обработки\n"
+                "• 1 оригинал\n\n"
+                "Пакет начисляется сразу после оплаты.\n\n"
+                "Оплата временно недоступна.",
+                (Button("📁 Мои работы", "studio:works"),),
             )
             return
         if not dialog.user_id:
@@ -1053,12 +1005,12 @@ class MaxApplication:
             return
         self.transport.send_message(
             event.user_id,
-            "Пакет доступа Pixora — 49 ₽.\n\n"
-            "После оплаты вам начисляется пакет доступа Pixora.\n"
-            "В пакет входят две обработки и один оригинал.\n"
-            "Пакет начисляется сразу после подтверждения оплаты.\n\n"
-            "Вы сами выберете, какой оригинал без водяного знака получить.",
-            (Button("Оплатить 49 ₽ в Robokassa", order.payment_url or "package:buy"),),
+            "Пакет доступа Pixora — 49 ₽\n\n"
+            "После оплаты начисляется:\n"
+            "• 2 обработки\n"
+            "• 1 оригинал\n\n"
+            "Пакет начисляется сразу после оплаты.",
+            (Button("Оплатить 49 ₽", order.payment_url or "package:buy"),),
         )
 
     def notify_continuation_pack_paid(self, order_id: str) -> bool:
@@ -1076,17 +1028,12 @@ class MaxApplication:
         entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
         self.transport.send_message(
             row["platform_user_id"],
-            "Оплата прошла ✅\n\n"
-            "Пакет доступа Pixora начислен.\n"
-            "В пакет входят две обработки и один оригинал.\n\n"
-            "Сейчас доступно:\n"
-            f"• обработок: {balance.available};\n"
-            f"• оригиналов без водяного знака: {entitlements.available}.\n\n"
-            "Можно продолжить текущую работу или загрузить другую фотографию.",
-            (
-                Button("📂 Мои работы", "studio:works"),
-                Button("📷 Другая фотография", "new:source"),
-            ),
+            "Скачать оригинал\n\n"
+            "Пакет доступа начислен.\n\n"
+            "Доступно:\n"
+            f"• обработок: {balance.available}\n"
+            f"• оригиналов: {entitlements.available}",
+            paid_actions(),
         )
         return True
 
@@ -1108,7 +1055,7 @@ class MaxApplication:
                 row["platform_user_id"],
                 original,
                 "Оригинал без водяного знака.",
-                (Button("📂 Мои работы", "studio:works"),),
+                (),
             )
         except MaxTransportError:
             delivered = False
@@ -1187,10 +1134,6 @@ class MaxApplication:
             self.transport.send_message(
                 event.user_id, "Работы без доступного превью.", tuple(fallback_buttons)
             )
-        self.transport.send_message(
-            event.user_id, "Что дальше?", (Button("← В меню", "menu"),)
-        )
-
     def _open_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, item_id: str
     ) -> None:
