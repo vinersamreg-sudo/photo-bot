@@ -504,6 +504,10 @@ class RavunaSiteTests(unittest.TestCase):
         self.assertIn("python site/scripts/build_ravuna.py", workflow)
         self.assertIn("/opt/ravuna-site/releases/$GITHUB_SHA", workflow)
         self.assertIn("BASE=/opt/ravuna-site", workflow)
+        self.assertIn(
+            'if test -L \\"\\$BASE/current\\"; then readlink -f \\"\\$BASE/current\\"; fi',
+            workflow,
+        )
 
 
 if __name__ == "__main__":

@@ -170,7 +170,7 @@ jobs:
             else
               mv '$STAGING' '$RELEASE'
             fi
-            OLD=\"\$(readlink -f \"\$BASE/current\" 2>/dev/null || true)\"
+            OLD=\"\$(if test -L \"\$BASE/current\"; then readlink -f \"\$BASE/current\"; fi)\"
             case \"\$OLD\" in \"\$BASE\"/releases/*) ln -sfn \"\$OLD\" \"\$BASE/previous.tmp\"; mv -Tf \"\$BASE/previous.tmp\" \"\$BASE/previous\" ;; '') ;; *) echo 'Unsafe current target' >&2; exit 1 ;; esac
             ln -sfn '$RELEASE' \"\$BASE/current.tmp\"
             mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"
