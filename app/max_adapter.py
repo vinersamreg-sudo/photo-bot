@@ -195,6 +195,21 @@ def paid_actions() -> tuple[Button, ...]:
     )
 
 
+def delivered_actions() -> tuple[Button, ...]:
+    return (
+        Button("📷 Обработать другую фотографию", "new:source"),
+        Button("📁 Мои работы", "studio:works"),
+    )
+
+
+def retry_delivery_actions() -> tuple[Button, ...]:
+    return (
+        Button("🔁 Повторить скачивание", "result:unlock"),
+        Button("📷 Другая фотография", "new:source"),
+        Button("📁 Мои работы", "studio:works"),
+    )
+
+
 def delete_confirmation_view() -> View:
     return View(
         "Переместить работу в корзину?",

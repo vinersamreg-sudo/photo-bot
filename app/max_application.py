@@ -41,6 +41,7 @@ from app.max_adapter import (
     MaxDemoAdapter,
     View,
     delete_confirmation_view,
+    delivered_actions,
     gallery_item_actions,
     gallery_more_actions,
     ideas_catalog,
@@ -49,6 +50,7 @@ from app.max_adapter import (
     paid_actions,
     photoshoot_catalog,
     result_actions,
+    retry_delivery_actions,
     scenario_catalog,
     settings_view,
     upload_view,
@@ -980,11 +982,17 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        if not delivered:
+        if delivered:
             self.transport.send_message(
                 event.user_id,
-                "MAX не принял файл. Право на оригинал сохранено. "
-                "Нажмите «Получить оригинал» ещё раз.",
+                "Оригинал готов ✅",
+                delivered_actions(),
+            )
+        else:
+            self.transport.send_message(
+                event.user_id,
+                "Не удалось отправить оригинал. Право на скачивание сохранено.",
+                retry_delivery_actions(),
             )
 
     def _buy_continuation_pack(
@@ -1110,21 +1118,40 @@ class MaxApplication:
 
         with self.database.read() as connection:
             row = connection.execute(
-                """SELECT o.user_id,u.platform_user_id FROM payment_orders o
-                   JOIN users u ON u.id=o.user_id WHERE o.id=?""",
+                """SELECT o.user_id,u.platform_user_id,
+                          COALESCE(i.version_id,o.version_id) AS target_version_id,
+                          v.gallery_item_id
+                   FROM payment_orders o
+                   LEFT JOIN payment_intents i ON i.id=o.intent_id
+                   JOIN gallery_versions v ON v.id=COALESCE(i.version_id,o.version_id)
+                   JOIN users u ON u.id=o.user_id
+                   WHERE o.id=?""",
                 (order_id,),
             ).fetchone()
         if row is None:
             raise PaymentError("Payment order was not found")
+        self.store.get_or_create(row["platform_user_id"], None)
+        self.store.update(
+            row["platform_user_id"],
+            user_id=row["user_id"],
+            current_gallery_item_id=row["gallery_item_id"],
+            current_version_id=row["target_version_id"],
+        )
         balance = self.demo.commerce.balance(row["user_id"])
         entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
+        actions = paid_actions()
         self.transport.send_message(
             row["platform_user_id"],
-            "Оплата прошла. Пакет Pixora начислен.\n\n"
-            "Доступно:\n"
-            f"• обработок: {balance.available};\n"
-            f"• оригиналов: {entitlements.available}.",
-            paid_actions(),
+            "✅ Оплата прошла успешно\n\n"
+            "Ваш оригинал готов к скачиванию.",
+            actions[:1],
+        )
+        self.transport.send_message(
+            row["platform_user_id"],
+            "Осталось:\n"
+            f"• обработок — {balance.available};\n"
+            f"• оригиналов — {entitlements.available}.",
+            actions[1:],
         )
         return True
 
@@ -1133,13 +1160,25 @@ class MaxApplication:
 
         with self.database.read() as connection:
             row = connection.execute(
-                """SELECT o.user_id,u.platform_user_id
-                   FROM payment_orders o JOIN users u ON u.id=o.user_id
+                """SELECT o.user_id,u.platform_user_id,
+                          COALESCE(i.version_id,o.version_id) AS target_version_id,
+                          v.gallery_item_id
+                   FROM payment_orders o
+                   LEFT JOIN payment_intents i ON i.id=o.intent_id
+                   JOIN gallery_versions v ON v.id=COALESCE(i.version_id,o.version_id)
+                   JOIN users u ON u.id=o.user_id
                    WHERE o.id=?""",
                 (order_id,),
             ).fetchone()
         if row is None:
             raise PaymentError("Payment order was not found")
+        self.store.get_or_create(row["platform_user_id"], None)
+        self.store.update(
+            row["platform_user_id"],
+            user_id=row["user_id"],
+            current_gallery_item_id=row["gallery_item_id"],
+            current_version_id=row["target_version_id"],
+        )
         original = self.payments.original_for_order(order_id, row["user_id"])
         try:
             delivered = self.transport.send_image(
@@ -1155,11 +1194,21 @@ class MaxApplication:
             delivered=delivered,
             error_code=None if delivered else "max_delivery_failed",
         )
-        if not delivered:
+        if delivered:
             try:
                 self.transport.send_message(
                     row["platform_user_id"],
-                    "Оплата получена. Оригинал сохранён — нажмите «Получить оригинал» ещё раз.",
+                    "Оригинал готов ✅",
+                    delivered_actions(),
+                )
+            except MaxTransportError:
+                LOGGER.info("Paid original delivered but follow-up actions were not sent")
+        else:
+            try:
+                self.transport.send_message(
+                    row["platform_user_id"],
+                    "Не удалось отправить оригинал. Право на скачивание сохранено.",
+                    retry_delivery_actions(),
                 )
             except MaxTransportError:
                 LOGGER.warning("Paid original delivery and fallback message both failed")

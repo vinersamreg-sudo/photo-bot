@@ -12,6 +12,7 @@ from app.max_adapter import (
     MaxDemoAdapter,
     WELCOME_TEXT,
     delete_confirmation_view,
+    delivered_actions,
     gallery_item_actions,
     gallery_more_actions,
     legal_details_view,
@@ -20,6 +21,7 @@ from app.max_adapter import (
     paid_actions,
     photoshoot_catalog,
     result_actions,
+    retry_delivery_actions,
     scenario_catalog,
     settings_view,
     studio_menu_contract,
@@ -74,6 +76,21 @@ class MaxAdapterTests(TestCase):
             [button.text for button in paid_actions()],
             [
                 "📥 Скачать оригинал",
+                "📷 Другая фотография",
+                "📁 Мои работы",
+            ],
+        )
+        self.assertEqual(
+            [button.text for button in delivered_actions()],
+            [
+                "📷 Обработать другую фотографию",
+                "📁 Мои работы",
+            ],
+        )
+        self.assertEqual(
+            [button.text for button in retry_delivery_actions()],
+            [
+                "🔁 Повторить скачивание",
                 "📷 Другая фотография",
                 "📁 Мои работы",
             ],
