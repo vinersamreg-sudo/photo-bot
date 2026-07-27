@@ -21,3 +21,4 @@ temp/*
 site/node_modules/
 site/.lighthouse/
 site/.preview-server.pid
+site/ravuna-public/

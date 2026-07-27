@@ -1,4 +1,7 @@
-param([string]$BaseUrl = "http://127.0.0.1:4173")
+param(
+    [string]$BaseUrl = "http://127.0.0.1:4173",
+    [string]$BrandName = "Pixora"
+)
 $ErrorActionPreference = "Stop"
 $paths = @(
     "/", "/styles.css", "/robots.txt", "/sitemap.xml", "/site.webmanifest",
@@ -11,7 +14,7 @@ foreach ($path in $paths) {
     if ($response.StatusCode -ne 200) { throw "Smoke failed for $path" }
 }
 $homepage = (Invoke-WebRequest -UseBasicParsing "$BaseUrl/").Content
-if ($homepage -notmatch "Pixora AI" -or $homepage -notmatch 'data-max-cta="hero"') {
+if ($homepage -notmatch "$([regex]::Escape($BrandName)) AI" -or $homepage -notmatch 'data-max-cta="hero"') {
     throw "Homepage content smoke failed"
 }
 if ($homepage -match 'href="https://max.ru/"' -or $homepage -notmatch '(?<!\d)49(?!\d)') {
@@ -25,4 +28,4 @@ if ($success -notmatch 'data-payment-return="success"' -or $success -notmatch "R
 if ($failed -notmatch 'data-payment-return="failed"' -or $failed -notmatch "viner-89@mail.ru") {
     throw "Payment failed page content smoke failed"
 }
-Write-Output "Pixora site smoke passed ($BaseUrl)"
+Write-Output "$BrandName site smoke passed ($BaseUrl)"

@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import re
 import unittest
@@ -9,6 +11,7 @@ from urllib.parse import urlparse
 SITE = Path(__file__).resolve().parents[1]
 ROOT = SITE.parent
 PUBLIC = SITE / "public"
+RAVUNA_PUBLIC = SITE / "ravuna-public"
 MAX_URL = "https://max.ru/se13572368_bot"
 LEGAL = (
     "legal/offer.html",
@@ -433,6 +436,74 @@ class PixoraSiteTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
         self.assertNotIn("systemctl restart photo-bot", workflow)
         self.assertNotIn("/opt/photo-bot", workflow)
+
+
+class RavunaSiteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        if not RAVUNA_PUBLIC.is_dir():
+            raise AssertionError("Run site/scripts/build_ravuna.py before site tests")
+        cls.pages = {
+            path: (RAVUNA_PUBLIC / path).read_text(encoding="utf-8")
+            for path in ("index.html", "contacts.html", *PAYMENT_STATUS, *LEGAL)
+        }
+
+    def test_ravuna_has_required_public_pages(self) -> None:
+        for path in ("index.html", "contacts.html", "legal/offer.html", "legal/privacy.html"):
+            self.assertTrue((RAVUNA_PUBLIC / path).is_file(), path)
+
+    def test_ravuna_brand_and_domain_are_consistent(self) -> None:
+        public_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in RAVUNA_PUBLIC.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".css", ".html", ".json", ".svg", ".txt", ".webmanifest", ".xml"}
+        )
+        self.assertIn("<h1>Ravuna AI</h1>", self.pages["index.html"])
+        self.assertIn("https://ravuna.ru/", self.pages["index.html"])
+        self.assertNotIn("Pixora", public_text)
+        self.assertNotIn("pixoraai.ru", public_text)
+
+    def test_ravuna_legal_links_resolve_locally(self) -> None:
+        parser = PageParser()
+        parser.feed(self.pages["index.html"])
+        hrefs = {link["href"] for link in parser.links}
+        for path in ("legal/offer.html", "legal/privacy.html", "contacts.html"):
+            self.assertIn(f"/{path}", hrefs)
+            self.assertTrue((RAVUNA_PUBLIC / path).is_file())
+
+    def test_ravuna_canonical_urls_use_ravuna_domain(self) -> None:
+        for path, html in self.pages.items():
+            expected = "https://ravuna.ru/" if path == "index.html" else f"https://ravuna.ru/{path}"
+            self.assertIn(f'rel="canonical" href="{expected}"', html, path)
+
+    def test_ravuna_nginx_is_static_and_secure(self) -> None:
+        nginx = (SITE / "nginx" / "ravuna.ru.conf").read_text(encoding="utf-8")
+        self.assertIn("server_name ravuna.ru www.ravuna.ru", nginx)
+        self.assertIn("root /opt/ravuna-site/current", nginx)
+        self.assertIn("Content-Security-Policy", nginx)
+        self.assertIn("Strict-Transport-Security", nginx)
+        self.assertNotIn("proxy_pass", nginx)
+
+    def test_ravuna_csp_allows_only_its_exact_structured_data(self) -> None:
+        html = self.pages["index.html"]
+        script = re.search(
+            r'<script type="application/ld\+json">(.*?)</script>',
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(script)
+        digest = base64.b64encode(
+            hashlib.sha256(script.group(1).encode("utf-8")).digest()
+        ).decode("ascii")
+        for name in ("ravuna.ru.conf", "ravuna.ru-http-bootstrap.conf"):
+            nginx = (SITE / "nginx" / name).read_text(encoding="utf-8")
+            self.assertIn(f"'sha256-{digest}'", nginx, name)
+
+    def test_workflow_builds_and_deploys_ravuna_separately(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
+        self.assertIn("python site/scripts/build_ravuna.py", workflow)
+        self.assertIn("/opt/ravuna-site/releases/$GITHUB_SHA", workflow)
+        self.assertIn("BASE=/opt/ravuna-site", workflow)
 
 
 if __name__ == "__main__":
