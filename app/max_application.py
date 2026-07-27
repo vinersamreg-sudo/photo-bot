@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Protocol, Sequence
+from uuid import uuid4
 
 from app.config import Settings
 from app.database import Database
@@ -66,7 +69,7 @@ from app.payments import (
 LOGGER = logging.getLogger(__name__)
 
 PHOTO_ACCEPTED_TEXT = (
-    "Добавьте описание к фотографии одним сообщением."
+    "Что хотите изменить?"
 )
 PHOTO_REUSED_TEXT = (
     "Что хотите изменить?"
@@ -126,6 +129,7 @@ class MaxApplication:
         self.gallery: GalleryService = demo_service.gallery
         self.telemetry = TelemetryRecorder(database)
         self.payments = payment_service or build_payment_service(settings, database)
+        self._checkout_lock = threading.RLock()
 
     def _track(self, event_type: str, **values: object) -> None:
         try:
@@ -373,7 +377,6 @@ class MaxApplication:
         if event.event_type == "message_callback":
             if event.callback_id:
                 notifications = {
-                    "upload:ready": "Прикрепите фото с описанием",
                     "prompt:edit": "Напишите изменение",
                     "result:correct": "Напишите изменение",
                 }
@@ -387,7 +390,23 @@ class MaxApplication:
             self._receive_source(event, dialog)
             return
         if dialog.state == "waiting_for_source":
-            self._receive_source(event, dialog)
+            if text:
+                self.store.transition(
+                    event.user_id,
+                    "waiting_for_source",
+                    event_key=event.event_key,
+                    pending_prompt=text,
+                    pending_action="initial",
+                )
+                self.transport.send_message(
+                    event.user_id,
+                    "Теперь прикрепите фотографию через скрепку 📎.",
+                )
+            else:
+                self.transport.send_message(
+                    event.user_id,
+                    "Прикрепите фотографию через скрепку 📎.",
+                )
         elif dialog.state in {"waiting_for_prompt", "waiting_for_correction"}:
             self._receive_prompt(event, dialog)
         elif dialog.state == "result_ready" and text:
@@ -430,9 +449,6 @@ class MaxApplication:
         action = event.callback_payload or ""
         if action in {"start:details", "legal:details"}:
             self._send_view(event.user_id, legal_details_view())
-            return
-        if action == "upload:ready":
-            self._reset_dialog_to_main(event.user_id, event.event_key)
             return
         if action == "legal:offer":
             self.transport.send_message(
@@ -697,8 +713,23 @@ class MaxApplication:
             inline_prompt = (event.text or "").strip()
             if inline_prompt.lower() == "/start":
                 inline_prompt = ""
-            if inline_prompt:
-                self._receive_prompt(event, updated)
+            prompt = inline_prompt or (dialog.pending_prompt or "").strip()
+            if prompt:
+                prompt_event = event
+                if prompt != inline_prompt:
+                    prompt_event = MaxIncomingEvent(
+                        event.event_type,
+                        event.event_key,
+                        event.user_id,
+                        event.chat_id,
+                        event.timestamp_ms,
+                        message_id=event.message_id,
+                        text=prompt,
+                        image_url=event.image_url,
+                        callback_id=event.callback_id,
+                        callback_payload=event.callback_payload,
+                    )
+                self._receive_prompt(prompt_event, updated)
             else:
                 self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
 
@@ -991,27 +1022,88 @@ class MaxApplication:
             version_id = latest["id"] if latest else None
         if not version_id:
             raise InvalidInputError("A completed Pixora version is required for checkout")
-        try:
-            order = self.payments.create_order(
-                dialog.user_id, version_id, f"max:{event.event_key}"
-            )
-        except PaymentUnavailable:
-            self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
-            return
-        except PaymentError:
+        with self._checkout_lock:
+            if self._paid_order_exists(dialog.user_id, version_id):
+                current = self.store.update(
+                    event.user_id,
+                    current_version_id=version_id,
+                )
+                self._unlock_or_deliver(event, current)
+                return
+            try:
+                order = self.payments.create_order(
+                    dialog.user_id, version_id, f"max:{event.event_key}"
+                )
+            except PaymentUnavailable:
+                self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
+                return
+            except PaymentError:
+                self.transport.send_message(
+                    event.user_id, "Не удалось подготовить оплату. Попробуйте позже."
+                )
+                return
+            if self._payment_card_was_sent(order.id):
+                self.transport.send_message(
+                    event.user_id,
+                    "Ссылка на оплату уже создана.",
+                )
+                return
             self.transport.send_message(
-                event.user_id, "Не удалось подготовить оплату. Попробуйте позже."
+                event.user_id,
+                "Пакет доступа Pixora — 49 ₽\n\n"
+                "После оплаты начисляется:\n"
+                "• 2 обработки\n"
+                "• 1 оригинал\n\n"
+                "Пакет начисляется сразу после оплаты.",
+                (Button("Оплатить 49 ₽", order.payment_url or "package:buy"),),
             )
-            return
-        self.transport.send_message(
-            event.user_id,
-            "Пакет доступа Pixora — 49 ₽\n\n"
-            "После оплаты начисляется:\n"
-            "• 2 обработки\n"
-            "• 1 оригинал\n\n"
-            "Пакет начисляется сразу после оплаты.",
-            (Button("Оплатить 49 ₽", order.payment_url or "package:buy"),),
+            self._mark_payment_card_sent(order.id, order.payment_url or "")
+
+    def _paid_order_exists(self, user_id: str, version_id: str) -> bool:
+        with self.database.read() as connection:
+            return connection.execute(
+                """SELECT 1 FROM payment_orders
+                   WHERE user_id=? AND version_id=? AND status IN
+                   ('paid','delivery_pending','delivered','partially_refunded')
+                   LIMIT 1""",
+                (user_id, version_id),
+            ).fetchone() is not None
+
+    def _payment_card_was_sent(self, order_id: str) -> bool:
+        with self.database.read() as connection:
+            return connection.execute(
+                """SELECT 1 FROM payment_attempts
+                   WHERE order_id=? AND purpose='max_checkout_card'
+                         AND status='succeeded'
+                   LIMIT 1""",
+                (order_id,),
+            ).fetchone() is not None
+
+    def _mark_payment_card_sent(self, order_id: str, payment_url: str) -> None:
+        now = self.demo.clock().isoformat()
+        idempotency_key = hashlib.sha256(
+            f"max-checkout-card:{order_id}".encode("utf-8")
+        ).hexdigest()
+        request_digest = (
+            hashlib.sha256(payment_url.encode("utf-8")).hexdigest()
+            if payment_url else None
         )
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO payment_attempts(
+                       id,order_id,purpose,idempotency_key,request_digest,status,
+                       started_at,completed_at
+                   ) VALUES(?,?,?,?,?,'succeeded',?,?)""",
+                (
+                    uuid4().hex,
+                    order_id,
+                    "max_checkout_card",
+                    idempotency_key,
+                    request_digest,
+                    now,
+                    now,
+                ),
+            )
 
     def notify_continuation_pack_paid(self, order_id: str) -> bool:
         """Notify after the atomic ledger grant; no original is auto-unlocked."""
@@ -1028,11 +1120,10 @@ class MaxApplication:
         entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
         self.transport.send_message(
             row["platform_user_id"],
-            "Скачать оригинал\n\n"
-            "Пакет доступа начислен.\n\n"
+            "Оплата прошла. Пакет Pixora начислен.\n\n"
             "Доступно:\n"
-            f"• обработок: {balance.available}\n"
-            f"• оригиналов: {entitlements.available}",
+            f"• обработок: {balance.available};\n"
+            f"• оригиналов: {entitlements.available}.",
             paid_actions(),
         )
         return True

@@ -42,7 +42,7 @@ class MaxAdapterTests(TestCase):
         menu = main_menu()
         self.assertEqual(
             [button.text for button in menu.buttons],
-            ["📷 Загрузить фотографию"],
+            ["Публичная оферта", "Обработка персональных данных"],
         )
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
         self.assertGreaterEqual(len(scenario_catalog().buttons), 12)
@@ -55,8 +55,9 @@ class MaxAdapterTests(TestCase):
             [button.text for button in studio_menu_contract().buttons],
             ["📂 Мои работы", "⭐ Избранное", "Последние", "Коллекции", "🗑 Корзина"],
         )
-        self.assertIn("Что хотите сделать с фотографией?", WELCOME_TEXT)
-        self.assertIn("Загрузите фотографию и сразу напишите", WELCOME_TEXT)
+        self.assertIn("Прикрепите фотографию через скрепку 📎", WELCOME_TEXT)
+        self.assertIn("принимаете условия публичной оферты", WELCOME_TEXT)
+        self.assertIn("согласие на обработку персональных данных", WELCOME_TEXT)
         self.assertEqual(result_actions(4).text, "Готово")
         self.assertEqual(result_actions(0).text, "Готово")
         self.assertEqual(
@@ -73,10 +74,8 @@ class MaxAdapterTests(TestCase):
             [button.text for button in paid_actions()],
             [
                 "📥 Скачать оригинал",
-                "✏ Исправить",
-                "🎲 Другой вариант",
+                "📷 Другая фотография",
                 "📁 Мои работы",
-                "📷 Новая фотография",
             ],
         )
         self.assertEqual(len(gallery_item_actions()), 6)

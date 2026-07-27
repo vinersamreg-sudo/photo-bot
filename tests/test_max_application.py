@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -171,10 +172,10 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("bot_started"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         menu = self.transport.messages[-1]
-        self.assertIn("Загрузите фотографию и сразу напишите", menu[1])
+        self.assertIn("Прикрепите фотографию через скрепку 📎", menu[1])
         self.assertEqual(
             [button.text for button in menu[2]],
-            ["📷 Загрузить фотографию"],
+            ["Публичная оферта", "Обработка персональных данных"],
         )
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/source")
@@ -199,29 +200,61 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(any("Я понял задачу" in message[1] for message in self.transport.messages))
         self.assertFalse(any("Бесплатных вариантов доступно" in message[1] for message in self.transport.messages))
 
+    def paid_application(self):
+        paid_settings = replace(
+            self.settings,
+            payments_enabled=True,
+            payment_provider="robokassa",
+            payment_webhook_listener_enabled=True,
+            payment_webhook_enabled=True,
+            payment_result_url="https://example.test/payments/robokassa/result",
+            robokassa_merchant_login="pixora-test",
+            robokassa_password1="one",
+            robokassa_password2="two",
+        )
+        payments = build_payment_service(
+            paid_settings, self.database, clock=self.clock
+        )
+        return (
+            MaxApplication(
+                paid_settings,
+                self.database,
+                self.demo,
+                self.transport,
+                self.store,
+                payment_service=payments,
+            ),
+            payments,
+        )
+
     def test_start_direct_upload_details_and_implicit_consent(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
-        self.assertIn("Загрузите фотографию и сразу напишите", self.transport.messages[-1][1])
-        self.assertEqual(len(self.transport.messages[-1][2]), 1)
-        message_count = len(self.transport.messages)
-        self.callback("upload:ready")
-        self.assertEqual(len(self.transport.messages), message_count)
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        start_message = self.transport.messages[-1]
+        self.assertIn("Прикрепите фотографию через скрепку 📎", start_message[1])
+        self.assertNotIn("Фото принято", start_message[1])
         self.assertEqual(
-            self.transport.callbacks[-1][1],
-            "Прикрепите фото с описанием",
+            [(button.text, button.action) for button in start_message[2]],
+            [
+                (
+                    "Публичная оферта",
+                    "https://pixoraai.ru/legal/offer.html",
+                ),
+                (
+                    "Обработка персональных данных",
+                    "https://pixoraai.ru/legal/personal-data.html",
+                ),
+            ],
         )
-        self.callback("start:details")
-        self.assertIn("внешнему AI-провайдеру", self.transport.messages[-1][1])
-        self.assertNotIn("Продолжить", [button.text for button in self.transport.messages[-1][2]])
-        self.callback("legal:offer")
-        self.assertIn("Условия использования", self.transport.messages[-1][1])
-        self.callback("start:details")
-        self.callback("legal:privacy")
-        self.assertIn("Приватность", self.transport.messages[-1][1])
-        self.callback("menu")
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertFalse(
+            any(button.action == "upload:ready" for button in start_message[2])
+        )
+        self.assertFalse(
+            any(button.action == "legal:accept_all" for button in start_message[2])
+        )
+        site_root = Path(__file__).resolve().parents[1] / "site" / "public"
+        self.assertTrue((site_root / "legal" / "offer.html").is_file())
+        self.assertTrue((site_root / "legal" / "personal-data.html").is_file())
 
         invalid = self.base / "invalid.bin"
         invalid.write_text("not image", encoding="utf-8")
@@ -281,6 +314,44 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
         self.assertTrue(self.store.legal_is_current("u1"))
 
+    def test_photo_without_caption_asks_one_short_question(self) -> None:
+        self.app.handle(self.event("message_created", text="/start"))
+        before = len(self.transport.messages)
+
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/source")
+        )
+
+        new_messages = self.transport.messages[before:]
+        self.assertEqual(
+            [message[1] for message in new_messages],
+            ["Что хотите изменить?"],
+        )
+        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertEqual(self.provider.calls, 0)
+
+    def test_prompt_before_photo_is_saved_and_runs_when_photo_arrives(self) -> None:
+        self.app.handle(self.event("message_created", text="/start"))
+        self.app.handle(
+            self.event("message_created", text="Замени фон на однотонный")
+        )
+        waiting = self.store.get("u1")
+        self.assertEqual(waiting.state, "waiting_for_source")
+        self.assertEqual(waiting.pending_prompt, "Замени фон на однотонный")
+        self.assertEqual(
+            self.transport.messages[-1][1],
+            "Теперь прикрепите фотографию через скрепку 📎.",
+        )
+
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/source")
+        )
+        self.assertEqual(self.provider.calls, 1)
+        self.assertEqual(self.store.get("u1").state, "result_ready")
+        self.assertFalse(
+            any(message[1] == PHOTO_ACCEPTED_TEXT for message in self.transport.messages)
+        )
+
     def test_start_clears_session_binding_and_returns_to_first_screen(self) -> None:
         self.onboard_to_prompt()
         before_restart = self.store.get("u1")
@@ -296,7 +367,7 @@ class MaxApplicationTests(TestCase):
         self.assertIsNone(restarted.current_version_id)
         self.assertEqual(self.provider.calls, 0)
         self.assertIn(
-            "Загрузите фотографию и сразу напишите",
+            "Прикрепите фотографию через скрепку 📎",
             self.transport.messages[-1][1],
         )
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
@@ -311,7 +382,7 @@ class MaxApplicationTests(TestCase):
         source.unlink()
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
-        self.assertIn("Загрузите фотографию и сразу напишите", self.transport.messages[-1][1])
+        self.assertIn("Прикрепите фотографию через скрепку 📎", self.transport.messages[-1][1])
         self.assertEqual(self.provider.calls, 0)
 
     def test_photoshoot_catalog_and_new_source_share_global_balance(self) -> None:
@@ -427,26 +498,128 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
+    def test_repeated_payment_click_sends_one_card_and_one_short_notice(self) -> None:
+        self.generate_first()
+        paid_app, _payments = self.paid_application()
+
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+
+        payment_cards = [
+            message for message in self.transport.messages
+            if message[1].startswith("Пакет доступа Pixora — 49 ₽")
+            and message[2]
+            and message[2][0].text == "Оплатить 49 ₽"
+        ]
+        self.assertEqual(len(payment_cards), 1)
+        self.assertEqual(
+            self.transport.messages[-1][1],
+            "Ссылка на оплату уже создана.",
+        )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    """SELECT COUNT(*) FROM payment_attempts
+                       WHERE purpose='max_checkout_card'"""
+                ).fetchone()[0],
+                1,
+            )
+
+    def test_parallel_payment_clicks_send_one_card_atomically(self) -> None:
+        self.generate_first()
+        paid_app, _payments = self.paid_application()
+        events = [
+            self.event("message_callback", action="result:unlock"),
+            self.event("message_callback", action="result:unlock"),
+        ]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            handled = list(executor.map(paid_app.handle, events))
+
+        self.assertEqual(handled, [True, True])
+        payment_cards = [
+            message for message in self.transport.messages
+            if message[1].startswith("Пакет доступа Pixora — 49 ₽")
+            and message[2]
+            and message[2][0].text == "Оплатить 49 ₽"
+        ]
+        self.assertEqual(len(payment_cards), 1)
+        self.assertEqual(
+            sum(
+                message[1] == "Ссылка на оплату уже создана."
+                for message in self.transport.messages
+            ),
+            1,
+        )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0],
+                1,
+            )
+
+    def test_repeated_paid_purchase_goes_to_selected_original(self) -> None:
+        self.generate_first()
+        paid_app, payments = self.paid_application()
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        with self.database.read() as connection:
+            order = connection.execute("SELECT * FROM payment_orders").fetchone()
+            original = Path(connection.execute(
+                "SELECT original_path FROM gallery_versions WHERE id=?",
+                (order["version_id"],),
+            ).fetchone()[0])
+        amount = "49.00"
+        signature = hashlib.sha256(
+            (
+                f"{amount}:{order['provider_invoice_id']}:two:"
+                f"Shp_order={order['public_token']}"
+            ).encode()
+        ).hexdigest()
+        webhook = payments.process_webhook({
+            "OutSum": amount,
+            "InvId": str(order["provider_invoice_id"]),
+            "Shp_order": order["public_token"],
+            "SignatureValue": signature,
+        }, method="POST", path="/payments/robokassa/result")
+        self.assertTrue(webhook.accepted)
+        message_count = len(self.transport.messages)
+
+        paid_app.handle(self.event("message_callback", action="package:buy"))
+
+        self.assertEqual(self.transport.images[-1][1], original)
+        self.assertEqual(len(self.transport.messages), message_count)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                1,
+            )
+
     def test_owner_sandbox_payment_grants_pack_then_user_selects_original(self) -> None:
         self.generate_first()
-        paid_settings = replace(
-            self.settings,
-            payments_enabled=True,
-            payment_provider="robokassa",
-            payment_webhook_listener_enabled=True,
-            payment_webhook_enabled=True,
-            payment_result_url="https://example.test/payments/robokassa/result",
-            robokassa_merchant_login="pixora-test",
-            robokassa_password1="one",
-            robokassa_password2="two",
-        )
-        payments = build_payment_service(
-            paid_settings, self.database, clock=self.clock
-        )
-        paid_app = MaxApplication(
-            paid_settings, self.database, self.demo, self.transport, self.store,
-            payment_service=payments,
-        )
+        paid_app, payments = self.paid_application()
         event = self.event("message_callback", action="result:unlock")
         paid_app.handle(event)
         self.assertEqual(
@@ -477,15 +650,19 @@ class MaxApplicationTests(TestCase):
         }, method="POST", path="/payments/robokassa/result")
         self.assertTrue(webhook.accepted)
         self.assertTrue(paid_app.notify_continuation_pack_paid(order["id"]))
-        self.assertIn("Скачать оригинал", self.transport.messages[-1][1])
+        self.assertEqual(
+            self.transport.messages[-1][1],
+            "Оплата прошла. Пакет Pixora начислен.\n\n"
+            "Доступно:\n"
+            "• обработок: 3;\n"
+            "• оригиналов: 1.",
+        )
         self.assertEqual(
             [button.text for button in self.transport.messages[-1][2]],
             [
                 "📥 Скачать оригинал",
-                "✏ Исправить",
-                "🎲 Другой вариант",
+                "📷 Другая фотография",
                 "📁 Мои работы",
-                "📷 Новая фотография",
             ],
         )
         with self.database.read() as connection:

@@ -13,14 +13,15 @@ from app.scenarios import SCENARIOS
 
 
 WELCOME_TEXT = (
-    "Что хотите сделать с фотографией?\n\n"
-    "Загрузите фотографию и сразу напишите, что нужно сделать.\n\n"
-    "Примеры:\n"
-    "• убрать фон\n"
-    "• поменять одежду\n"
-    "• улучшить качество\n"
-    "• заменить лицо\n"
-    "• сделать фото на памятник"
+    "Прикрепите фотографию через скрепку 📎 и в подписи напишите, "
+    "что хотите изменить.\n\n"
+    "Например:\n"
+    "• заменить фон;\n"
+    "• убрать человека;\n"
+    "• поменять одежду;\n"
+    "• улучшить фотографию.\n\n"
+    "Отправляя фотографию, вы принимаете условия публичной оферты "
+    "и даёте согласие на обработку персональных данных."
 )
 
 LEGAL_TEXT = (
@@ -49,7 +50,16 @@ class MaxTransport(Protocol):
 def upload_view() -> View:
     return View(
         WELCOME_TEXT,
-        (Button("📷 Загрузить фотографию", "upload:ready"),),
+        (
+            Button(
+                "Публичная оферта",
+                "https://pixoraai.ru/legal/offer.html",
+            ),
+            Button(
+                "Обработка персональных данных",
+                "https://pixoraai.ru/legal/personal-data.html",
+            ),
+        ),
     )
 
 
@@ -180,10 +190,8 @@ def result_actions(remaining: int) -> View:
 def paid_actions() -> tuple[Button, ...]:
     return (
         Button("📥 Скачать оригинал", "result:unlock"),
-        Button("✏ Исправить", "result:correct"),
-        Button("🎲 Другой вариант", "result:repeat"),
+        Button("📷 Другая фотография", "new:source"),
         Button("📁 Мои работы", "studio:works"),
-        Button("📷 Новая фотография", "new:source"),
     )
 
 
