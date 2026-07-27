@@ -63,6 +63,16 @@ jobs:
         run: |
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
             "cd /opt/photo-bot && scripts/healthcheck.sh >/dev/null && venv/bin/python -m scripts.robokassa_sandbox_e2e preflight --expected-sha '$GITHUB_SHA'"
+      - name: Snapshot exact production runtime state
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "cd /opt/photo-bot && venv/bin/python -m scripts.runtime_state_guard snapshot \
+              --env /opt/photo-bot/.env \
+              --snapshot /opt/photo-bot/temp/runtime-state-$GITHUB_RUN_ID.env"
       - name: Configure sandbox secrets through stdin
         env:
           MERCHANT_LOGIN: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN }}
@@ -246,16 +256,17 @@ jobs:
             venv/bin/python -m scripts.robokassa_sandbox_e2e resend-original
             venv/bin/python -m scripts.robokassa_sandbox_e2e reconcile
           REMOTE
-      - name: Restore production fail-closed state
+      - name: Restore exact pre-test production state
         if: always() && steps.ssh_config.outputs.configured == 'true'
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_RUN_ID" <<'REMOTE'
             set -euo pipefail
             ROOT=/opt/photo-bot
+            RUN_ID="$1"
             set_env() {
               NAME="$1"
               VALUE="$2"
@@ -265,50 +276,58 @@ jobs:
               chmod 600 "$TMP"
               mv "$TMP" "$ROOT/.env"
             }
-            set_env MAX_TRANSPORT_MODE polling
-            set_env MAX_POLL_OBSERVE_ONLY true
-            set_env PILOT_USER_LIMIT 0
-            set_env PAYMENTS_ENABLED false
-            set_env PAYMENT_PROVIDER disabled
-            set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
-            set_env PAYMENT_WEBHOOK_ENABLED false
-            set_env PAYMENT_REFUNDS_ENABLED false
-            set_env ROBOKASSA_MODE sandbox
-            set_env ROBOKASSA_PRODUCTION_APPROVED false
-            set_env ROBOKASSA_HASH_ALGORITHM sha256
-            set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
-            set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
             cd "$ROOT"
-            venv/bin/python -m scripts.set_robokassa_test_secrets \
-              --env-file "$ROOT/.env" --clear
+            SNAPSHOT="$ROOT/temp/runtime-state-$RUN_ID.env"
+            if ! venv/bin/python -m scripts.runtime_state_guard restore \
+              --env "$ROOT/.env" --snapshot "$SNAPSHOT"; then
+              echo "::error::Exact production state restoration failed; applying fail-closed fallback." >&2
+              set_env MAX_POLL_OBSERVE_ONLY true
+              set_env PILOT_USER_LIMIT 0
+              set_env PAYMENTS_ENABLED false
+              set_env PAYMENT_PROVIDER disabled
+              set_env PAYMENT_WEBHOOK_ENABLED false
+              set_env PAYMENT_REFUNDS_ENABLED false
+              set_env ROBOKASSA_MODE sandbox
+              set_env ROBOKASSA_PRODUCTION_APPROVED false
+              set_env OPENAI_IMAGE_REQUESTS_ENABLED false
+              set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
+              set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
+              venv/bin/python -m scripts.set_robokassa_test_secrets \
+                --env-file "$ROOT/.env" --clear
+              sudo -n systemctl restart photo-bot.service
+              exit 1
+            fi
             sudo -n systemctl restart photo-bot.service
           REMOTE
-      - name: Verify restored runtime and public fail-closed endpoint
+      - name: Verify exact runtime restoration
         if: always() && steps.ssh_config.outputs.configured == 'true'
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_RUN_ID" <<'REMOTE'
             set -euo pipefail
             cd /opt/photo-bot
+            RUN_ID="$1"
             READY=0
             for attempt in $(seq 1 30); do
               if scripts/healthcheck.sh >/dev/null; then READY=1; break; fi
               sleep 2
             done
             test "$READY" = 1
-            venv/bin/python -m scripts.robokassa_sandbox_e2e runtime-safety
+            venv/bin/python -m scripts.runtime_state_guard verify \
+              --env /opt/photo-bot/.env \
+              --snapshot "/opt/photo-bot/temp/runtime-state-$RUN_ID.env" \
+              --delete-on-success
             GET_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
               https://pixoraai.ru/payments/robokassa/result)
             POST_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
               -X POST -d '' https://pixoraai.ru/payments/robokassa/result)
             test "$GET_STATUS" = 405
-            test "$POST_STATUS" = 503
             test "$(pgrep -u photoapp -f '^/opt/photo-bot/venv/bin/python -m app.main run$' | wc -l)" -eq 1
             echo "result_url_get=405"
-            echo "result_url_post=503"
+            echo "result_url_post=$POST_STATUS"
             echo "runtime_count=1"
           REMOTE
       - name: Finalize successful sandbox evidence

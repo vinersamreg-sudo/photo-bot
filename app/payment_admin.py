@@ -188,6 +188,81 @@ def payment_reconcile(database: Database, invoice: int | None = None) -> dict[st
     }
 
 
+def payment_expiration_reconcile(
+    database: Database,
+    *,
+    apply: bool = False,
+    clock=lambda: datetime.now(timezone.utc),
+) -> dict[str, Any]:
+    """Expire only pending intents whose linked order is already final-expired."""
+
+    with database.read() as connection:
+        candidates = connection.execute(
+            """SELECT i.id AS intent_id,o.id AS order_id
+               FROM payment_intents i
+               JOIN payment_orders o ON o.intent_id=i.id
+               WHERE i.status='pending' AND o.status='expired'
+               ORDER BY i.created_at,i.id"""
+        ).fetchall()
+    applied = 0
+    if apply and candidates:
+        now = clock().astimezone(timezone.utc).isoformat()
+        with database.transaction() as connection:
+            for candidate in candidates:
+                result = connection.execute(
+                    """UPDATE payment_intents
+                       SET status='expired',updated_at=?
+                       WHERE id=? AND status='pending'
+                         AND EXISTS(
+                             SELECT 1 FROM payment_orders o
+                             WHERE o.intent_id=payment_intents.id
+                               AND o.id=? AND o.status='expired'
+                         )""",
+                    (now, candidate["intent_id"], candidate["order_id"]),
+                )
+                if result.rowcount != 1:
+                    continue
+                connection.execute(
+                    """INSERT INTO payment_audit(
+                           order_id,event_type,from_status,to_status,reason,
+                           actor_type,actor_ref_hash,created_at
+                       )
+                       SELECT ?,?,?,?,?,?,?,?
+                       WHERE NOT EXISTS(
+                           SELECT 1 FROM payment_audit
+                           WHERE order_id=?
+                             AND event_type='payment_intent_expiration_reconciled'
+                       )""",
+                    (
+                        candidate["order_id"],
+                        "payment_intent_expiration_reconciled",
+                        "pending",
+                        "expired",
+                        "linked_order_expired",
+                        "operator",
+                        None,
+                        now,
+                        candidate["order_id"],
+                    ),
+                )
+                applied += 1
+    return {
+        "mode": "apply" if apply else "dry-run",
+        "candidate_count": len(candidates),
+        "applied_count": applied,
+        "database_mutated": bool(apply and applied),
+        "intents": [
+            {
+                "intent_ref": mask_reference(row["intent_id"], prefix="int"),
+                "order_ref": mask_reference(row["order_id"], prefix="ord"),
+                "from_status": "pending",
+                "to_status": "expired",
+            }
+            for row in candidates
+        ],
+    }
+
+
 def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
     result = urlsplit(settings.payment_result_url)
     success = urlsplit(settings.payment_success_url)

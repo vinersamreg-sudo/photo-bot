@@ -35,6 +35,50 @@ def _age_hours(value: object) -> float | None:
         return None
 
 
+def openai_budget_status(settings: Settings) -> dict[str, Any]:
+    """Return the last manual balance confirmation without claiming live data."""
+
+    age_hours = (
+        _age_hours(settings.openai_balance_confirmed_at)
+        if settings.openai_balance_confirmed_at
+        else None
+    )
+    balance = settings.openai_balance_usd
+    low_balance_warning = bool(
+        balance is not None and balance <= settings.openai_balance_warning_usd
+    )
+    critical_balance = bool(
+        balance is not None and balance <= settings.openai_balance_critical_usd
+    )
+    confirmation_stale = bool(
+        age_hours is None or age_hours > settings.openai_balance_max_age_hours
+    )
+    return {
+        "source": "manual_confirmation",
+        "live_balance_claimed": False,
+        "openai_balance_confirmed_at": (
+            settings.openai_balance_confirmed_at or None
+        ),
+        "openai_balance_usd": balance,
+        "confirmation_age_hours": (
+            round(age_hours, 2) if age_hours is not None else None
+        ),
+        "confirmation_stale": confirmation_stale,
+        "warning_threshold_usd": settings.openai_balance_warning_usd,
+        "critical_threshold_usd": settings.openai_balance_critical_usd,
+        "low_balance_warning": low_balance_warning,
+        "critical_balance": critical_balance,
+        "image_requests_enabled": bool(
+            settings.openai_image_requests_enabled and not critical_balance
+        ),
+        "daily_request_limit": settings.demo_daily_generation_limit,
+        "daily_estimated_cost_limit_rub": settings.demo_daily_cost_limit_rub,
+        "estimated_cost_per_request_rub": (
+            settings.demo_estimated_cost_rub_per_generation
+        ),
+    }
+
+
 def _systemd_active() -> bool:
     try:
         return subprocess.run(
@@ -229,6 +273,32 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         delivery_failures = connection.execute(
             "SELECT COUNT(*) FROM generation_attempts WHERE error_type='delivery_failed' AND date(started_at)=date('now')"
         ).fetchone()[0]
+        provider_failures = connection.execute(
+            """SELECT COUNT(*) FROM generation_attempts
+               WHERE status='failed_technical' AND date(started_at)=date('now')"""
+        ).fetchone()[0]
+        stale_processing = connection.execute(
+            """SELECT COUNT(*) FROM generation_attempts
+               WHERE status IN ('pending','processing')
+                 AND started_at < datetime('now','-10 minutes')"""
+        ).fetchone()[0]
+        rejected_callbacks = connection.execute(
+            "SELECT COUNT(*) FROM payment_events WHERE status='rejected'"
+        ).fetchone()[0]
+        paid_without_grant = connection.execute(
+            """SELECT COUNT(*) FROM payment_orders o
+               LEFT JOIN continuation_pack_grants g ON g.payment_order_id=o.id
+               WHERE o.status IN ('paid','delivery_pending','delivered')
+                 AND g.id IS NULL"""
+        ).fetchone()[0]
+        paid_original_retry = connection.execute(
+            "SELECT COUNT(*) FROM payment_orders WHERE status='delivery_pending'"
+        ).fetchone()[0]
+        pending_intent_mismatch = connection.execute(
+            """SELECT COUNT(*) FROM payment_intents i
+               JOIN payment_orders o ON o.intent_id=i.id
+               WHERE i.status='pending' AND o.status='expired'"""
+        ).fetchone()[0]
         funnel = connection.execute(
             """SELECT
                    COUNT(DISTINCT CASE WHEN event_type='start' THEN id END) AS starts,
@@ -258,6 +328,7 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
     backup_age = _age_hours(latest.get("created_at")) if latest else None
     poll_age = _age_hours(poll[0]) if poll else None
     cleanup_age = _age_hours(cleanup.get("completed_at")) if cleanup else None
+    budget = openai_budget_status(settings)
     restore_matches = bool(
         latest and restore and restore.get("restore_ok") is True
         and restore.get("backup_name") == latest.get("backup_name")
@@ -328,7 +399,67 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         and len(settings.max_pilot_user_ids) >= 5
         and settings.max_poll_observe_only
         and settings.pilot_user_limit == 0
+        and budget["image_requests_enabled"]
     )
+    alerts: dict[str, list[dict[str, str]]] = {"p0": [], "p1": []}
+
+    def add_alert(priority: str, code: str, message: str) -> None:
+        alerts[priority].append({"code": code, "message": message})
+
+    if not service_active:
+        add_alert("p0", "process_down", "photo-bot.service is not active")
+    if poll_age is None or poll_age * 3600 > settings.max_poll_max_stale_seconds:
+        add_alert("p0", "polling_disconnected", "MAX polling contact is stale")
+    if quick_check != "ok":
+        add_alert("p0", "sqlite_failure", "SQLite quick_check failed")
+    if rejected_callbacks:
+        add_alert("p0", "payment_callback_failure", "Rejected payment callbacks exist")
+    if paid_without_grant:
+        add_alert("p0", "paid_without_grant", "A paid order has no package grant")
+    if paid_original_retry:
+        add_alert(
+            "p0",
+            "paid_original_retry",
+            "A paid order is waiting for original delivery",
+        )
+    if not budget["image_requests_enabled"]:
+        add_alert(
+            "p0",
+            "image_requests_disabled",
+            "Image processing is globally disabled by the budget guard",
+        )
+    if usage.free < settings.disk_min_free_mb * 1024 * 1024:
+        add_alert("p0", "disk_critical", "Free disk space is below the minimum")
+    if budget["low_balance_warning"]:
+        add_alert(
+            "p1",
+            "openai_balance_low",
+            "The last manually confirmed OpenAI balance is below the warning threshold",
+        )
+    if budget["confirmation_stale"]:
+        add_alert(
+            "p1",
+            "openai_balance_confirmation_stale",
+            "The manual OpenAI balance confirmation is missing or stale",
+        )
+    if int(provider_failures) + int(delivery_failures) >= 3:
+        add_alert(
+            "p1",
+            "repeated_delivery_or_provider_failures",
+            "Repeated provider or MAX delivery failures were observed today",
+        )
+    if pending_intent_mismatch:
+        add_alert(
+            "p1",
+            "pending_payment_mismatch",
+            "Pending payment intents are linked to expired orders",
+        )
+    if stale_processing:
+        add_alert(
+            "p1", "stale_processing", "Processing records are older than ten minutes"
+        )
+    if backup_age is None or backup_age > settings.backup_max_age_hours:
+        add_alert("p1", "stale_backup", "The latest backup is missing or stale")
     return {
         "runtime": {
             "environment": settings.app_env,
@@ -344,6 +475,7 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
             "model": settings.openai_image_model,
             "configured": bool(settings.openai_api_key),
             "connected": openai_connected,
+            **budget,
         },
         "payments": {
             "enabled": settings.payments_enabled,
@@ -370,6 +502,15 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
             "remaining_orphan_count": cleanup.get("remaining_orphan_count") if cleanup else None,
         },
         "processing": {"active_attempts": active_attempts, "active_dialogs": active_dialogs},
+        "monitoring": {
+            "alerts": alerts,
+            "p0_count": len(alerts["p0"]),
+            "p1_count": len(alerts["p1"]),
+            "delivery_failures_today": int(delivery_failures),
+            "provider_failures_today": int(provider_failures),
+            "pending_intent_mismatch": int(pending_intent_mismatch),
+            "stale_processing": int(stale_processing),
+        },
         "today": {
             "successful_generations": int(metrics["total"]),
             "average_duration_ms": round(float(metrics["avg_duration_ms"]), 1),

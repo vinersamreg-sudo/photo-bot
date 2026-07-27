@@ -36,7 +36,7 @@ from app.edit_intent import EditPlan
 from app.prompt_builder import safe_prompt_inspection
 from app.backup import BackupError, BackupManager
 from app.maintenance import run_maintenance
-from app.operations import print_launch_status
+from app.operations import collect_launch_status, openai_budget_status, print_launch_status
 from app.provider_context import OpenAIProviderContextGateway, ProviderContextService
 from app.commercial_operations import (
     backup_status,
@@ -49,6 +49,7 @@ from app.commercial_operations import (
 )
 from app.payment_admin import (
     mask_reference,
+    payment_expiration_reconcile,
     payment_reconcile,
     payment_show,
     pilot_report,
@@ -787,6 +788,10 @@ def run_status_report(
         "backup-status": lambda: backup_status(settings),
         "cleanup-status": lambda: cleanup_status(settings),
         "cost-status": lambda: cost_status(settings, database),
+        "openai-budget-status": lambda: openai_budget_status(settings),
+        "monitoring-status": lambda: collect_launch_status(
+            settings, online=False
+        )["monitoring"],
         "health-report": lambda: health_report(settings, online=online),
     }
     _print_operator(collectors[command](), output_format)
@@ -1011,6 +1016,16 @@ def run_payment_reconcile(
     return 0 if report["mismatch_count"] == 0 else 4
 
 
+def run_payment_expiration_reconcile(
+    settings: Settings, *, apply: bool, output_format: str
+) -> int:
+    report = payment_expiration_reconcile(
+        Database(settings.database_path), apply=apply
+    )
+    _print_operator(report, output_format)
+    return 0
+
+
 def run_delivery_retry(
     settings: Settings,
     invoice: int,
@@ -1156,6 +1171,7 @@ def build_parser() -> argparse.ArgumentParser:
     for command in (
         "pilot-status", "pilot-report", "payment-status", "robokassa-health",
         "storage-status", "backup-status", "cleanup-status", "cost-status",
+        "openai-budget-status", "monitoring-status",
     ):
         add_format(subparsers.add_parser(command))
     health_report_parser = subparsers.add_parser("health-report")
@@ -1205,6 +1221,11 @@ def build_parser() -> argparse.ArgumentParser:
     payment_reconcile_parser = subparsers.add_parser("payment-reconcile")
     payment_reconcile_parser.add_argument("--invoice", type=int)
     add_format(payment_reconcile_parser)
+    expiration_reconcile_parser = subparsers.add_parser(
+        "payment-expiration-reconcile"
+    )
+    expiration_reconcile_parser.add_argument("--apply", action="store_true")
+    add_format(expiration_reconcile_parser)
     resend_parser = subparsers.add_parser("payment-resend-original")
     resend_parser.add_argument("--invoice", required=True, type=int)
     resend_parser.add_argument("--apply", action="store_true")
@@ -1269,7 +1290,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {
         "pilot-status", "pilot-report", "payment-status", "robokassa-health",
         "storage-status", "backup-status", "cleanup-status", "cost-status",
-        "health-report",
+        "openai-budget-status", "monitoring-status", "health-report",
     }:
         return run_status_report(
             settings,
@@ -1322,6 +1343,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_payment_show(settings, args.invoice, args.format)
     if args.command == "payment-reconcile":
         return run_payment_reconcile(settings, args.invoice, args.format)
+    if args.command == "payment-expiration-reconcile":
+        return run_payment_expiration_reconcile(
+            settings, apply=args.apply, output_format=args.format
+        )
     if args.command == "payment-resend-original":
         return run_resend_original(
             settings, args.invoice, apply=args.apply, output_format=args.format

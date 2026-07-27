@@ -138,9 +138,14 @@ class BackupMaintenanceOperationsTests(TestCase):
                 self.assertNotIn(secret, serialized)
             for section in (
                 "runtime", "max", "provider", "database", "storage", "backup",
-                "cleanup", "processing", "today", "site", "owner_e2e", "readiness",
+                "cleanup", "processing", "monitoring", "today", "site",
+                "owner_e2e", "readiness",
             ):
                 self.assertIn(section, report)
+            self.assertFalse(report["provider"]["live_balance_claimed"])
+            self.assertIsNone(report["provider"]["openai_balance_usd"])
+            self.assertTrue(report["provider"]["confirmation_stale"])
+            self.assertGreaterEqual(report["monitoring"]["p1_count"], 1)
 
     def test_launch_status_never_mutates_a_live_processing_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

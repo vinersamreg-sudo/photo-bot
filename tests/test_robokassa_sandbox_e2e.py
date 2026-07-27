@@ -64,7 +64,7 @@ class RobokassaSandboxE2ETests(TestCase):
             self.assertEqual(cleared, "KEEP=value\n")
             self.assertTrue(all(f"{name}=" not in cleared for name in NAMES))
 
-    def test_workflow_is_one_order_owner_only_and_always_restores_fail_closed(self) -> None:
+    def test_workflow_is_one_order_owner_only_and_restores_exact_state(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("environment: production", workflow)
         self.assertIn("group: photo-bot-production", workflow)
@@ -86,20 +86,16 @@ class RobokassaSandboxE2ETests(TestCase):
         self.assertEqual(workflow.count("ServerAliveInterval=20"), 3)
         self.assertEqual(workflow.count("ServerAliveCountMax=6"), 3)
         self.assertIn("if: always()", workflow)
-        self.assertGreaterEqual(workflow.count("set_env MAX_TRANSPORT_MODE polling"), 2)
-        self.assertGreaterEqual(workflow.count("MAX_POLL_OBSERVE_ONLY true"), 1)
-        self.assertGreaterEqual(workflow.count("set_env PAYMENTS_ENABLED false"), 2)
-        self.assertGreaterEqual(workflow.count("set_env PAYMENT_PROVIDER disabled"), 2)
-        self.assertGreaterEqual(workflow.count("set_env PAYMENT_WEBHOOK_ENABLED false"), 2)
-        self.assertGreaterEqual(
-            workflow.count("set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false"), 2
-        )
-        self.assertGreaterEqual(
-            workflow.count("set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0"), 2
-        )
+        self.assertIn("Snapshot exact production runtime state", workflow)
+        self.assertIn("Restore exact pre-test production state", workflow)
+        self.assertIn("scripts.runtime_state_guard snapshot", workflow)
+        self.assertIn("scripts.runtime_state_guard restore", workflow)
+        self.assertIn("scripts.runtime_state_guard verify", workflow)
+        self.assertIn("--delete-on-success", workflow)
+        self.assertIn("Exact production state restoration failed", workflow)
+        self.assertIn("set_env OPENAI_IMAGE_REQUESTS_ENABLED false", workflow)
         self.assertIn("--clear", workflow)
         self.assertIn('test "$GET_STATUS" = 405', workflow)
-        self.assertIn('test "$POST_STATUS" = 503', workflow)
         self.assertIn("runtime_count=1", workflow)
 
     def test_workflow_maps_only_test_credentials_without_command_arguments(self) -> None:

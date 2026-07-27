@@ -9,7 +9,11 @@ from unittest import TestCase
 from app.config import Settings
 from app.database import Database
 from app.main import _print_operator, build_parser, run_payment_show
-from app.payment_admin import pilot_report, robokassa_health
+from app.payment_admin import (
+    payment_expiration_reconcile,
+    pilot_report,
+    robokassa_health,
+)
 
 
 class PaymentAdminTests(TestCase):
@@ -22,10 +26,121 @@ class PaymentAdminTests(TestCase):
         resend = parser.parse_args(["payment-resend-original", "--invoice", "42"])
         retry = parser.parse_args(["payment-mark-delivery-retry", "--invoice", "42"])
         submit = parser.parse_args(["refund-submit", "--refund-id", "opaque"])
+        expiration = parser.parse_args(["payment-expiration-reconcile"])
         self.assertFalse(refund.apply)
         self.assertFalse(resend.apply)
         self.assertFalse(retry.apply)
         self.assertFalse(submit.apply)
+        self.assertFalse(expiration.apply)
+
+    def test_payment_expiration_reconcile_is_targeted_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings("", "fake", "test", Path(directory))
+            database = Database(settings.database_path)
+            now = datetime.now(timezone.utc).isoformat()
+            with database.transaction() as connection:
+                connection.execute(
+                    "INSERT INTO users(id,platform,platform_user_id,created_at) VALUES('u','max','private',?)",
+                    (now,),
+                )
+                connection.execute(
+                    """INSERT INTO demo_sessions(
+                           id,user_id,source_file_path,source_sha256,status,started_at,
+                           expires_at,successful_generations,max_generations,created_at,updated_at
+                       ) VALUES('s','u','source.png','sha','active',?,?,0,2,?,?)""",
+                    (now, now, now, now),
+                )
+                for index, (intent_status, order_status) in enumerate(
+                    (
+                        ("pending", "expired"),
+                        ("paid", "expired"),
+                        ("pending", "delivered"),
+                        ("pending", "pending"),
+                    ),
+                    start=1,
+                ):
+                    attempt_id = f"a{index}"
+                    intent_id = f"intent-{index}"
+                    order_id = f"order-{index}"
+                    connection.execute(
+                        """INSERT INTO generation_attempts(
+                               id,idempotency_key,session_id,user_id,prompt,status,
+                               started_at,provider,model,source_path,created_at
+                           ) VALUES(?,?,?,?,?,'succeeded',?,'fake','fake','source.png',?)""",
+                        (
+                            attempt_id,
+                            f"attempt-key-{index}",
+                            "s",
+                            "u",
+                            "prompt",
+                            now,
+                            now,
+                        ),
+                    )
+                    connection.execute(
+                        """INSERT INTO payment_intents(
+                               id,attempt_id,idempotency_key,amount_rub,status,
+                               created_at,updated_at,version_id,user_id,provider,currency
+                           ) VALUES(?,?,?,?,?,?,?,?,?,'robokassa','RUB')""",
+                        (
+                            intent_id,
+                            attempt_id,
+                            f"intent-key-{index}",
+                            49,
+                            intent_status,
+                            now,
+                            now,
+                            f"version-{index}",
+                            "u",
+                        ),
+                    )
+                    connection.execute(
+                        """INSERT INTO payment_orders(
+                               id,public_token,intent_id,attempt_id,version_id,user_id,
+                               provider,merchant_hash,provider_invoice_id,amount_minor,
+                               currency,status,description,created_at,updated_at,expires_at
+                           ) VALUES(?,?,?,?,?,?,'robokassa','hash',?,4900,'RUB',?,
+                                    'package',?,?,?)""",
+                        (
+                            order_id,
+                            f"token-{index}",
+                            intent_id,
+                            attempt_id,
+                            f"version-{index}",
+                            "u",
+                            index,
+                            order_status,
+                            now,
+                            now,
+                            now,
+                        ),
+                    )
+
+            dry_run = payment_expiration_reconcile(database)
+            self.assertEqual(dry_run["candidate_count"], 1)
+            self.assertEqual(dry_run["applied_count"], 0)
+            self.assertFalse(dry_run["database_mutated"])
+
+            applied = payment_expiration_reconcile(database, apply=True)
+            repeated = payment_expiration_reconcile(database, apply=True)
+            self.assertEqual(applied["applied_count"], 1)
+            self.assertEqual(repeated["applied_count"], 0)
+            with database.read() as connection:
+                statuses = {
+                    row["id"]: row["status"]
+                    for row in connection.execute(
+                        "SELECT id,status FROM payment_intents ORDER BY id"
+                    ).fetchall()
+                }
+                audit_count = connection.execute(
+                    """SELECT COUNT(*) FROM payment_audit
+                       WHERE event_type='payment_intent_expiration_reconciled'"""
+                ).fetchone()[0]
+            self.assertEqual(statuses["intent-1"], "expired")
+            self.assertEqual(statuses["intent-2"], "paid")
+            self.assertEqual(statuses["intent-3"], "pending")
+            self.assertEqual(statuses["intent-4"], "pending")
+            self.assertEqual(audit_count, 1)
 
     def test_pilot_report_is_cohort_scoped_and_contains_no_identifiers_or_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -52,6 +52,33 @@ class SettingsTests(TestCase):
         expected = Path(__file__).resolve().parents[1]
         self.assertEqual(PROJECT_ROOT, expected)
 
+    def test_manual_openai_balance_guard_is_validated(self) -> None:
+        settings = load_settings(
+            environ={
+                "APP_ENV": "test",
+                "OPENAI_BALANCE_USD": "4.17",
+                "OPENAI_BALANCE_CONFIRMED_AT": "2026-07-27T10:00:00+00:00",
+                "OPENAI_BALANCE_WARNING_USD": "5",
+                "OPENAI_BALANCE_CRITICAL_USD": "1",
+                "OPENAI_BALANCE_MAX_AGE_HOURS": "48",
+                "OPENAI_IMAGE_REQUESTS_ENABLED": "false",
+            }
+        )
+        self.assertEqual(settings.openai_balance_usd, 4.17)
+        self.assertFalse(settings.openai_image_requests_enabled)
+        self.assertEqual(settings.openai_balance_max_age_hours, 48)
+        with self.assertRaisesRegex(ValueError, "ISO-8601"):
+            load_settings(
+                environ={"OPENAI_BALANCE_CONFIRMED_AT": "not-a-timestamp"}
+            )
+        with self.assertRaisesRegex(ValueError, "must not exceed"):
+            load_settings(
+                environ={
+                    "OPENAI_BALANCE_WARNING_USD": "1",
+                    "OPENAI_BALANCE_CRITICAL_USD": "2",
+                }
+            )
+
     def test_payments_are_fail_closed_and_production_requires_explicit_approval(self) -> None:
         baseline = {
             "APP_ENV": "production",

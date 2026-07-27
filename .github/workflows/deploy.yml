@@ -43,6 +43,7 @@ jobs:
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
       MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
       MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
+      ROBOKASSA_PRODUCTION_CONFIGURED: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN != '' && secrets.ROBOKASSA_PASSWORD_1 != '' && secrets.ROBOKASSA_PASSWORD_2 != '' }}
       MAX_PILOT_CONFIGURED: ${{ secrets.MAX_PILOT_USER_IDS != '' }}
       MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
     steps:
@@ -102,6 +103,7 @@ jobs:
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
       MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
       MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
+      ROBOKASSA_PRODUCTION_CONFIGURED: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN != '' && secrets.ROBOKASSA_PASSWORD_1 != '' && secrets.ROBOKASSA_PASSWORD_2 != '' }}
     steps:
       - name: Require Hetzner deployment configuration
         if: env.DEPLOY_CONFIGURED != 'true'
@@ -263,6 +265,22 @@ jobs:
             chmod 600 "$TMP"
             mv "$TMP" "$ROOT/.env"
             unset PILOT_IDS'
+      - name: Configure production Robokassa credentials
+        if: env.DEPLOY_CONFIGURED == 'true' && env.ROBOKASSA_PRODUCTION_CONFIGURED == 'true'
+        env:
+          MERCHANT_LOGIN: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN }}
+          PASSWORD_1: ${{ secrets.ROBOKASSA_PASSWORD_1 }}
+          PASSWORD_2: ${{ secrets.ROBOKASSA_PASSWORD_2 }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          {
+            printf '%s\n' "$MERCHANT_LOGIN"
+            printf '%s\n' "$PASSWORD_1"
+            printf '%s\n' "$PASSWORD_2"
+          } | ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            'cd /opt/photo-bot && venv/bin/python -m scripts.set_robokassa_production_secrets --env-file /opt/photo-bot/.env'
       - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -293,6 +311,12 @@ jobs:
             ensure_env IMAGE_EDIT_INPUT_FIDELITY auto
             ensure_env IMAGE_EDIT_OUTPUT_FORMAT png
             ensure_env OPENAI_MAX_RETRIES 2
+            ensure_env OPENAI_BALANCE_USD ''
+            ensure_env OPENAI_BALANCE_CONFIRMED_AT ''
+            ensure_env OPENAI_BALANCE_WARNING_USD 5
+            ensure_env OPENAI_BALANCE_CRITICAL_USD 1
+            ensure_env OPENAI_BALANCE_MAX_AGE_HOURS 72
+            ensure_env OPENAI_IMAGE_REQUESTS_ENABLED true
             ensure_env DEMO_SESSION_TTL_MINUTES 60
             ensure_env DEMO_WATERMARK_TEXT ОБРАЗЕЦ
             ensure_env DEMO_MAX_DIMENSION 1024

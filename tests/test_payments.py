@@ -489,6 +489,18 @@ class PaymentTests(TestCase):
         status = payment_status(self.settings, self.database)
         self.assertEqual(metrics["paid_orders"], 1)
         self.assertEqual(metrics["recognized_revenue_rub"], 49.0)
+        self.assertEqual(
+            metrics["measured_unit_economics"]["robokassa_commission_rub"], 1.91
+        )
+        self.assertEqual(
+            metrics["measured_unit_economics"]["estimated_contribution_rub"], 37.09
+        )
+        self.assertEqual(len(metrics["pilot_scenarios"]), 7)
+        repurchase = metrics["pilot_scenarios"][-1]
+        self.assertEqual(repurchase["orders"], 2)
+        self.assertEqual(
+            repurchase["contribution_before_unknown_variable_costs_rub"], -5.82
+        )
         self.assertNotIn(self.user_id, str(metrics))
         self.assertEqual(status["orders"]["paid"]["count"], 1)
         with self.database.read() as connection:

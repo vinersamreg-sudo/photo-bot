@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Optional
 from urllib.parse import urlsplit
@@ -39,6 +40,12 @@ class Settings:
     openai_context_delete_on_user_delete: bool = True
     openai_context_max_idle_days: int = 14
     openai_context_max_depth: int = 8
+    openai_image_requests_enabled: bool = True
+    openai_balance_usd: Optional[float] = None
+    openai_balance_confirmed_at: str = ""
+    openai_balance_warning_usd: float = 5.0
+    openai_balance_critical_usd: float = 1.0
+    openai_balance_max_age_hours: int = 72
     demo_max_successful_generations: int = 2
     demo_session_ttl_minutes: int = 60
     demo_watermark_text: str = "ОБРАЗЕЦ"
@@ -213,6 +220,18 @@ def _nonnegative_float(values: Mapping[str, str], name: str, default: float) -> 
     return value
 
 
+def _optional_nonnegative_float(
+    values: Mapping[str, str], name: str
+) -> Optional[float]:
+    raw = values.get(name, "").strip()
+    if not raw:
+        return None
+    value = float(raw)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
 def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
     raw = values.get(name, "").strip().lower()
     if not raw:
@@ -306,6 +325,27 @@ def load_settings(
         raise ValueError("MAX pilot allowlist must not contain an owner")
     if len(pilot_user_ids) < pilot_user_limit:
         raise ValueError("MAX pilot allowlist is shorter than PILOT_USER_LIMIT")
+    openai_balance_usd = _optional_nonnegative_float(values, "OPENAI_BALANCE_USD")
+    openai_balance_confirmed_at = values.get(
+        "OPENAI_BALANCE_CONFIRMED_AT", ""
+    ).strip()
+    if openai_balance_confirmed_at:
+        try:
+            datetime.fromisoformat(openai_balance_confirmed_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                "OPENAI_BALANCE_CONFIRMED_AT must be an ISO-8601 timestamp"
+            ) from exc
+    openai_balance_warning_usd = _nonnegative_float(
+        values, "OPENAI_BALANCE_WARNING_USD", 5.0
+    )
+    openai_balance_critical_usd = _nonnegative_float(
+        values, "OPENAI_BALANCE_CRITICAL_USD", 1.0
+    )
+    if openai_balance_critical_usd > openai_balance_warning_usd:
+        raise ValueError(
+            "OPENAI_BALANCE_CRITICAL_USD must not exceed OPENAI_BALANCE_WARNING_USD"
+        )
     app_env = values.get("APP_ENV", "production").strip() or "production"
     image_model = values.get("OPENAI_IMAGE_MODEL", "").strip()
     if app_env == "production" and image_model and image_model != "gpt-image-2":
@@ -476,6 +516,16 @@ def load_settings(
         ),
         openai_context_max_depth=_positive_int(
             values, "OPENAI_CONTEXT_MAX_DEPTH", 8
+        ),
+        openai_image_requests_enabled=_boolean(
+            values, "OPENAI_IMAGE_REQUESTS_ENABLED", True
+        ),
+        openai_balance_usd=openai_balance_usd,
+        openai_balance_confirmed_at=openai_balance_confirmed_at,
+        openai_balance_warning_usd=openai_balance_warning_usd,
+        openai_balance_critical_usd=openai_balance_critical_usd,
+        openai_balance_max_age_hours=_positive_int(
+            values, "OPENAI_BALANCE_MAX_AGE_HOURS", 72
         ),
         demo_max_successful_generations=_positive_int(values, "DEMO_MAX_SUCCESSFUL_GENERATIONS", 2),
         demo_session_ttl_minutes=_positive_int(values, "DEMO_SESSION_TTL_MINUTES", 60),

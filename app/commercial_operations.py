@@ -216,6 +216,46 @@ def cost_status(settings: Settings, database: Database) -> dict[str, Any]:
     generation_cost = float(generation["cost"] or 0)
     net_revenue = (int(revenue) - int(refunded)) / 100
     estimated_commission = int(revenue) / 100 * settings.robokassa_commission_percent / 100
+    measured_gross_rub = 49.0
+    measured_commission_rub = 1.91
+    measured_net_rub = 47.09
+    estimated_request_reserve_rub = 10.0
+
+    def scenario(
+        name: str, *, buyers: int, requests: int, orders: int | None = None
+    ) -> dict[str, Any]:
+        order_count = buyers if orders is None else orders
+        gross = measured_gross_rub * order_count
+        net_after_robokassa = measured_net_rub * order_count
+        openai_reserve = estimated_request_reserve_rub * requests
+        return {
+            "name": name,
+            "users": 5,
+            "buyers": buyers,
+            "orders": order_count,
+            "image_requests": requests,
+            "gross_revenue_rub": round(gross, 2),
+            "net_after_robokassa_rub": round(net_after_robokassa, 2),
+            "openai_request_reserve_rub": round(openai_reserve, 2),
+            "contribution_before_unknown_variable_costs_rub": round(
+                net_after_robokassa - openai_reserve, 2
+            ),
+        }
+
+    pilot_scenarios = [
+        scenario("five_users_one_processing_zero_buyers", buyers=0, requests=5),
+        scenario("five_users_one_processing_one_buyer", buyers=1, requests=5),
+        scenario("five_users_one_processing_two_buyers", buyers=2, requests=5),
+        scenario("five_users_two_processings_zero_buyers", buyers=0, requests=10),
+        scenario("five_users_two_processings_one_buyer", buyers=1, requests=10),
+        scenario("five_users_two_processings_two_buyers", buyers=2, requests=10),
+        scenario(
+            "five_users_two_processings_one_buyer_repurchases",
+            buyers=1,
+            requests=10,
+            orders=2,
+        ),
+    ]
     return {
         "successful_generations": int(generation["count"]),
         "paid_orders": int(paid_orders),
@@ -250,6 +290,33 @@ def cost_status(settings: Settings, database: Database) -> dict[str, Any]:
         "estimated_cost_per_paid_order_rub": round(
             generation_cost / int(paid_orders), 2
         ) if paid_orders else None,
+        "measured_unit_economics": {
+            "source": "single_confirmed_production_order_audit",
+            "gross_rub": measured_gross_rub,
+            "robokassa_commission_rub": measured_commission_rub,
+            "net_after_robokassa_rub": measured_net_rub,
+            "openai_image_requests": 1,
+            "openai_cost_usd": 0.07,
+            "estimated_openai_reserve_rub": estimated_request_reserve_rub,
+            "estimated_contribution_rub": round(
+                measured_net_rub - estimated_request_reserve_rub, 2
+            ),
+            "estimated_contribution_margin_percent": 75.7,
+            "unknown_costs": [
+                "actual USD/RUB conversion for the OpenAI charge",
+                "NPD tax allocated to the order",
+                "VPS allocation",
+                "storage",
+                "network traffic",
+                "support",
+                "refund reserve",
+            ],
+        },
+        "pilot_scenarios": pilot_scenarios,
+        "contribution_definition": (
+            "Net revenue after Robokassa minus all OpenAI requests for payers "
+            "and non-payers, refunds, and other variable costs."
+        ),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

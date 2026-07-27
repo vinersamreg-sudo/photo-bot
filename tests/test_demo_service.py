@@ -21,6 +21,7 @@ from app.domain import (
     InvalidInputError,
     PaymentRequiredError,
     PolicyRejectedError,
+    ProviderUnavailableError,
 )
 from app.image_provider import FakeImageProvider
 from app.storage import PrivateStorage
@@ -246,6 +247,29 @@ class DemoServiceTests(TestCase):
         two = limited_service.start_session("max", "daily-two", limited_source)
         with self.assertRaises(DailyBudgetError):
             limited_service.generate(two.session_id, "two", "daily-2")
+
+    def test_budget_guard_stops_provider_without_stopping_the_service(self) -> None:
+        for guarded_settings in (
+            replace(self.settings, openai_image_requests_enabled=False),
+            replace(
+                self.settings,
+                openai_balance_usd=0.5,
+                openai_balance_critical_usd=1.0,
+            ),
+        ):
+            provider = FakeImageProvider()
+            service = self.service(provider=provider, settings=guarded_settings)
+            session = service.start_session("max", "guarded", self.source)
+            with self.assertRaises(ProviderUnavailableError):
+                service.generate(session.session_id, "change background", "guarded")
+            self.assertEqual(provider.calls, 0)
+            with service.database.read() as connection:
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM generation_attempts"
+                    ).fetchone()[0],
+                    0,
+                )
 
     def test_watermark_preview_is_reduced_and_original_unchanged(self) -> None:
         service = self.service()

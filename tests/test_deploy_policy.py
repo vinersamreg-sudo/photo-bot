@@ -169,6 +169,16 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("python -m app.main openai-check", self.workflow)
         self.assertIn("external API check intentionally skipped", self.workflow)
 
+    def test_production_robokassa_secrets_use_explicit_github_names_and_stdin(self) -> None:
+        self.assertIn("ROBOKASSA_PRODUCTION_CONFIGURED:", self.workflow)
+        self.assertIn("secrets.ROBOKASSA_PASSWORD_1", self.workflow)
+        self.assertIn("secrets.ROBOKASSA_PASSWORD_2", self.workflow)
+        self.assertIn("Configure production Robokassa credentials", self.workflow)
+        self.assertIn("scripts.set_robokassa_production_secrets", self.workflow)
+        self.assertIn('printf \'%s\\n\' "$PASSWORD_1"', self.workflow)
+        self.assertIn('printf \'%s\\n\' "$PASSWORD_2"', self.workflow)
+        self.assertNotIn("--password", self.workflow)
+
     def test_configures_max_without_exposing_the_token_as_an_argument(self) -> None:
         self.assertIn("Configure MAX credential", self.workflow)
         self.assertIn("secrets.MAX_BOT_TOKEN", self.workflow)

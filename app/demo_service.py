@@ -29,6 +29,7 @@ from app.domain import (
     IntentAmbiguityError,
     PaymentRequiredError,
     PolicyRejectedError,
+    ProviderUnavailableError,
     SourceReplacementError,
     StorageFailureError,
 )
@@ -256,6 +257,18 @@ class DemoService:
         clean_prompt = prompt.strip()
         if not clean_prompt or len(clean_prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is empty or exceeds the configured limit")
+        confirmed_balance_is_critical = bool(
+            self.settings.openai_balance_usd is not None
+            and self.settings.openai_balance_usd
+            <= self.settings.openai_balance_critical_usd
+        )
+        if (
+            not self.settings.openai_image_requests_enabled
+            or confirmed_balance_is_critical
+        ):
+            raise ProviderUnavailableError(
+                "Image processing is paused by the operational budget guard"
+            )
         scenario = get_scenario(scenario_id)
         if scenario_id and scenario is None:
             raise InvalidInputError("Unknown or inactive scenario")

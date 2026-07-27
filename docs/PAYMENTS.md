@@ -36,10 +36,20 @@ Every normal deploy keeps `MAX_POLL_OBSERVE_ONLY=true`, `PILOT_USER_LIMIT=0`, `P
 python -m app.main robokassa-health --format human
 python -m app.main payment-show --invoice <invoice> --format human
 python -m app.main payment-reconcile [--invoice <invoice>] --format human
+python -m app.main payment-expiration-reconcile --format human
+python -m app.main payment-expiration-reconcile --apply --format human
 python -m app.main payment-status --format human
 python -m app.main launch-status
 ```
 
 These commands do not create payments. Mutating commercial commands remain dry-run-first and require explicit `--apply`, reason and idempotency key.
+
+`payment-expiration-reconcile` is narrower than commercial reconciliation: it changes only a pending PaymentIntent whose linked order is already `expired`, writes one privacy-safe audit event, and is idempotent.
+
+## Production secret names
+
+GitHub Environment `production` must contain `ROBOKASSA_MERCHANT_LOGIN`, `ROBOKASSA_PASSWORD_1` and `ROBOKASSA_PASSWORD_2`. The deploy maps them through stdin to runtime names `ROBOKASSA_MERCHANT_LOGIN`, `ROBOKASSA_PASSWORD1` and `ROBOKASSA_PASSWORD2`; values never appear in command arguments or reports and `/opt/photo-bot/.env` remains mode 600.
+
+Take Password #1 and Password #2 from the production technical settings of the active Robokassa shop. Do not put test passwords into these names. After sandbox evidence is complete, remove `ROBOKASSA_TEST_PASSWORD_1` and `ROBOKASSA_TEST_PASSWORD_2` from the GitHub production environment. Presence is verified only as a boolean; values must never be printed.
 
 Before the first sandbox transaction: align the cabinet to SHA-256, provide test MerchantLogin/Password #1/Password #2, verify the URLs and explicitly authorize one owner-only sandbox payment. Password #3 is needed only for a separately approved Refund API test.
