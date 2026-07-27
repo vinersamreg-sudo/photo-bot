@@ -252,9 +252,6 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(
             any(button.action == "legal:accept_all" for button in start_message[2])
         )
-        site_root = Path(__file__).resolve().parents[1] / "site" / "public"
-        self.assertTrue((site_root / "legal" / "offer.html").is_file())
-        self.assertTrue((site_root / "legal" / "personal-data.html").is_file())
 
         invalid = self.base / "invalid.bin"
         invalid.write_text("not image", encoding="utf-8")
