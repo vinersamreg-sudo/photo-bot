@@ -13,9 +13,9 @@
   -> MAX Bot API -> пользователь
 ```
 
-После запуска оплаты отдельный поток добавляет Robokassa: order ID, сумма, статус, callback и refund events. Полные реквизиты карты в Pixora не поступают.
+После запуска оплаты отдельный поток добавляет Robokassa: order ID, сумма, статус, callback и refund events. Полные реквизиты карты в Ravuna не поступают.
 
-## Что сохраняет Pixora
+## Что сохраняет Ravuna
 
 - opaque MAX user/chat relation;
 - исходное фото, prompt, result и version lineage;

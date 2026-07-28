@@ -48,7 +48,7 @@ class ContentStudioTests(unittest.TestCase):
             database_path=self.root / "content" / "content.sqlite3",
             storage_dir=self.root / "content" / "storage",
             publishing_enabled=False,
-            bot_url="https://max.ru/pixora_bot",
+            bot_url="https://max.ru/ravuna_bot",
         )
         self.before = self.root / "before.png"
         self.after = self.root / "after.png"
@@ -63,7 +63,7 @@ class ContentStudioTests(unittest.TestCase):
         return self.service.add_asset(
             self.before,
             title="Демонстрационный портрет",
-            description="Создан специально для Pixora",
+            description="Создан специально для Ravuna",
             category=ContentCategory.REPLACE_BACKGROUND,
             tags=("портрет", "фон", "портрет"),
         )
@@ -135,7 +135,7 @@ class ContentStudioTests(unittest.TestCase):
         self.assertFalse(status["publishing_enabled"])
         self.assertEqual(status["external_ai_requests"], 0)
 
-    def test_asset_requires_verified_commercial_pixora_rights(self) -> None:
+    def test_asset_requires_verified_commercial_ravuna_rights(self) -> None:
         with self.assertRaisesRegex(ValueError, "verified commercial"):
             self.service.add_asset(
                 self.before,
@@ -188,11 +188,11 @@ class ContentStudioTests(unittest.TestCase):
         self.assertTrue(post["generator_prompt_en"].isascii())
 
     def test_all_templates_include_mandatory_marking(self) -> None:
-        generator = ContentGenerator("https://max.ru/pixora_bot")
+        generator = ContentGenerator("https://max.ru/ravuna_bot")
         for transformation in TransformationType:
             with self.subTest(transformation=transformation.value):
                 copy = generator.generate(transformation, post_id="post", platform="max")
-                self.assertIn("Демонстрационный пример Pixora.", copy.body)
+                self.assertIn("Демонстрационный пример Ravuna.", copy.body)
                 self.assertIn("Изображения созданы специально", copy.body)
                 self.assertIn("2 бесплатные обработки", copy.cta)
 

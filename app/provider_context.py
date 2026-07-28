@@ -1,4 +1,4 @@
-"""Optional provider memory derived from, never replacing, Pixora lineage."""
+"""Optional provider memory derived from, never replacing, Ravuna lineage."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ class ContextPlan:
 
 
 class ProviderContextService:
-    """Owns optional provider ids while Pixora DB remains the source of truth."""
+    """Owns optional provider ids while Ravuna DB remains the source of truth."""
 
     def __init__(
         self,

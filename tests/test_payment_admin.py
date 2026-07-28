@@ -204,8 +204,8 @@ class PaymentAdminTests(TestCase):
                 robokassa_password2="private-two",
                 robokassa_password3="private-three",
                 payment_result_url="https://pixoraai.ru/payments/robokassa/result",
-                payment_success_url="https://pixoraai.ru/payment-success.html",
-                payment_fail_url="https://pixoraai.ru/payment-failed.html",
+                payment_success_url="https://ravuna.ru/payment-success.html",
+                payment_fail_url="https://ravuna.ru/payment-failed.html",
             )
             report = robokassa_health(settings, Database(settings.database_path))
             rendered = json.dumps(report)

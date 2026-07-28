@@ -13,14 +13,14 @@
 | Алгоритм | SHA-256 |
 | Encoding | UTF-8 |
 | ResultURL | `https://pixoraai.ru/payments/robokassa/result`, POST |
-| SuccessURL | `https://pixoraai.ru/payment-success.html`, GET |
-| FailURL | `https://pixoraai.ru/payment-failed.html`, GET |
+| SuccessURL | `https://ravuna.ru/payment-success.html`, GET |
+| FailURL | `https://ravuna.ru/payment-failed.html`, GET |
 | До go-live | sandbox / `IsTest=1` |
 
 ## Receipt
 
 ```json
-{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]}
+{"items":[{"name":"Пакет доступа Ravuna","quantity":1,"sum":49.00,"tax":"none"}]}
 ```
 
 `sno`, `payment_method`, `payment_object`, `cost`, `prepayment`, `full_prepayment`, `advance` и `full_payment` отсутствуют. Это одна цифровая услуга, один заказ, один платёж и один чек продажи. Состав 2+1 указывается в `Description`, на сайте и в оферте.
@@ -38,9 +38,9 @@ ROBOKASSA_HASH_ALGORITHM=sha256
 PAYMENT_WEBHOOK_LISTENER_ENABLED=true
 PAYMENT_WEBHOOK_ENABLED=false
 PAYMENT_RESULT_URL=https://pixoraai.ru/payments/robokassa/result
-PAYMENT_SUCCESS_URL=https://pixoraai.ru/payment-success.html
-PAYMENT_FAIL_URL=https://pixoraai.ru/payment-failed.html
-PAYMENT_RECEIPT_ITEM_NAME=Пакет доступа Pixora
+PAYMENT_SUCCESS_URL=https://ravuna.ru/payment-success.html
+PAYMENT_FAIL_URL=https://ravuna.ru/payment-failed.html
+PAYMENT_RECEIPT_ITEM_NAME=Пакет доступа Ravuna
 PAYMENT_RECEIPT_TAX=none
 ```
 

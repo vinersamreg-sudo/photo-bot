@@ -1,4 +1,4 @@
-name: Encrypted production backup
+name: Ravuna encrypted production backup
 
 on:
   schedule:
@@ -81,7 +81,7 @@ jobs:
       - name: Store encrypted off-site artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pixora-production-backup-${{ github.run_id }}
+          name: ravuna-production-backup-${{ github.run_id }}
           path: artifact/*.sqlite3.enc
           if-no-files-found: error
           retention-days: 14

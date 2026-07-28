@@ -17,7 +17,7 @@ if [ -z "$CANDIDATE" ] || [ ! -f "$CANDIDATE" ] || [ -L "$CANDIDATE" ]; then
   exit 1
 fi
 if [ ! -f "$ACTIVE" ] || [ "$(readlink -f "$ENABLED")" != "$ACTIVE" ]; then
-  echo "Unexpected Pixora Nginx layout" >&2
+  echo "Unexpected Ravuna legacy-ResultURL Nginx layout" >&2
   rm -f "$BACKUP"
   exit 1
 fi

@@ -345,7 +345,7 @@ jobs:
             ensure_env ROBOKASSA_REFUND_URL https://services.robokassa.ru/RefundService/Refund/Create
             ensure_env ROBOKASSA_REFUND_STATUS_URL https://services.robokassa.ru/RefundService/Refund/GetState
             ensure_env PAYMENT_RECEIPT_TAX none
-            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'
+            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Ravuna'
             ensure_env DEMO_RETENTION_DAYS 30
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
@@ -371,12 +371,12 @@ jobs:
             set_env CONTINUATION_PACK_PRICE_RUB 49
             set_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2
             set_env PAYMENT_RESULT_URL https://pixoraai.ru/payments/robokassa/result
-            set_env PAYMENT_SUCCESS_URL https://pixoraai.ru/payment-success.html
-            set_env PAYMENT_FAIL_URL https://pixoraai.ru/payment-failed.html
+            set_env PAYMENT_SUCCESS_URL https://ravuna.ru/payment-success.html
+            set_env PAYMENT_FAIL_URL https://ravuna.ru/payment-failed.html
             set_env ROBOKASSA_HASH_ALGORITHM sha256
             set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
             set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
-            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'
+            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Ravuna'
             set_env PAYMENT_RECEIPT_TAX none
             # Commercial integrations require a separate, explicit rollout.
             set_env PAYMENTS_ENABLED false
@@ -428,7 +428,7 @@ jobs:
             set_env CLEANUP_TEMP_RETENTION_HOURS 24
             set_env CLEANUP_ORPHAN_GRACE_HOURS 24
             set_env DISK_MIN_FREE_MB 2048
-            chmod +x "$ROOT"/scripts/*.sh "$ROOT"/scripts/pixora
+            chmod +x "$ROOT"/scripts/*.sh "$ROOT"/scripts/ravuna
             cd "$ROOT"
             "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
             "$ROOT"/venv/bin/python --version
@@ -579,13 +579,13 @@ jobs:
           assert settings.robokassa_hash_algorithm == "sha256"
           assert settings.payment_result_url == "https://pixoraai.ru/payments/robokassa/result"
           assert settings.payment_success_url == (
-              "https://pixoraai.ru/payment-success.html"
+              "https://ravuna.ru/payment-success.html"
           )
           assert settings.payment_fail_url == (
-              "https://pixoraai.ru/payment-failed.html"
+              "https://ravuna.ru/payment-failed.html"
           )
           assert settings.payment_receipt_item_name == (
-              "Пакет доступа Pixora"
+              "Пакет доступа Ravuna"
           )
           assert settings.payment_receipt_tax == "none"
           assert settings.openai_conversation_memory_enabled is False

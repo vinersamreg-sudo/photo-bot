@@ -36,6 +36,8 @@ def cleanup_processing_temp(
     cutoff = (time.time() if now is None else now) - older_than_seconds
     removed: list[Path] = []
     for candidate in temp_dir.iterdir():
+        # Legacy prefixes are stable operational identifiers used by cleanup
+        # across already-created temporary files.
         if not candidate.name.startswith(("pixora-mask-", "pixora-composite-")):
             continue
         if candidate.is_symlink() or candidate.stat().st_mtime > cutoff:

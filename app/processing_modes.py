@@ -21,6 +21,7 @@ class ProcessingMode(str, Enum):
 
 class AssetSourceType(str, Enum):
     NONE = "none"
+    # Immutable persisted identifier retained for existing asset metadata.
     PIXORA_OWNED = "pixora_owned"
     USER_UPLOADED = "user_uploaded"
     LICENSED_STOCK = "licensed_stock"

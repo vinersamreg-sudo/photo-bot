@@ -1,8 +1,8 @@
-# Pixora Content Studio v1 — architecture
+# Ravuna Content Studio v1 — architecture
 
 ## Purpose and boundary
 
-Content Studio turns Pixora-owned demonstration before/after cases into reviewed,
+Content Studio turns Ravuna-owned demonstration before/after cases into reviewed,
 scheduled content. It is an operator subsystem, not part of the MAX user dialog.
 It imports finished before/after images, renders branded cards with Pillow, builds
 Russian copy from deterministic templates and prepares a platform payload.
@@ -13,7 +13,7 @@ Gallery/payment tables and does not publish automatically. Its SQLite database i
 `data/content_studio/storage`. Main product migrations remain unchanged.
 
 ```text
-Pixora-owned source
+Ravuna-owned source
   → DemoAsset + verified rights
   → DemoTransformation (English technical instruction)
   → DemoResult + quality flags
@@ -36,13 +36,13 @@ Pixora-owned source
 - `planner.py` — deterministic weekly plan;
 - `publisher.py` — platform-neutral protocol and fail-closed MAX adapter;
 - `service.py` — atomic orchestration;
-- `cli.py` — `pixora content ...` operator surface.
+- `cli.py` — `ravuna content ...` operator surface.
 
 ## Database schema v2
 
 | Table | Purpose |
 |---|---|
-| `demo_assets` | Pixora-owned source, licence state, checksum, tags/category |
+| `demo_assets` | Ravuna-owned source, licence state, checksum, tags/category |
 | `demo_transformations` | transformation kind, English prompt, SceneIntent/EditPlan |
 | `demo_results` | before/after/card/thumbnail, provider metadata, quality issues |
 | `demo_posts` | Russian copy, CTA/disclosure, UTM and lifecycle |
@@ -77,7 +77,7 @@ inspector can implement that input without changing the lifecycle.
 
 ## Operational safety
 
-- source must be `created_for_pixora`, licence `verified`, commercial use allowed;
+- source must use the immutable persisted value `created_for_pixora`, licence `verified`, commercial use allowed;
 - source and result never escape the private storage root;
 - no user/MAX identifiers, prompts or Gallery data are copied;
 - approval/scheduling changes are dry-run unless `--apply` is explicit;

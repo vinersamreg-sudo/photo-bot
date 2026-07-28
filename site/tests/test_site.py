@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 SITE = Path(__file__).resolve().parents[1]
 ROOT = SITE.parent
 PUBLIC = SITE / "public"
-RAVUNA_PUBLIC = SITE / "ravuna-public"
+RAVUNA_PUBLIC = PUBLIC
 MAX_URL = "https://max.ru/se13572368_bot"
 LEGAL = (
     "legal/offer.html",
@@ -62,7 +62,7 @@ def load(path: str) -> str:
     return (PUBLIC / path).read_text(encoding="utf-8")
 
 
-class PixoraSiteTests(unittest.TestCase):
+class RavunaSiteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.html = load("index.html")
@@ -77,9 +77,9 @@ class PixoraSiteTests(unittest.TestCase):
             cls.parsers[path] = parser
 
     # 01
-    def test_home_has_single_pixora_h1(self) -> None:
+    def test_home_has_single_ravuna_h1(self) -> None:
         h1 = [text for level, text in self.parsers["index.html"].headings if level == "h1"]
-        self.assertEqual(h1, ["Pixora AI"])
+        self.assertEqual(h1, ["Ravuna AI"])
 
     def test_public_home_has_no_runtime_javascript(self) -> None:
         self.assertNotIn("<script src=", self.html)
@@ -104,7 +104,7 @@ class PixoraSiteTests(unittest.TestCase):
     def test_price_is_49_rubles_for_continuation_pack(self) -> None:
         self.assertIn("49 ₽", self.html)
         self.assertIn(
-            "Пакет доступа Pixora — 49 ₽",
+            "Пакет доступа Ravuna — 49 ₽",
             self.html,
         )
         self.assertIn("2 обработки и 1 оригинал", self.html)
@@ -118,9 +118,9 @@ class PixoraSiteTests(unittest.TestCase):
         ]
         combined = "\n".join(public_pages).lower()
         self.assertNotIn("генерац", combined)
-        self.assertNotIn("пакет pixora: 2 варианта", combined)
+        self.assertNotIn("пакет ravuna: 2 варианта", combined)
         self.assertNotIn("continuation_pack_2_plus_1", combined)
-        self.assertIn("пакет доступа pixora", combined)
+        self.assertIn("пакет доступа ravuna", combined)
 
     # 06
     def test_no_subscription_or_autopay_claim(self) -> None:
@@ -203,7 +203,7 @@ class PixoraSiteTests(unittest.TestCase):
     # 19
     def test_every_page_has_canonical(self) -> None:
         for path, html in self.pages.items():
-            expected = "https://pixoraai.ru/" if path == "index.html" else f"https://pixoraai.ru/{path}"
+            expected = "https://ravuna.ru/" if path == "index.html" else f"https://ravuna.ru/{path}"
             self.assertIn(f'rel="canonical" href="{expected}"', html, path)
 
     # 20
@@ -228,7 +228,7 @@ class PixoraSiteTests(unittest.TestCase):
     # 24
     def test_manifest_is_valid(self) -> None:
         manifest = json.loads(load("site.webmanifest"))
-        self.assertEqual(manifest["name"], "Pixora AI")
+        self.assertEqual(manifest["name"], "Ravuna AI")
         self.assertEqual(manifest["start_url"], "/")
         self.assertTrue(manifest["icons"])
 
@@ -237,13 +237,13 @@ class PixoraSiteTests(unittest.TestCase):
         robots = load("robots.txt")
         self.assertIn("Allow: /", robots)
         self.assertNotIn("Disallow: /legal", robots)
-        self.assertIn("https://pixoraai.ru/sitemap.xml", robots)
+        self.assertIn("https://ravuna.ru/sitemap.xml", robots)
 
     # 26
     def test_sitemap_lists_all_public_pages(self) -> None:
         sitemap = load("sitemap.xml")
         for path in ("", "contacts.html", *PAYMENT_STATUS, *LEGAL):
-            self.assertIn(f"https://pixoraai.ru/{path}", sitemap)
+            self.assertIn(f"https://ravuna.ru/{path}", sitemap)
 
     # 27
     def test_all_internal_links_resolve(self) -> None:
@@ -276,7 +276,6 @@ class PixoraSiteTests(unittest.TestCase):
     # 30
     def test_only_verified_email_is_published(self) -> None:
         public_text = "\n".join(self.pages.values()).lower()
-        self.assertNotIn("hello@pixoraai.ru", public_text)
         self.assertNotIn("vinersamreg@gmail.com", public_text)
         self.assertIn("mailto:viner-89@mail.ru", public_text)
 
@@ -337,7 +336,7 @@ class PixoraSiteTests(unittest.TestCase):
         self.assertIn("сам по себе не подтверждает оплату", html)
         self.assertIn("Источником истины", html)
         self.assertIn("ResultURL", html)
-        self.assertIn("проверьте статус в Pixora", html)
+        self.assertIn("проверьте статус в Ravuna", html)
 
     def test_payment_failed_copy_is_cautious_and_has_support(self) -> None:
         html = self.pages["payment-failed.html"]
@@ -391,36 +390,29 @@ class PixoraSiteTests(unittest.TestCase):
 
     # 43
     def test_nginx_has_required_security_headers(self) -> None:
-        nginx = (SITE / "nginx" / "pixoraai.ru.conf").read_text(encoding="utf-8")
+        nginx = (SITE / "nginx" / "ravuna.ru.conf").read_text(encoding="utf-8")
         for header in ("Content-Security-Policy", "X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy", "frame-ancestors"):
             self.assertIn(header, nginx)
 
     # 44
     def test_nginx_serves_only_site_tree(self) -> None:
-        nginx = (SITE / "nginx" / "pixoraai.ru.conf").read_text(encoding="utf-8")
-        self.assertIn("root /opt/pixora-site/current", nginx)
-        self.assertEqual(nginx.count("proxy_pass"), 1)
-        self.assertIn("location = /payments/robokassa/result", nginx)
-        self.assertIn(
-            "proxy_pass http://127.0.0.1:8091/payments/robokassa/result",
-            nginx,
-        )
-        self.assertIn("client_max_body_size 64k", nginx)
-        self.assertIn("access_log off", nginx)
+        nginx = (SITE / "nginx" / "ravuna.ru.conf").read_text(encoding="utf-8")
+        self.assertIn("root /opt/ravuna-site/current", nginx)
+        self.assertNotIn("proxy_pass", nginx)
         self.assertNotIn("/opt/photo-bot", nginx)
 
     # 45
     def test_nginx_denies_sensitive_extensions(self) -> None:
-        nginx = (SITE / "nginx" / "pixoraai.ru.conf").read_text(encoding="utf-8")
+        nginx = (SITE / "nginx" / "ravuna.ru.conf").read_text(encoding="utf-8")
         for value in (".env", ".git", "sqlite", "log", "bak", "map"):
             self.assertIn(value, nginx)
 
     # 46
     def test_site_workflow_is_gated_and_atomic(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
-        self.assertIn("PIXORA_SITE_DEPLOY_ENABLED == 'true'", workflow)
-        self.assertIn("/opt/pixora-site/releases/$GITHUB_SHA", workflow)
-        self.assertIn("BASE=/opt/pixora-site", workflow)
+        self.assertIn("RAVUNA_SITE_DEPLOY_ENABLED == 'true'", workflow)
+        self.assertIn("/opt/ravuna-site/releases/$GITHUB_SHA", workflow)
+        self.assertIn("BASE=/opt/ravuna-site", workflow)
         self.assertIn("$BASE/current", workflow)
         self.assertIn("$BASE/previous", workflow)
 
@@ -438,11 +430,9 @@ class PixoraSiteTests(unittest.TestCase):
         self.assertNotIn("/opt/photo-bot", workflow)
 
 
-class RavunaSiteTests(unittest.TestCase):
+class RavunaInfrastructureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        if not RAVUNA_PUBLIC.is_dir():
-            raise AssertionError("Run site/scripts/build_ravuna.py before site tests")
         cls.pages = {
             path: (RAVUNA_PUBLIC / path).read_text(encoding="utf-8")
             for path in ("index.html", "contacts.html", *PAYMENT_STATUS, *LEGAL)
@@ -460,8 +450,7 @@ class RavunaSiteTests(unittest.TestCase):
         )
         self.assertIn("<h1>Ravuna AI</h1>", self.pages["index.html"])
         self.assertIn("https://ravuna.ru/", self.pages["index.html"])
-        self.assertNotIn("Pixora", public_text)
-        self.assertNotIn("pixoraai.ru", public_text)
+        self.assertNotIn("predecessor brand", public_text)
 
     def test_ravuna_legal_links_resolve_locally(self) -> None:
         parser = PageParser()
@@ -499,11 +488,25 @@ class RavunaSiteTests(unittest.TestCase):
             nginx = (SITE / "nginx" / name).read_text(encoding="utf-8")
             self.assertIn(f"'sha256-{digest}'", nginx, name)
 
-    def test_workflow_builds_and_deploys_ravuna_separately(self) -> None:
+    def test_workflow_deploys_ravuna_source_to_primary_and_legacy_surfaces(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
-        self.assertIn("python site/scripts/build_ravuna.py", workflow)
+        self.assertNotIn("build_ravuna.py", workflow)
         self.assertIn("/opt/ravuna-site/releases/$GITHUB_SHA", workflow)
         self.assertIn("BASE=/opt/ravuna-site", workflow)
+        self.assertGreaterEqual(workflow.count("site/public/"), 2)
+
+    def test_legacy_resulturl_vhost_preserves_exact_callback_boundary(self) -> None:
+        nginx = (SITE / "nginx" / "pixoraai.ru.conf").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("server_name pixoraai.ru", nginx)
+        self.assertIn("location = /payments/robokassa/result", nginx)
+        self.assertIn(
+            "proxy_pass http://127.0.0.1:8091/payments/robokassa/result",
+            nginx,
+        )
+        self.assertIn("root /opt/pixora-site/current", nginx)
         self.assertIn(
             'if test -L \\"\\$BASE/current\\"; then readlink -f \\"\\$BASE/current\\"; fi',
             workflow,

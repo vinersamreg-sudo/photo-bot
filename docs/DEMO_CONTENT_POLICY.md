@@ -1,8 +1,8 @@
-# Pixora demonstration content policy
+# Ravuna demonstration content policy
 
 ## Allowed sources
 
-- created specifically for Pixora;
+- created specifically for Ravuna;
 - documented commercial permission;
 - adult subjects only unless a later reviewed policy explicitly permits otherwise;
 - no customer upload, Gallery result or private production path is imported;

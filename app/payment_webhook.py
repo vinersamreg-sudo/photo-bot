@@ -45,7 +45,7 @@ class PaymentWebhookServer:
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
-            server_version = "PixoraPaymentWebhook/1"
+            server_version = "RavunaPaymentWebhook/1"
 
             def log_message(self, format: str, *args: object) -> None:
                 LOGGER.info("Payment webhook request completed")

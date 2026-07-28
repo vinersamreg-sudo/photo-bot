@@ -1,6 +1,6 @@
 param(
     [string]$BaseUrl = "http://127.0.0.1:4173",
-    [string]$BrandName = "Pixora"
+    [string]$BrandName = "Ravuna"
 )
 $ErrorActionPreference = "Stop"
 $paths = @(

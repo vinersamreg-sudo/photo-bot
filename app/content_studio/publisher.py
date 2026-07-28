@@ -113,7 +113,7 @@ class MaxPublisher:
             "media_path": media_path,
             "utm_url": post["utm_url"],
             "demo_disclosure_present": (
-                "Демонстрационный пример Pixora." in post["body"]
+                "Демонстрационный пример Ravuna." in post["body"]
                 and "Изображения созданы специально" in post["body"]
             ),
         }

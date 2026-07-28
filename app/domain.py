@@ -120,7 +120,7 @@ class ProviderResult:
 
 @dataclass(frozen=True)
 class ProviderContextRequest:
-    """Non-authoritative provider context selected from Pixora lineage."""
+    """Non-authoritative provider context selected from Ravuna lineage."""
 
     context_id: str
     previous_response_id: Optional[str]

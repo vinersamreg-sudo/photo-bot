@@ -12,6 +12,7 @@ from app.processing_modes import AssetSourceType
 
 
 ALLOWED_LICENSE_TYPES = {
+    # Immutable persisted identifier retained for existing asset metadata.
     "pixora_owned",
     "commercial_license",
     "purchased",

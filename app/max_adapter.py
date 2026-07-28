@@ -53,11 +53,11 @@ def upload_view() -> View:
         (
             Button(
                 "Публичная оферта",
-                "https://pixoraai.ru/legal/offer.html",
+                "https://ravuna.ru/legal/offer.html",
             ),
             Button(
                 "Обработка персональных данных",
-                "https://pixoraai.ru/legal/personal-data.html",
+                "https://ravuna.ru/legal/personal-data.html",
             ),
         ),
     )

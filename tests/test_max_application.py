@@ -208,7 +208,7 @@ class MaxApplicationTests(TestCase):
             payment_webhook_listener_enabled=True,
             payment_webhook_enabled=True,
             payment_result_url="https://example.test/payments/robokassa/result",
-            robokassa_merchant_login="pixora-test",
+            robokassa_merchant_login="ravuna-test",
             robokassa_password1="one",
             robokassa_password2="two",
         )
@@ -238,11 +238,11 @@ class MaxApplicationTests(TestCase):
             [
                 (
                     "Публичная оферта",
-                    "https://pixoraai.ru/legal/offer.html",
+                    "https://ravuna.ru/legal/offer.html",
                 ),
                 (
                     "Обработка персональных данных",
-                    "https://pixoraai.ru/legal/personal-data.html",
+                    "https://ravuna.ru/legal/personal-data.html",
                 ),
             ],
         )
@@ -487,7 +487,7 @@ class MaxApplicationTests(TestCase):
 
         unlock_event = self.callback("result:unlock")
         self.assertIn(
-            "Пакет доступа Pixora — 49 ₽",
+            "Пакет доступа Ravuna — 49 ₽",
             self.transport.messages[-1][1],
         )
         self.assertNotIn(str(attempt["original_result_path"]), self.transport.messages[-1][1])
@@ -504,7 +504,7 @@ class MaxApplicationTests(TestCase):
 
         payment_cards = [
             message for message in self.transport.messages
-            if message[1].startswith("Пакет доступа Pixora — 49 ₽")
+            if message[1].startswith("Пакет доступа Ravuna — 49 ₽")
             and message[2]
             and message[2][0].text == "Оплатить 49 ₽"
         ]
@@ -548,7 +548,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(handled, [True, True])
         payment_cards = [
             message for message in self.transport.messages
-            if message[1].startswith("Пакет доступа Pixora — 49 ₽")
+            if message[1].startswith("Пакет доступа Ravuna — 49 ₽")
             and message[2]
             and message[2][0].text == "Оплатить 49 ₽"
         ]
@@ -629,7 +629,7 @@ class MaxApplicationTests(TestCase):
         paid_app.handle(event)
         self.assertEqual(
             self.transport.messages[-1][1],
-            "Пакет доступа Pixora — 49 ₽\n\n"
+            "Пакет доступа Ravuna — 49 ₽\n\n"
             "После оплаты начисляется:\n"
             "• 2 обработки\n"
             "• 1 оригинал\n\n"
@@ -701,7 +701,7 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(all(len(message[2]) <= 3 for message in paid_messages))
         paid_copy = "\n".join(message[1] for message in paid_messages)
         self.assertNotIn("После оплаты начисляется", paid_copy)
-        self.assertNotIn("Пакет доступа Pixora", paid_copy)
+        self.assertNotIn("Пакет доступа Ravuna", paid_copy)
         self.assertNotIn("Что дальше?", paid_copy)
         paid_dialog = self.store.get("u1")
         self.assertEqual(paid_dialog.current_version_id, intent_version_id)

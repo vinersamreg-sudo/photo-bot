@@ -1,4 +1,4 @@
-"""Pillow renderer for branded Pixora before/after demonstration cards."""
+"""Pillow renderer for branded Ravuna before/after demonstration cards."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class BeforeAfterRenderer:
         output_path: Path,
         *,
         template: str = "square",
-        title: str = "Результат Pixora",
+        title: str = "Результат Ravuna",
     ) -> Path:
         if template not in TEMPLATES:
             raise ValueError(f"unknown renderer template: {template}")
@@ -51,7 +51,7 @@ class BeforeAfterRenderer:
         brand_font = _font(28, bold=True)
         small_font = _font(24)
 
-        draw.text((64, 52), "PIXORA AI", fill=self.accent, font=brand_font)
+        draw.text((64, 52), "RAVUNA AI", fill=self.accent, font=brand_font)
         draw.text((64, 102), title[:52], fill=self.ink, font=title_font)
         top = 190
         footer = 118
@@ -92,7 +92,7 @@ class BeforeAfterRenderer:
 
         footer_y = spec.height - 82
         draw.text((margin, footer_y), "ДЕМОНСТРАЦИОННЫЙ ПРИМЕР", fill=self.muted, font=small_font)
-        marker = "PIXORA • ДЕМО"
+        marker = "RAVUNA • ДЕМО"
         marker_box = draw.textbbox((0, 0), marker, font=small_font)
         draw.text(
             (spec.width - margin - (marker_box[2] - marker_box[0]), footer_y),

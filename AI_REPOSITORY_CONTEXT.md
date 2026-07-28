@@ -1,66 +1,120 @@
-# AI Repository Context
+# Ravuna repository context
 
-Repository: `photo-bot`; product brand: Pixora; production root: `/opt/photo-bot`.
+Repository: `photo-bot`. Public product brand: **Ravuna**. Production backend
+root and systemd unit retain the technical name `/opt/photo-bot` / `photo-bot`.
+Official site: `https://ravuna.ru`. Verified MAX username:
+`https://max.ru/se13572368_bot` (username is not changed automatically).
 
-Read first: `docs/PROJECT_BIBLE.md`, `CURRENT_STATE.md`, `DECISIONS.md`, `ARCHITECTURE.md`, `UX_COPY_GUIDE.md`, `LAUNCH_READINESS.md`, `PILOT_PLAN.md`.
+## Product contract
 
-Current v1 contract:
+Ravuna is an AI photo editor in MAX. The user sends a photo and a natural-language
+instruction, receives a watermarked demo, and may obtain an original. User-facing
+copy sells the result and uses “обработка”, never provider model names or
+“generation”.
 
-- OpenAI `gpt-image-2` is the only production image provider;
-- do not add semantic parser, second provider or multi-provider abstractions without new owner decision based on pilot evidence;
-- main MAX flow is `/start → photo → free text → processing → watermarked result`;
-- no scenario menu before photo, no «Своя идея», no prompt confirmation;
-- «Идеи» is optional; correction/repeat preserve lineage; Gallery is user-facing;
-- production defaults to observe-only and pilot limit 0;
-- never make real OpenAI image calls without explicit agreed maximum;
-- never expose user IDs, tokens, prompts, private paths or originals in reports/logs.
-- migration v9 contains the permanent `continuation_pack_2_plus_1` ledgers; all real-payment flags are forced off by deploy;
-- the public digital product is «Пакет доступа Pixora» for 49 ₽; user copy says it contains two processing operations and one original and never sells “generations”;
-- a verified 49 ₽ ResultURL atomically grants two internal generation credits and one user-selected original entitlement; it never auto-selects a version;
-- the entitlement may unlock one owned available GalleryVersion created before or after purchase; MAX delivery failure preserves unlocked state and allows re-delivery;
-- the written 23.07.2026 Robokassa support decision is fiscal source of truth: one sale receipt `{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]`, with no `sno`, `payment_method`, `payment_object` or second sale receipt;
-- GET signs the once-encoded Receipt and transports it twice encoded; never change this, ResultURL, credits or 2+1 grant logic as a copy-only task;
+The public digital product is **«Пакет доступа Ravuna»** for 49 ₽:
 
-Latest production evidence (17.07.2026): owner-only E2E used exactly 5/5 approved
-real image requests; all succeeded and created GalleryVersions 11–15. Corrections,
-Repeat, History, Favorite and Current best were exercised. Production is restored
-to observe-only with pilot limit 0, processing 0, SQLite quick_check ok and orphan
-private files 0. Read `docs/AI_BRAIN_VISUAL_VALIDATION.md` and
-`docs/CURRENT_STATE.md` before proposing more image calls or parser work.
+- two processing operations;
+- one original without a watermark;
+- no subscription or automatic renewal.
 
-Operations:
+Internal product code `continuation_pack_2_plus_1`, credit ledger, entitlement
+ledger, SQLite schema and historical records are stable compatibility contracts.
 
-- `python -m app.main health`
-- `python -m app.main launch-status [--strict]`
-- `python -m app.main maintenance-cleanup [--execute]`
-- `python -m app.main backup-create --passphrase-stdin`
-- `python -m app.main backup-restore-test --backup NAME --passphrase-stdin`
+## AI and lineage
 
-Migration v6 contains privacy-minimal product events; migration v8 preserves legacy payment audit state; migration v9 adds global generation-credit lots/reservations/ledger, package grants and original entitlements. Backups are encrypted and readiness requires a real restore plus off-site artifact. Payment architecture is implemented but no provider sandbox/real-payment evidence or final legal approval exists.
+Production uses OpenAI `gpt-image-2`. `SceneIntent` and `EditPlan` are
+provider-neutral; the prompt builder emits an English/ASCII technical prompt.
+Correction edits the selected successful version, Repeat reuses its intent and
+input branch, and Ravuna's database remains the source of truth. Experimental
+hybrid-processing routes remain disabled unless separately approved.
 
-Official website context (updated 23.07.2026): `site/public` is the only site implementation. The verified MAX deep link is `https://max.ru/se13572368_bot`; the permanent public digital product is «Пакет доступа Pixora» for 49 ₽ and includes two processing operations and one original; the public copy truthfully says closed testing and unavailable payment. Site deploy is separate and atomic under `/opt/pixora-site`; repository gate `PIXORA_SITE_DEPLOY_ENABLED=true` was opened only after the launch checks passed. Apex and `www` resolve to `116.203.24.102`; trusted HTTPS, canonical redirects, HSTS, browser smoke and Certbot renew dry-run pass. Owner-supplied seller data is published: INN `631937938795` and e-mail `viner-89@mail.ru`. This closes the engineering site gate for Robokassa moderation, but does not authorize sandbox, production payments or public bot handlers.
+## Payments
 
-Commercial operations: `payment-status`, `payment-history`, `payment-show`, `payment-reconcile`, dry-run-first `payment-resend-original`, `payment-mark-delivery-retry`, `refund-create`, `refund-history/status`, `robokassa-health`, `pilot-status/report`, storage/backup/cleanup/cost and `health-report`. Read `docs/PAYMENTS.md`, `ROBOKASSA.md`, `PAYMENT_GO_LIVE_AUDIT.md`, `ROBOKASSA_CABINET_SETUP.md`, `ROBOKASSA_SANDBOX_E2E.md`, `PAYMENT_SUPPORT_RUNBOOK.md`, `PILOT_5_USERS_RUNBOOK.md` and `PILOT_UNIT_ECONOMICS.md`. The public ResultURL transport may exist fail-closed while business callbacks remain disabled. Never enable sandbox business processing, production payments or public bot handlers without the corresponding separate owner authorization.
+Robokassa signatures use SHA-256. Public payment copy and Receipt item use
+«Пакет доступа Ravuna». ResultURL is the only source of payment truth and grants
+both package components atomically and idempotently.
 
-Current commercial gate (24.07.2026): site may be submitted for Robokassa moderation. Code and Nginx implement a fail-closed POST ResultURL transport; Pixora is hard-locked to SHA-256. The first owner-only sandbox was rejected with error 33 because its offset-free `ExpirationDate` contained a UTC wall clock; this is fixed by converting to UTC+03 before rendering. The separately authorized post-fix run created exactly one new order and reached Robokassa with a valid deadline, but initialization was rejected before the payment form with error 29 (`SignatureValue` invalid). Pixora revalidated the emitted link against its configured Password #1 and the current documented SHA-256 formula, including the once-encoded Receipt, URL2 modifiers and `Shp_order`. The remaining unproved boundary is equality of the write-only test credentials/settings in the Robokassa cabinet and GitHub Environment; they must be deliberately re-saved identically before another separately authorized attempt. No ResultURL callback, package grant, receipt, original delivery or refund occurred. The cancelled workflow's `always()` cleanup restored observe-only/payment fail-closed, pilot limit 0 and cleared runtime Robokassa credentials. Sandbox success evidence, real payment/refund/reconciliation and final production approval still do not exist; `launch-status` keeps `public_launch_ready=false`.
+Immutable payment compatibility:
 
-Content Studio context (21.07.2026): `app/content_studio` is an independent
-operator-only demonstration-content subsystem with separate SQLite/storage. It
-accepts only created-for-Pixora, commercially verified sources; renders three
-Before/After layouts, generates factual Russian copy from deterministic templates,
-and enforces mandatory demo disclosure, CTA/UTM and manual review. Production
-publishing is forced off, no transport is configured, and no real content or AI
-request was created in its implementation sprint. Use `scripts/pixora content ...`.
-Before importing the first real asset, add and restore-test encrypted off-site
-backup of the Content Studio database and storage. Read the four `CONTENT_*`/
-`DEMO_CONTENT_POLICY.md` documents before changing this boundary.
+- MerchantLogin is not a brand setting and must not be renamed;
+- ResultURL remains `https://pixoraai.ru/payments/robokassa/result`;
+- the legacy domain is served with Ravuna-branded static pages and only that
+  exact backend proxy;
+- password names, webhook contract, fiscal fields and provider modes are not
+  changed by branding work.
 
-AI quality limits: identity/background can drift, corrections accumulate changes, outputs are nondeterministic and not pixel-perfect Photoshop. Report these honestly.
+## Site
 
-Optional OpenAI context (19.07.2026): migration v7 and adapters exist but all
-feature flags are false in production. Pixora memory remains SQLite + Storage +
-GalleryVersion + SceneIntent. `previous_response_id` is auxiliary per-version
-lineage; Repeat is stateless; failures fall back to `/v1/images/edits`. No real
-image request was made for this implementation. Before enabling anything, read
-`docs/OPENAI_CONVERSATION_MEMORY_AUDIT.md`, architecture and four-call runbook.
-New operation: `python -m app.main provider-context-cleanup [--execute]`.
+`site/public` is the single Ravuna source tree. It contains no backend imports,
+secrets, user files or runtime JavaScript. Canonical, Open Graph, Twitter Card,
+JSON-LD, manifest, robots, sitemap, legal pages and payment return pages use
+`ravuna.ru`. Production releases are atomic under `/opt/ravuna-site`.
+
+For ResultURL compatibility the same Ravuna-branded artifact is also published
+under the historical static root `/opt/pixora-site`; that root is not a second
+brand or a separate product.
+
+## MAX and other channels
+
+MAX transport is the active user channel. Brand copy, onboarding, legal links,
+gallery, history, payment and download messages use Ravuna. The registered MAX
+username remains `se13572368_bot`; changing username or profile metadata requires
+an explicit supported external operation.
+
+There is no active Telegram transport in this repository. Content Studio may
+prepare platform-neutral material, but external publishing is disabled by
+default.
+
+## Storage and data
+
+SQLite plus private Storage hold users, sessions, works, versions, payment
+intents, orders, receipts and ledgers. Do not rename persisted enum values,
+database columns or stable anonymisation salts during a brand change. The
+following legacy identifiers are intentionally retained:
+
+- `created_for_pixora`;
+- `pixora_owned`;
+- `pixora-product-subject`;
+- `pixora-mask-*` / `pixora-composite-*`;
+- `pixora-*.sqlite3.enc`.
+
+They are internal compatibility identifiers and never appear in user-facing
+copy.
+
+## Safe production defaults
+
+Every ordinary deploy must return the system to:
+
+- `MAX_POLL_OBSERVE_ONLY=true`;
+- `PAYMENTS_ENABLED=false`;
+- `PAYMENT_PROVIDER=disabled`;
+- `PAYMENT_WEBHOOK_ENABLED=false`;
+- `PAYMENT_REFUNDS_ENABLED=false`;
+- `PILOT_USER_LIMIT=0`;
+- `ROBOKASSA_MODE=sandbox`;
+- `ROBOKASSA_PRODUCTION_APPROVED=false`.
+
+Future tests must record the initial production state and restore exactly that
+state. Never shut down the user's laptop unless the user gives a direct command
+for that specific shutdown.
+
+## Operator entry points
+
+```text
+python -m app.main healthcheck
+python -m unittest discover -v
+scripts/ravuna content status
+scripts/ravuna content queue --status needs_review
+```
+
+Site deployment is gated by repository variable
+`RAVUNA_SITE_DEPLOY_ENABLED=true`. Backend and site workflows are separate.
+
+## Historical migration note
+
+The predecessor public brand was Pixora. That name may remain only in Git
+history, CHANGELOG, dated audit/migration evidence, immutable internal identifiers
+listed above, the Robokassa ResultURL domain and its compatibility Nginx config.
+It must not appear in current user copy, current SEO, current product docs or
+new operational messages.

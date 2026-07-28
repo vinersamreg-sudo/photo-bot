@@ -1,4 +1,5 @@
+# Ravuna public crawler policy
 User-agent: *
 Allow: /
 
-Sitemap: https://pixoraai.ru/sitemap.xml
+Sitemap: https://ravuna.ru/sitemap.xml

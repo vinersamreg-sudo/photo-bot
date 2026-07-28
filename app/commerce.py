@@ -1,4 +1,4 @@
-"""Transactional Pixora v1 credit, package and original-entitlement ledger."""
+"""Transactional Ravuna v1 credit, package and original-entitlement ledger."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from app.domain import DemoLimitError, InvalidInputError, PaymentRequiredError
 
 
 PRODUCT_CODE = "continuation_pack_2_plus_1"
-PRODUCT_NAME = "Pixora Access Pack"
-USER_PRODUCT_NAME = "Пакет доступа Pixora"
+PRODUCT_NAME = "Ravuna Access Pack"
+USER_PRODUCT_NAME = "Пакет доступа Ravuna"
 RECEIPT_ITEM_NAME = USER_PRODUCT_NAME
 PRICE_MINOR = 4_900
 GENERATION_CREDITS_PER_PACK = 2

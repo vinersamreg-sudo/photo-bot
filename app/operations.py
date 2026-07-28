@@ -153,7 +153,7 @@ def _site_moderation_status(online: bool) -> dict[str, Any]:
     try:
         with httpx.Client(timeout=10, follow_redirects=False) as client:
             for path in required:
-                response = client.get(f"https://pixoraai.ru{path}")
+                response = client.get(f"https://ravuna.ru{path}")
                 route_status[path] = response.status_code
                 if response.status_code == 200 and response.headers.get(
                     "content-type", ""
@@ -161,18 +161,18 @@ def _site_moderation_status(online: bool) -> dict[str, Any]:
                     bodies.append(response.text)
                 if path == "/":
                     hsts_present = bool(response.headers.get("strict-transport-security"))
-            http_response = client.get("http://pixoraai.ru/")
+            http_response = client.get("http://ravuna.ru/")
             https_redirect_ok = bool(
                 http_response.status_code in {301, 302, 307, 308}
                 and http_response.headers.get("location", "").startswith(
-                    "https://pixoraai.ru"
+                    "https://ravuna.ru"
                 )
             )
-            www_response = client.get("https://www.pixoraai.ru/")
+            www_response = client.get("https://www.ravuna.ru/")
             www_redirect_ok = bool(
                 www_response.status_code in {301, 302, 307, 308}
                 and www_response.headers.get("location", "").startswith(
-                    "https://pixoraai.ru"
+                    "https://ravuna.ru"
                 )
             )
     except (httpx.HTTPError, OSError):

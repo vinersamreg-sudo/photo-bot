@@ -82,7 +82,7 @@ UNLOCK_PLACEHOLDER = (
     "Работа сохранена в «Моих работах»."
 )
 OWNER_ONLY_TEXT = (
-    "Pixora пока в закрытом тестировании.\n\n"
+    "Ravuna пока в закрытом тестировании.\n\n"
     "Скоро откроем доступ."
 )
 
@@ -288,7 +288,7 @@ class MaxApplication:
                 "Бесплатные обработки закончились.",
                 (
                     Button("⬇ Получить оригинал", "result:unlock"),
-                    Button("Пакет доступа Pixora — 49 ₽", "package:buy"),
+                    Button("Пакет доступа Ravuna — 49 ₽", "package:buy"),
                     Button("📂 Мои работы", "studio:works"),
                 ),
             )
@@ -456,7 +456,7 @@ class MaxApplication:
             self.transport.send_message(
                 event.user_id,
                 "Условия использования\n\n"
-                "Сервис создаёт демо-обработку. Пакет доступа Pixora включает "
+                "Сервис создаёт демо-обработку. Пакет доступа Ravuna включает "
                 "две обработки и один оригинал. Оплата пока недоступна.",
                 (Button("← Назад", "settings"),),
             )
@@ -1006,7 +1006,7 @@ class MaxApplication:
         if not self.settings.payments_enabled:
             self.transport.send_message(
                 event.user_id,
-                "Пакет доступа Pixora — 49 ₽\n\n"
+                "Пакет доступа Ravuna — 49 ₽\n\n"
                 "После оплаты начисляется:\n"
                 "• 2 обработки\n"
                 "• 1 оригинал\n\n"
@@ -1016,7 +1016,7 @@ class MaxApplication:
             )
             return
         if not dialog.user_id:
-            raise InvalidInputError("No Pixora account is selected")
+            raise InvalidInputError("No Ravuna account is selected")
         version_id = dialog.current_version_id
         if not version_id:
             with self.database.read() as connection:
@@ -1029,7 +1029,7 @@ class MaxApplication:
                 ).fetchone()
             version_id = latest["id"] if latest else None
         if not version_id:
-            raise InvalidInputError("A completed Pixora version is required for checkout")
+            raise InvalidInputError("A completed Ravuna version is required for checkout")
         with self._checkout_lock:
             if self._paid_order_exists(dialog.user_id, version_id):
                 current = self.store.update(
@@ -1058,7 +1058,7 @@ class MaxApplication:
                 return
             self.transport.send_message(
                 event.user_id,
-                "Пакет доступа Pixora — 49 ₽\n\n"
+                "Пакет доступа Ravuna — 49 ₽\n\n"
                 "После оплаты начисляется:\n"
                 "• 2 обработки\n"
                 "• 1 оригинал\n\n"

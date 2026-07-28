@@ -25,11 +25,11 @@ from dotenv import dotenv_values
 
 PAYMENT_URL = "https://auth.robokassa.ru/Merchant/Index.aspx"
 OUT_SUM = "49.00"
-SUCCESS_URL = "https://pixoraai.ru/payment-success.html"
-FAIL_URL = "https://pixoraai.ru/payment-failed.html"
+SUCCESS_URL = "https://ravuna.ru/payment-success.html"
+FAIL_URL = "https://ravuna.ru/payment-failed.html"
 MOSCOW_TIMEZONE = timezone(timedelta(hours=3))
 RECEIPT_JSON = (
-    '{"items":[{"name":"Пакет доступа Pixora","quantity":1,'
+    '{"items":[{"name":"Пакет доступа Ravuna","quantity":1,'
     '"sum":49.00,"tax":"none"}]}'
 )
 VARIANT_NAMES = ("A", "B", "C", "D", "E")
@@ -140,7 +140,7 @@ def _variant(
         ("MerchantLogin", merchant_login),
         ("OutSum", OUT_SUM),
         ("InvId", str(invoice_id)),
-        ("Description", f"Pixora signature bisect {name}"),
+        ("Description", f"Ravuna signature bisect {name}"),
         ("IsTest", "1"),
         ("SignatureValue", digest),
     ]

@@ -1,4 +1,4 @@
-"""Privacy-minimal product events for the closed Pixora pilot."""
+"""Privacy-minimal product events for the closed Ravuna pilot."""
 
 from __future__ import annotations
 

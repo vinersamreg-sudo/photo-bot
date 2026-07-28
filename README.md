@@ -1,20 +1,20 @@
 # photo-bot
 
-Официальный бренд продукта — **Pixora**. Отдельный статический лендинг находится в [`site/`](site/README.md); он не импортирует backend и имеет собственный CI/deploy boundary.
+Официальный бренд продукта — **Ravuna**. Отдельный статический лендинг находится в [`site/`](site/README.md); он не импортирует backend и имеет собственный CI/deploy boundary.
 
 ## Content Studio
 
 `app/content_studio` — независимый операторский контур для честных
 демонстрационных материалов официального MAX-канала. Он импортирует только
-созданные для Pixora before/after изображения с подтверждённым коммерческим
+созданные для Ravuna before/after изображения с подтверждённым коммерческим
 разрешением, собирает три формата карточек через Pillow, создаёт русский текст из
 детерминированных шаблонов и ведёт review-first очередь. Он не читает Gallery,
 платежи или пользовательские диалоги и не вызывает OpenAI.
 
 ```powershell
-scripts\pixora.ps1 content status
-scripts\pixora.ps1 content queue --status needs_review
-scripts\pixora.ps1 content schedule --plan-start 2026-07-20 --days 7
+scripts\ravuna.ps1 content status
+scripts\ravuna.ps1 content queue --status needs_review
+scripts\ravuna.ps1 content schedule --plan-start 2026-07-20 --days 7
 ```
 
 Production deploy принудительно оставляет
@@ -25,7 +25,7 @@ dry-run. Архитектура, политика и runbook: [Content Studio](d
 
 ## AI Brain
 
-Pixora не передаёт correction как голую строку. `app/edit_intent.py` строит сериализуемый EditPlan v2 с provider-neutral scene fields; `app/prompt_builder.py` создаёт только English/ASCII technical prompt. Correction редактирует private original выбранной успешной версии и меняет только затронутые поля, Repeat сохраняет тот же intent и input branch. Raw Russian text никогда не передаётся ImageProvider. Подробности: [аудит до изменений](docs/AI_BRAIN_AUDIT.md), [архитектура](docs/AI_BRAIN_ARCHITECTURE.md), [правила prompt](docs/PROMPT_ENGINEERING_RULES.md).
+Ravuna не передаёт correction как голую строку. `app/edit_intent.py` строит сериализуемый EditPlan v2 с provider-neutral scene fields; `app/prompt_builder.py` создаёт только English/ASCII technical prompt. Correction редактирует private original выбранной успешной версии и меняет только затронутые поля, Repeat сохраняет тот же intent и input branch. Raw Russian text никогда не передаётся ImageProvider. Подробности: [аудит до изменений](docs/AI_BRAIN_AUDIT.md), [архитектура](docs/AI_BRAIN_ARCHITECTURE.md), [правила prompt](docs/PROMPT_ENGINEERING_RULES.md).
 
 Безопасный административный просмотр intent/provider prompt:
 
@@ -35,7 +35,7 @@ python -m app.main ai-inspect --attempt-id <opaque-attempt-id>
 
 Команда не выводит platform user ID, файловые пути, ключи или исходный пользовательский free text.
 
-Личная AI-фотостудия: все работы пользователя, их версии и избранное живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Pixora. Pixora v1 использует только OpenAI `gpt-image-2`; экспериментальные hybrid-processing модули выключены. Доступ закрыт allowlist: owner и управляемые этапы 5/10/20 пользователей. Обычный deploy всегда возвращает `MAX_POLL_OBSERVE_ONLY=true` и pilot limit 0.
+Личная AI-фотостудия: все работы пользователя, их версии и избранное живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Ravuna. Ravuna v1 использует только OpenAI `gpt-image-2`; экспериментальные hybrid-processing модули выключены. Доступ закрыт allowlist: owner и управляемые этапы 5/10/20 пользователей. Обычный deploy всегда возвращает `MAX_POLL_OBSERVE_ONLY=true` и pilot limit 0.
 
 ## MAX production smoke
 
@@ -102,7 +102,7 @@ Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `T
 
 ## Commercial payments
 
-Публичный цифровой продукт называется **«Пакет доступа Pixora»** и стоит 49 ₽. После подтверждения оплаты пользователю начисляются две обработки и один оригинал без водяного знака. Для самозанятого с активными «Робочеками СМЗ» письменный ответ Robokassa закрепляет один чек продажи и Receipt `{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]`; `sno`, `payment_method` и `payment_object` не передаются. Внутренний код `continuation_pack_2_plus_1`, credit ledger и entitlement ledger не меняются: платёж не выбирает версию автоматически, entitlement можно применить к любой доступной собственной версии, созданной до или после покупки. Использование пакета новых чеков не создаёт. ResultURL атомарно начисляет обе части пакета и остаётся идемпотентным. Реальные деньги не включены: каждый deploy принудительно оставляет payment/webhook/refund flags off, sandbox mode и no production approval. Read [support decision](docs/ROBOKASSA_SUPPORT_DECISION.md), [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
+Публичный цифровой продукт называется **«Пакет доступа Ravuna»** и стоит 49 ₽. После подтверждения оплаты пользователю начисляются две обработки и один оригинал без водяного знака. Для самозанятого с активными «Робочеками СМЗ» письменный ответ Robokassa закрепляет один чек продажи и Receipt `{"items":[{"name":"Пакет доступа Ravuna","quantity":1,"sum":49.00,"tax":"none"}]`; `sno`, `payment_method` и `payment_object` не передаются. Внутренний код `continuation_pack_2_plus_1`, credit ledger и entitlement ledger не меняются: платёж не выбирает версию автоматически, entitlement можно применить к любой доступной собственной версии, созданной до или после покупки. Использование пакета новых чеков не создаёт. ResultURL атомарно начисляет обе части пакета и остаётся идемпотентным. Реальные деньги не включены: каждый deploy принудительно оставляет payment/webhook/refund flags off, sandbox mode и no production approval. Read [support decision](docs/ROBOKASSA_SUPPORT_DECISION.md), [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
 
 Read-only and dry-run-first operator tools:
 
@@ -153,9 +153,9 @@ Systemd hardening template находится в `ops/photo-bot.service`. Еже
 
 ## Official website
 
-Официальный продуктовый сайт находится в `site/public` и развёртывается отдельно от бота в `/opt/pixora-site`. Он честно описывает закрытое тестирование, ведёт в проверенный MAX-бот и фиксирует единый цифровой продукт: «Пакет доступа Pixora» за 49 ₽, включающий две обработки и один оригинал без водяного знака. Платежи остаются выключенными.
+Официальный продуктовый сайт находится в `site/public` и развёртывается отдельно от бота в `/opt/ravuna-site`. Он честно описывает закрытое тестирование, ведёт в проверенный MAX-бот и фиксирует единый цифровой продукт: «Пакет доступа Ravuna» за 49 ₽, включающий две обработки и один оригинал без водяного знака. Платежи остаются выключенными.
 
-Site workflow закрыт переменной production environment `PIXORA_SITE_DEPLOY_ENABLED`. Её нельзя включать до переноса DNS на Hetzner, выпуска доверенного TLS-сертификата, внешнего HTTPS smoke и подтверждения неизменности backend. Начинать с [site README](site/README.md), [production runbook](docs/SITE_PRODUCTION_RUNBOOK.md), [TLS runbook](docs/TLS_CERTIFICATE_RUNBOOK.md) и [Robokassa checklist](docs/ROBOKASSA_SITE_MODERATION_CHECKLIST.md).
+Site workflow закрыт repository variable `RAVUNA_SITE_DEPLOY_ENABLED`. Её нельзя включать до переноса DNS на Hetzner, выпуска доверенного TLS-сертификата, внешнего HTTPS smoke и подтверждения неизменности backend. Начинать с [site README](site/README.md), [production runbook](docs/SITE_PRODUCTION_RUNBOOK.md), [TLS runbook](docs/TLS_CERTIFICATE_RUNBOOK.md) и [Robokassa checklist](docs/ROBOKASSA_SITE_MODERATION_CHECKLIST.md).
 
 ## Документация
 
@@ -165,7 +165,7 @@ Site workflow закрыт переменной production environment `PIXORA_S
 
 ## Optional OpenAI context (disabled)
 
-Pixora хранит память работы сама, а OpenAI conversation используется как
+Ravuna хранит память работы сама, а OpenAI conversation используется как
 дополнительный контекст для последовательных правок. Интеграция закрыта тремя
 feature flags; обычный deploy устанавливает их в `false`. Текущий production
 endpoint остаётся `/v1/images/edits`.

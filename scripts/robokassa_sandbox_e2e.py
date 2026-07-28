@@ -31,8 +31,8 @@ from app.robokassa import RobokassaPaymentRequest, RobokassaProvider, amount_tex
 
 EVIDENCE_NAME = "robokassa_sandbox_evidence.json"
 RESULT_URL = "https://pixoraai.ru/payments/robokassa/result"
-SUCCESS_URL = "https://pixoraai.ru/payment-success.html"
-FAIL_URL = "https://pixoraai.ru/payment-failed.html"
+SUCCESS_URL = "https://ravuna.ru/payment-success.html"
+FAIL_URL = "https://ravuna.ru/payment-failed.html"
 
 
 class SandboxEvidenceError(RuntimeError):
@@ -344,7 +344,7 @@ def _validated_link(settings: Settings, database: Database, order: Any) -> dict[
     request = RobokassaPaymentRequest(
         invoice_id=int(order["provider_invoice_id"]),
         amount_minor=int(order["amount_minor"]),
-        description="Пакет доступа Pixora: 2 обработки и 1 оригинал",
+        description="Пакет доступа Ravuna: 2 обработки и 1 оригинал",
         public_token=str(order["public_token"]),
         expires_at=datetime.fromisoformat(str(order["expires_at"])),
         receipt_name=settings.payment_receipt_item_name,

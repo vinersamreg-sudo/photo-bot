@@ -12,7 +12,7 @@ class FakeMaxClient:
     last_status_code = 200
 
     def __init__(self, bot=None, error=None) -> None:
-        self.bot = bot or {"user_id": 42, "username": "pixora"}
+        self.bot = bot or {"user_id": 42, "username": "ravuna"}
         self.error = error
         self.closed = False
 

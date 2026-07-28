@@ -2,13 +2,13 @@
 
 ## Promise
 
-Show what Pixora can do with honest before/after demonstrations. Sell the visible
+Show what Ravuna can do with honest before/after demonstrations. Sell the visible
 result, not a model name. Never imply a demonstration is a customer order.
 
 Every post ends with:
 
 > 🎁 Получите 2 бесплатные обработки<br>
-> 👇 Попробовать Pixora
+> 👇 Попробовать Ravuna
 
 The link always contains `utm_source=max`, `utm_medium=channel`,
 `utm_campaign=demo_posts` and a post-specific `utm_content`.
@@ -41,7 +41,7 @@ slots remain unpublished.
 
 Every body contains, without exception:
 
-> Демонстрационный пример Pixora.<br>
+> Демонстрационный пример Ravuna.<br>
 > Изображения созданы специально для демонстрации возможностей сервиса.
 
 ## Metrics

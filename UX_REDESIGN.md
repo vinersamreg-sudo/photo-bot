@@ -1,4 +1,4 @@
-# Pixora v1 MAX UX
+# Ravuna v1 MAX UX
 
 ## Main path
 

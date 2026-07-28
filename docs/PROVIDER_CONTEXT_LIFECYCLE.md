@@ -45,7 +45,7 @@ python -m app.main provider-context-cleanup --execute
 ## Provider retention
 
 Responses chain требует `store=true`. Обычные stored Responses имеют provider
-retention, описанный OpenAI; Conversation objects живут до удаления. Pixora не
+retention, описанный OpenAI; Conversation objects живут до удаления. Ravuna не
 обещает мгновенное физическое удаление без успешного ответа API. При выключенных
 feature flags новые provider contexts не создаются, но cleanup ранее созданных
 контекстов продолжает работать.

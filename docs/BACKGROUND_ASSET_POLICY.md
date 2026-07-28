@@ -1,6 +1,6 @@
 # Background asset policy
 
-Pixora не скачивает случайные фотографии из интернета и не принимает URL как
+Ravuna не скачивает случайные фотографии из интернета и не принимает URL как
 production asset. Каждый фон существует только как локальный файл рядом с
 `catalog.json` и обязан иметь доказуемую commercial provenance.
 
@@ -10,7 +10,7 @@ ID, title/category/tags, location/orientation/aspect ratio, lighting/time/weathe
 horizon, source type/reference, license type/record, commercial-use flag,
 attribution flag, file SHA-256, relative filename, active flag и creation time.
 
-Разрешены только `pixora_owned`, `commercial_license`, `purchased`,
+Разрешены только legacy-идентификатор `pixora_owned`, `commercial_license`, `purchased`,
 `user_provided`, `synthetic_test` и соответствующие source types. Абсолютные пути,
 `..`, symlink, неизвестная license, отсутствие record, запрет commercial use или
 checksum mismatch останавливают загрузку всего каталога.

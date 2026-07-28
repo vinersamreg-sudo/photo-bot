@@ -2,7 +2,7 @@
 
 ## Инвариант
 
-Pixora хранит память работы сама, а OpenAI conversation используется как
+Ravuna хранит память работы сама, а OpenAI conversation используется как
 дополнительный контекст для последовательных правок.
 
 Источник истины: SQLite + private Storage + `GalleryVersion` lineage +

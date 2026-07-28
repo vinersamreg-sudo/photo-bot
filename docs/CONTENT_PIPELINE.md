@@ -2,12 +2,12 @@
 
 ## 1. Prepare an honest case
 
-Use only an image created for Pixora with verified commercial rights. Prepare its
+Use only an image created for Ravuna with verified commercial rights. Prepare its
 finished after-image outside Content Studio. No customer story, order or testimonial
 may be invented.
 
 ```powershell
-scripts\pixora.ps1 content generate `
+scripts\ravuna.ps1 content generate `
   --source-image C:\safe\before.png `
   --after-image C:\safe\after.png `
   --title "Замена фона" `
@@ -20,7 +20,7 @@ scripts\pixora.ps1 content generate `
 Linux production operator command:
 
 ```bash
-/opt/photo-bot/scripts/pixora content generate \
+/opt/photo-bot/scripts/ravuna content generate \
   --source-image /safe/before.png \
   --after-image /safe/after.png \
   --title 'Замена фона' \
@@ -35,10 +35,10 @@ cards and a Russian template post. It performs zero AI calls and zero publicatio
 ## 2. Review queue
 
 ```bash
-pixora content status
-pixora content queue --status needs_review
-pixora content publish --post-id POST_ID --mode preview
-pixora content publish --post-id POST_ID --mode dry_run
+ravuna content status
+ravuna content queue --status needs_review
+ravuna content publish --post-id POST_ID --mode preview
+ravuna content publish --post-id POST_ID --mode dry_run
 ```
 
 Preview and dry-run create only local audit entries. Review the original, result,
@@ -51,18 +51,18 @@ DemoResult instead of approving the bad one.
 All state-changing commands are dry-run first:
 
 ```bash
-pixora content approve --post-id POST_ID --reviewer owner --reason 'visual QA passed'
-pixora content approve --post-id POST_ID --reviewer owner --reason 'visual QA passed' --apply
+ravuna content approve --post-id POST_ID --reviewer owner --reason 'visual QA passed'
+ravuna content approve --post-id POST_ID --reviewer owner --reason 'visual QA passed' --apply
 
-pixora content schedule --post-id POST_ID --at 2026-07-22T10:00:00+04:00
-pixora content schedule --post-id POST_ID --at 2026-07-22T10:00:00+04:00 --apply
+ravuna content schedule --post-id POST_ID --at 2026-07-22T10:00:00+04:00
+ravuna content schedule --post-id POST_ID --at 2026-07-22T10:00:00+04:00 --apply
 ```
 
 Generate the weekly plan without assigning posts:
 
 ```bash
-pixora content schedule --plan-start 2026-07-20 --days 7
-pixora content schedule --plan-start 2026-07-20 --days 7 --apply
+ravuna content schedule --plan-start 2026-07-20 --days 7
+ravuna content schedule --plan-start 2026-07-20 --days 7 --apply
 ```
 
 ## 4. Publication boundary
@@ -79,8 +79,8 @@ No command in this sprint performs a real MAX publication.
 Metrics are imported only after a post is confirmed published:
 
 ```bash
-pixora content analytics --post-id POST_ID
-pixora content analytics --post-id POST_ID --record --apply \
+ravuna content analytics --post-id POST_ID
+ravuna content analytics --post-id POST_ID --record --apply \
   --views 100 --clicks 8 --reactions 5 --comments 1 --conversion-to-bot 2
 ```
 

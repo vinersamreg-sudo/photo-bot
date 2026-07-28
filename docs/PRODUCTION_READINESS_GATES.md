@@ -1,8 +1,8 @@
-# Pixora production readiness gates
+# Ravuna production readiness gates
 
 ## OpenAI budget control
 
-Pixora does not scrape the OpenAI dashboard and never labels a manual number as live. The owner records the last dashboard-confirmed balance:
+Ravuna does not scrape the OpenAI dashboard and never labels a manual number as live. The owner records the last dashboard-confirmed balance:
 
 ```bash
 python -m scripts.openai_balance_confirm \

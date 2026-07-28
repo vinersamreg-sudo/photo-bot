@@ -1,6 +1,7 @@
 {
-  "name": "Pixora AI",
-  "short_name": "Pixora",
+  "id": "/",
+  "name": "Ravuna AI",
+  "short_name": "Ravuna",
   "description": "ИИ-обработка фотографий в MAX",
   "lang": "ru",
   "start_url": "/",

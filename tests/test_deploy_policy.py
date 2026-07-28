@@ -28,7 +28,7 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("REG_RU_", self.workflow)
         self.assertNotIn("trip-day", self.workflow.lower())
         self.assertIn("secrets.HETZNER_HOST", self.workflow)
-        self.assertIn('chmod +x "$ROOT"/scripts/*.sh "$ROOT"/scripts/pixora', self.workflow)
+        self.assertIn('chmod +x "$ROOT"/scripts/*.sh "$ROOT"/scripts/ravuna', self.workflow)
         self.assertIn('cd "$ROOT"', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip install', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip check', self.workflow)
@@ -126,16 +126,16 @@ class DeployPolicyTests(TestCase):
             self.workflow,
         )
         self.assertIn(
-            "set_env PAYMENT_SUCCESS_URL https://pixoraai.ru/payment-success.html",
+            "set_env PAYMENT_SUCCESS_URL https://ravuna.ru/payment-success.html",
             self.workflow,
         )
         self.assertIn(
-            "set_env PAYMENT_FAIL_URL https://pixoraai.ru/payment-failed.html",
+            "set_env PAYMENT_FAIL_URL https://ravuna.ru/payment-failed.html",
             self.workflow,
         )
         self.assertNotIn("legal/payment-refund.html?payment=", self.workflow)
         self.assertIn(
-            "set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Pixora'",
+            "set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Ravuna'",
             self.workflow,
         )
         self.assertNotIn("PAYMENT_RECEIPT_PAYMENT_METHOD", self.workflow)

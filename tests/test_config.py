@@ -88,7 +88,7 @@ class SettingsTests(TestCase):
             "PAYMENT_PROVIDER": "robokassa",
             "PAYMENT_WEBHOOK_LISTENER_ENABLED": "true",
             "PAYMENT_WEBHOOK_ENABLED": "true",
-            "PAYMENT_RESULT_URL": "https://pixora.example/payments/robokassa/result",
+            "PAYMENT_RESULT_URL": "https://ravuna.example/payments/robokassa/result",
             "ROBOKASSA_MERCHANT_LOGIN": "shop",
             "ROBOKASSA_PASSWORD1": "one",
             "ROBOKASSA_PASSWORD2": "two",
@@ -103,7 +103,7 @@ class SettingsTests(TestCase):
             load_settings(environ={
                 **baseline,
                 "ROBOKASSA_MODE": "sandbox",
-                "PAYMENT_RESULT_URL": "http://pixora.example/result",
+                "PAYMENT_RESULT_URL": "http://ravuna.example/result",
             })
         with self.assertRaisesRegex(ValueError, "auth.robokassa.ru"):
             load_settings(environ={
@@ -119,15 +119,15 @@ class SettingsTests(TestCase):
     def test_payment_return_urls_reject_query_parameters(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not contain query parameters"):
             load_settings(environ={
-                "PAYMENT_SUCCESS_URL": "https://pixoraai.ru/payment-success.html?payment=success",
-                "PAYMENT_FAIL_URL": "https://pixoraai.ru/payment-failed.html",
+                "PAYMENT_SUCCESS_URL": "https://ravuna.ru/payment-success.html?payment=success",
+                "PAYMENT_FAIL_URL": "https://ravuna.ru/payment-failed.html",
             })
         settings = load_settings(environ={
-            "PAYMENT_SUCCESS_URL": "https://pixoraai.ru/payment-success.html",
-            "PAYMENT_FAIL_URL": "https://pixoraai.ru/payment-failed.html",
+            "PAYMENT_SUCCESS_URL": "https://ravuna.ru/payment-success.html",
+            "PAYMENT_FAIL_URL": "https://ravuna.ru/payment-failed.html",
         })
-        self.assertEqual(settings.payment_success_url, "https://pixoraai.ru/payment-success.html")
-        self.assertEqual(settings.payment_fail_url, "https://pixoraai.ru/payment-failed.html")
+        self.assertEqual(settings.payment_success_url, "https://ravuna.ru/payment-success.html")
+        self.assertEqual(settings.payment_fail_url, "https://ravuna.ru/payment-failed.html")
 
     def test_business_webhook_requires_listener(self) -> None:
         with self.assertRaisesRegex(ValueError, "LISTENER"):
@@ -139,13 +139,13 @@ class SettingsTests(TestCase):
             })
 
     def test_permanent_receipt_product_is_validated_without_npd_only_fields(self) -> None:
-        with self.assertRaisesRegex(ValueError, "permanent Pixora package"):
+        with self.assertRaisesRegex(ValueError, "permanent Ravuna package"):
             load_settings(environ={"PAYMENT_RECEIPT_ITEM_NAME": "Другая услуга"})
         settings = load_settings(environ={
-            "PAYMENT_RECEIPT_ITEM_NAME": "Пакет доступа Pixora",
+            "PAYMENT_RECEIPT_ITEM_NAME": "Пакет доступа Ravuna",
             "PAYMENT_RECEIPT_TAX": "none",
         })
-        self.assertEqual(settings.payment_receipt_item_name, "Пакет доступа Pixora")
+        self.assertEqual(settings.payment_receipt_item_name, "Пакет доступа Ravuna")
         self.assertFalse(hasattr(settings, "payment_receipt_payment_method"))
         self.assertFalse(hasattr(settings, "payment_receipt_payment_object"))
 
@@ -183,7 +183,7 @@ class SettingsTests(TestCase):
             "PAYMENT_PROVIDER": "robokassa",
             "PAYMENT_WEBHOOK_LISTENER_ENABLED": "true",
             "PAYMENT_WEBHOOK_ENABLED": "true",
-            "PAYMENT_RESULT_URL": "https://pixora.example/payments/robokassa/result",
+            "PAYMENT_RESULT_URL": "https://ravuna.example/payments/robokassa/result",
             "ROBOKASSA_MERCHANT_LOGIN": "shop",
             "ROBOKASSA_PASSWORD1": "one",
             "ROBOKASSA_PASSWORD2": "two",

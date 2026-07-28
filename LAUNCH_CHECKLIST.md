@@ -1,4 +1,4 @@
-# Pixora — launch checklist
+# Ravuna — launch checklist
 
 Актуально на 27.07.2026. Статусы: **BLOCKER**, **REQUIRED FOR PILOT**, **REQUIRED BEFORE PUBLIC**, **CAN WAIT**.
 

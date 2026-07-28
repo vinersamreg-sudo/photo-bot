@@ -13,7 +13,7 @@
 Core, renderer, queue, review, planning and dry-run MAX adapter are implemented.
 Before importing the first real demonstration pair: extend encrypted backup to the
 separate Content Studio SQLite and storage, prove restore/off-site copy, select one
-rights-cleared Pixora-owned case, run visual/operator review, and keep network
+rights-cleared Ravuna-owned case, run visual/operator review, and keep network
 publishing disabled. Enabling real MAX publication remains a later, separate owner
 decision after a manual dry-run comparison.
 

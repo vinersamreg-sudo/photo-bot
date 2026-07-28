@@ -28,7 +28,21 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .site-header { position: fixed; z-index: 50; inset: 0 0 auto; padding: 10px 0; background: rgba(248,245,240,.97); box-shadow: 0 1px 0 var(--border); }
 .header-inner { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; font-weight: 750; letter-spacing: -.025em; font-size: 20px; }
-.brand-mark { width: 34px; height: 34px; padding: 3px; border-radius: 11px; background: var(--ink); fill: var(--paper); }
+.brand-mark { display: none; }
+.brand::before {
+  content: "R";
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 21px;
+  font-weight: 820;
+  line-height: 1;
+}
 .desktop-nav { display: flex; gap: 28px; margin-left: auto; color: #4f4a51; font-size: 14px; }
 .desktop-nav a { transition: color .2s ease; }
 .desktop-nav a:hover { color: var(--ink); }
@@ -141,7 +155,7 @@ details p { max-width: 700px; margin: -5px 45px 24px 0; color: var(--muted); fon
 
 .site-footer { padding: 70px 0 26px; background: #1c191e; color: var(--white); }
 .footer-grid { display: grid; grid-template-columns: 1.5fr 1fr .8fr; gap: 60px; }
-.footer-brand .brand-mark { background: var(--white); fill: var(--ink); }
+.footer-brand .brand::before { background: var(--white); color: var(--ink); }
 .footer-grid > div > p { margin: 17px 0 0; color: #9e969f; }
 .footer-grid nav, .footer-contact { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; color: #c5bec7; font-size: 14px; }
 .footer-grid nav a:hover, .footer-contact a:hover { color: var(--white); }
@@ -205,7 +219,7 @@ details p { max-width: 700px; margin: -5px 45px 24px 0; color: var(--muted); fon
   .site-header { padding: 10px 0; background: rgba(248,245,240,.97); }
   .header-inner > .button { display: none; }
   .brand { font-size: 18px; }
-  .brand-mark { width: 31px; height: 31px; }
+  .brand::before { width: 31px; height: 31px; flex-basis: 31px; font-size: 19px; }
   .hero { padding: 110px 0 48px; }
   .hero-grid { display: flex; flex-direction: column; gap: 40px; }
   .hero-copy { padding-top: 0; }

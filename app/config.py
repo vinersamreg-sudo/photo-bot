@@ -349,13 +349,13 @@ def load_settings(
     app_env = values.get("APP_ENV", "production").strip() or "production"
     image_model = values.get("OPENAI_IMAGE_MODEL", "").strip()
     if app_env == "production" and image_model and image_model != "gpt-image-2":
-        raise ValueError("Pixora v1 production requires OPENAI_IMAGE_MODEL=gpt-image-2")
+        raise ValueError("Ravuna v1 production requires OPENAI_IMAGE_MODEL=gpt-image-2")
     payment_provider = values.get("PAYMENT_PROVIDER", "disabled").strip().lower() or "disabled"
     if payment_provider not in {"disabled", "robokassa"}:
         raise ValueError("PAYMENT_PROVIDER must be disabled or robokassa")
     payment_currency = values.get("PAYMENT_CURRENCY", "RUB").strip().upper() or "RUB"
     if payment_currency != "RUB":
-        raise ValueError("Pixora payments currently support only RUB")
+        raise ValueError("Ravuna payments currently support only RUB")
     robokassa_mode = values.get("ROBOKASSA_MODE", "sandbox").strip().lower() or "sandbox"
     if robokassa_mode not in {"sandbox", "production"}:
         raise ValueError("ROBOKASSA_MODE must be sandbox or production")
@@ -416,7 +416,7 @@ def load_settings(
     ).strip() or RECEIPT_ITEM_NAME
     if receipt_item_name != RECEIPT_ITEM_NAME:
         raise ValueError(
-            "PAYMENT_RECEIPT_ITEM_NAME must match the permanent Pixora package"
+            "PAYMENT_RECEIPT_ITEM_NAME must match the permanent Ravuna package"
         )
     receipt_tax = values.get("PAYMENT_RECEIPT_TAX", "none").strip() or "none"
     allowed_taxes = {

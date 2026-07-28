@@ -10,11 +10,11 @@
 
 ## Sale boundary
 
-Order creation writes exactly one `payment_receipts` row with `receipt_type=payment`, item «Пакет доступа Pixora», quantity 1, amount 4900 and tax `none`. Legacy `payment_method` and `payment_object` columns remain in SQLite for schema compatibility but new sale rows store empty values and the provider never serializes those fields.
+Order creation writes exactly one `payment_receipts` row with `receipt_type=payment`, item «Пакет доступа Ravuna», quantity 1, amount 4900 and tax `none`. Legacy `payment_method` and `payment_object` columns remain in SQLite for schema compatibility but new sale rows store empty values and the provider never serializes those fields.
 
 The provider renders the canonical Receipt:
 
-`{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]}`
+`{"items":[{"name":"Пакет доступа Ravuna","quantity":1,"sum":49.00,"tax":"none"}]}`
 
 The once-encoded Receipt is signed. The GET query contains its twice-encoded form.
 

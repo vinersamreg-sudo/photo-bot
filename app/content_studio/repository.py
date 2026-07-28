@@ -1,6 +1,6 @@
 """Dedicated SQLite repository for Content Studio.
 
-The database is intentionally separate from Pixora's user, Gallery and payment data.
+The database is intentionally separate from Ravuna's user, Gallery and payment data.
 """
 
 from __future__ import annotations

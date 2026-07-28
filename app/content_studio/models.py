@@ -13,6 +13,8 @@ def utc_now() -> str:
 
 
 class AssetSourceType(StrEnum):
+    # Immutable persisted value retained for database compatibility after the
+    # Ravuna brand migration.
     CREATED_FOR_PIXORA = "created_for_pixora"
 
 

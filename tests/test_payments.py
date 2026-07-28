@@ -47,7 +47,7 @@ class Clock:
 
 class PaymentTests(TestCase):
     def test_public_and_fiscal_product_name_are_the_same_single_item(self) -> None:
-        self.assertEqual(USER_PRODUCT_NAME, "Пакет доступа Pixora")
+        self.assertEqual(USER_PRODUCT_NAME, "Пакет доступа Ravuna")
         self.assertEqual(RECEIPT_ITEM_NAME, USER_PRODUCT_NAME)
 
     def setUp(self) -> None:
@@ -64,9 +64,9 @@ class PaymentTests(TestCase):
             payment_webhook_listener_enabled=True,
             payment_webhook_enabled=True,
             payment_result_url="https://example.test/payments/robokassa/result",
-            payment_success_url="https://pixoraai.ru/payment-success.html",
-            payment_fail_url="https://pixoraai.ru/payment-failed.html",
-            robokassa_merchant_login="pixora-test",
+            payment_success_url="https://ravuna.ru/payment-success.html",
+            payment_fail_url="https://ravuna.ru/payment-failed.html",
+            robokassa_merchant_login="ravuna-test",
             robokassa_password1="password-one",
             robokassa_password2="password-two",
             robokassa_password3="password-three",
@@ -116,13 +116,13 @@ class PaymentTests(TestCase):
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
         raw_query = urlparse(order.payment_url).query
         query = parse_qs(raw_query)
-        self.assertEqual(query["MerchantLogin"], ["pixora-test"])
+        self.assertEqual(query["MerchantLogin"], ["ravuna-test"])
         self.assertEqual(query["OutSum"], ["49.00"])
         self.assertEqual(query["InvId"], [str(order.provider_invoice_id)])
         self.assertEqual(query["IsTest"], ["1"])
         self.assertEqual(query["ExpirationDate"], ["2026-07-19T11:30"])
         self.assertEqual(query["Shp_order"], [order.public_token])
-        self.assertEqual(query["Description"], ["Пакет доступа Pixora"])
+        self.assertEqual(query["Description"], ["Пакет доступа Ravuna"])
         self.assertNotIn("SuccessUrl2", query)
         self.assertNotIn("SuccessUrl2Method", query)
         self.assertNotIn("FailUrl2", query)
@@ -135,7 +135,7 @@ class PaymentTests(TestCase):
         receipt = json.loads(receipt_text)
         self.assertEqual(receipt, {
             "items": [{
-                "name": "Пакет доступа Pixora",
+                "name": "Пакет доступа Ravuna",
                 "quantity": 1,
                 "sum": 49.0,
                 "tax": "none",
@@ -157,9 +157,9 @@ class PaymentTests(TestCase):
         self.assertIn("%25", raw_receipt)
         self.assertEqual(unquote(raw_receipt), receipt_once_encoded)
         self.assertEqual(unquote(unquote(raw_receipt)), receipt_text)
-        self.assertEqual(receipt["items"][0]["name"], "Пакет доступа Pixora")
+        self.assertEqual(receipt["items"][0]["name"], "Пакет доступа Ravuna")
         expected_signature_base = (
-            f"pixora-test:49.00:{order.provider_invoice_id}:"
+            f"ravuna-test:49.00:{order.provider_invoice_id}:"
             f"{receipt_once_encoded}:"
             f"password-one:Shp_order={order.public_token}"
         )
@@ -168,7 +168,7 @@ class PaymentTests(TestCase):
             hashlib.sha256(expected_signature_base.encode("utf-8")).hexdigest().upper(),
         )
         wrongly_double_encoded_signature_base = (
-            f"pixora-test:49.00:{order.provider_invoice_id}:"
+            f"ravuna-test:49.00:{order.provider_invoice_id}:"
             f"{raw_receipt}:"
             f"password-one:Shp_order={order.public_token}"
         )
@@ -178,9 +178,9 @@ class PaymentTests(TestCase):
                 wrongly_double_encoded_signature_base.encode("utf-8")
             ).hexdigest().upper(),
         )
-        tampered_receipt = receipt_once_encoded.replace("Pixora", "Pixorb", 1)
+        tampered_receipt = receipt_once_encoded.replace("Ravuna", "Ravunb", 1)
         tampered_signature_base = (
-            f"pixora-test:49.00:{order.provider_invoice_id}:"
+            f"ravuna-test:49.00:{order.provider_invoice_id}:"
             f"{tampered_receipt}:"
             f"password-one:Shp_order={order.public_token}"
         )
@@ -194,17 +194,17 @@ class PaymentTests(TestCase):
 
     def test_payment_link_rejects_timezone_naive_expiration(self) -> None:
         provider = RobokassaProvider(
-            merchant_login="pixora-test",
+            merchant_login="ravuna-test",
             password1="password-one",
             password2="password-two",
         )
         request = RobokassaPaymentRequest(
             invoice_id=1,
             amount_minor=4900,
-            description="Pixora",
+            description="Ravuna",
             public_token="token",
             expires_at=datetime(2026, 7, 19, 8, 30),
-            receipt_name="Pixora",
+            receipt_name="Ravuna",
             receipt_tax="none",
         )
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
@@ -250,14 +250,14 @@ class PaymentTests(TestCase):
         request = RobokassaPaymentRequest(
             invoice_id=1,
             amount_minor=4900,
-            description="Пакет доступа Pixora",
+            description="Пакет доступа Ravuna",
             public_token="token",
             expires_at=self.clock(),
-            receipt_name="Пакет доступа Pixora",
+            receipt_name="Пакет доступа Ravuna",
             receipt_tax="none",
         )
         expected = (
-            '{"items":[{"name":"Пакет доступа Pixora",'
+            '{"items":[{"name":"Пакет доступа Ravuna",'
             '"quantity":1,"sum":49.00,"tax":"none"}]}'
         )
         self.assertEqual(RobokassaProvider._receipt(request), expected)
@@ -277,7 +277,7 @@ class PaymentTests(TestCase):
         empty = RobokassaPaymentRequest(
             invoice_id=1,
             amount_minor=4900,
-            description="Пакет доступа Pixora",
+            description="Пакет доступа Ravuna",
             public_token="token",
             expires_at=self.clock(),
             receipt_name=" ",
@@ -664,7 +664,7 @@ class PaymentTests(TestCase):
 
         class FakeRefundProvider:
             name = "robokassa"
-            merchant_login = "pixora-test"
+            merchant_login = "ravuna-test"
 
             def create_refund(self, request):
                 self.request = request
@@ -987,7 +987,7 @@ class PaymentTests(TestCase):
             description="description",
             public_token="token",
             expires_at=self.clock(),
-            receipt_name="Пакет доступа Pixora",
+            receipt_name="Пакет доступа Ravuna",
             receipt_tax="none",
         )
         receipt = json.loads(RobokassaProvider._receipt(request))

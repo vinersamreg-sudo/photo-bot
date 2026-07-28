@@ -268,8 +268,8 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
     success = urlsplit(settings.payment_success_url)
     failure = urlsplit(settings.payment_fail_url)
     result_expected = f"https://pixoraai.ru{settings.payment_webhook_path}"
-    success_expected = "https://pixoraai.ru/payment-success.html"
-    failure_expected = "https://pixoraai.ru/payment-failed.html"
+    success_expected = "https://ravuna.ru/payment-success.html"
+    failure_expected = "https://ravuna.ru/payment-failed.html"
     checks = {
         "provider_selected": settings.payment_provider == "robokassa",
         "sandbox_mode": settings.robokassa_mode == "sandbox",
@@ -291,7 +291,7 @@ def robokassa_health(settings: Settings, database: Database) -> dict[str, Any]:
         "webhook_path_exact": settings.payment_webhook_path == "/payments/robokassa/result",
         "currency_rub": settings.payment_currency == "RUB",
         "price_49_rub": settings.continuation_pack_price_rub == 49,
-        "receipt_name_exact": settings.payment_receipt_item_name == "Пакет доступа Pixora",
+        "receipt_name_exact": settings.payment_receipt_item_name == "Пакет доступа Ravuna",
         "receipt_tax_none": settings.payment_receipt_tax == "none",
     }
     with database.read() as connection:

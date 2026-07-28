@@ -34,7 +34,7 @@ class CommerceLedgerTests(TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.database = Database(self.root / "pixora.sqlite3")
+        self.database = Database(self.root / "ravuna.sqlite3")
         self.clock = Clock()
         self.service = CommerceService(self.database, self.clock)
         self.user_id = self._insert_user("owner")
@@ -157,7 +157,7 @@ class CommerceLedgerTests(TestCase):
 
     def test_product_constants_are_the_permanent_two_plus_one_model(self) -> None:
         self.assertEqual(PRODUCT_CODE, "continuation_pack_2_plus_1")
-        self.assertEqual(PRODUCT_NAME, "Pixora Access Pack")
+        self.assertEqual(PRODUCT_NAME, "Ravuna Access Pack")
         self.assertEqual(PRICE_MINOR, 4_900)
         self.assertEqual(INITIAL_GENERATION_CREDITS, 2)
         self.assertEqual(GENERATION_CREDITS_PER_PACK, 2)

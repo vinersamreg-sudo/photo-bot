@@ -1,4 +1,4 @@
-"""Operator CLI exposed as ``pixora content ...``."""
+"""Operator CLI exposed as ``ravuna content ...``."""
 
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pixora")
+    parser = argparse.ArgumentParser(prog="ravuna")
     commands = parser.add_subparsers(dest="command", required=True)
-    content = commands.add_parser("content", help="Pixora Content Studio")
+    content = commands.add_parser("content", help="Ravuna Content Studio")
     actions = content.add_subparsers(dest="content_command", required=True)
 
     status = actions.add_parser("status")

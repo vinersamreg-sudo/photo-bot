@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Ravuna public pages -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://pixoraai.ru/</loc><lastmod>2026-07-20</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
-  <url><loc>https://pixoraai.ru/contacts.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
-  <url><loc>https://pixoraai.ru/payment-success.html</loc><lastmod>2026-07-22</lastmod><changefreq>yearly</changefreq><priority>0.2</priority></url>
-  <url><loc>https://pixoraai.ru/payment-failed.html</loc><lastmod>2026-07-22</lastmod><changefreq>yearly</changefreq><priority>0.2</priority></url>
-  <url><loc>https://pixoraai.ru/legal/offer.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
-  <url><loc>https://pixoraai.ru/legal/privacy.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
-  <url><loc>https://pixoraai.ru/legal/personal-data.html</loc><lastmod>2026-07-19</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
-  <url><loc>https://pixoraai.ru/legal/payment-refund.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
-  <url><loc>https://pixoraai.ru/legal/terms.html</loc><lastmod>2026-07-19</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://ravuna.ru/</loc><lastmod>2026-07-20</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://ravuna.ru/contacts.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://ravuna.ru/payment-success.html</loc><lastmod>2026-07-22</lastmod><changefreq>yearly</changefreq><priority>0.2</priority></url>
+  <url><loc>https://ravuna.ru/payment-failed.html</loc><lastmod>2026-07-22</lastmod><changefreq>yearly</changefreq><priority>0.2</priority></url>
+  <url><loc>https://ravuna.ru/legal/offer.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://ravuna.ru/legal/privacy.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://ravuna.ru/legal/personal-data.html</loc><lastmod>2026-07-19</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://ravuna.ru/legal/payment-refund.html</loc><lastmod>2026-07-20</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://ravuna.ru/legal/terms.html</loc><lastmod>2026-07-19</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
 </urlset>

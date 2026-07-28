@@ -1,4 +1,9 @@
-"""Encrypted, restore-tested SQLite backups for Pixora operations."""
+"""Encrypted, restore-tested SQLite backups for Ravuna operations.
+
+The ``pixora-`` filename prefix is retained as an immutable backup-format
+identifier so existing encrypted backup rotation and restore discovery remain
+compatible across the brand migration.
+"""
 
 from __future__ import annotations
 

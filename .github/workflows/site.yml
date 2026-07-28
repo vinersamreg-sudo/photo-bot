@@ -1,4 +1,4 @@
-name: Pixora site CI and deploy
+name: Ravuna site CI and deploy
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pixora-site-production
+  group: ravuna-site-production
   cancel-in-progress: false
 
 jobs:
@@ -23,8 +23,6 @@ jobs:
       - name: Stamp artifact version
         shell: bash
         run: printf '%s\n' "$GITHUB_SHA" > site/public/version.txt
-      - name: Build Ravuna domain variant
-        run: python site/scripts/build_ravuna.py
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -38,14 +36,11 @@ jobs:
         run: |
           python -m unittest discover -s site/tests -v
           $server = Start-Process python -ArgumentList '-m','http.server','4173','--bind','127.0.0.1','--directory','site/public' -PassThru
-          $ravunaServer = Start-Process python -ArgumentList '-m','http.server','4174','--bind','127.0.0.1','--directory','site/ravuna-public' -PassThru
           try {
             Start-Sleep -Seconds 1
             ./site/scripts/smoke.ps1
-            ./site/scripts/smoke.ps1 -BaseUrl "http://127.0.0.1:4174" -BrandName "Ravuna"
           } finally {
             Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
-            Stop-Process -Id $ravunaServer.Id -ErrorAction SilentlyContinue
           }
       - name: Measure Lighthouse budgets
         working-directory: site
@@ -62,7 +57,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: pixora-lighthouse-${{ github.sha }}
+          name: ravuna-lighthouse-${{ github.sha }}
           path: site/.lighthouse/report-*.json
           include-hidden-files: true
           if-no-files-found: warn
@@ -72,26 +67,19 @@ jobs:
           python site/scripts/assert_lighthouse.py site/.lighthouse/report-desktop.json
       - uses: actions/upload-artifact@v6
         with:
-          name: pixora-site-${{ github.sha }}
-          path: site/public
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v6
-        with:
           name: ravuna-site-${{ github.sha }}
-          path: site/ravuna-public
+          path: site/public
           if-no-files-found: error
 
   deploy:
     needs: test
-    if: vars.PIXORA_SITE_DEPLOY_ENABLED == 'true'
+    if: vars.RAVUNA_SITE_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v7
       - name: Stamp release version
         run: printf '%s\n' "$GITHUB_SHA" > site/public/version.txt
-      - name: Build Ravuna release
-        run: python site/scripts/build_ravuna.py
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
@@ -103,7 +91,7 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
-      - name: Deploy immutable release
+      - name: Deploy Ravuna-branded legacy ResultURL surface
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
@@ -138,7 +126,7 @@ jobs:
             printf '%s\n' '$GITHUB_SHA' > \"\$BASE/deployed_commit.txt\"
             if ! curl --fail --silent --show-error --resolve pixoraai.ru:443:127.0.0.1 https://pixoraai.ru/ >/dev/null; then
               if test -n \"\$OLD\"; then ln -sfn \"\$OLD\" \"\$BASE/current.tmp\"; mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"; fi
-              echo 'Release smoke failed; current restored' >&2
+              echo 'Legacy ResultURL surface smoke failed; current restored' >&2
               exit 1
             fi"
       - name: Deploy Ravuna immutable release
@@ -153,7 +141,7 @@ jobs:
             mkdir -p /opt/ravuna-site/releases /opt/ravuna-site/shared/acme
             rm -rf '$STAGING'
             mkdir '$STAGING'"
-          rsync -az --delete --chmod=D755,F644 -e "ssh -p $SSH_PORT" site/ravuna-public/ "$SSH_USER@$SSH_HOST:$STAGING/"
+          rsync -az --delete --chmod=D755,F644 -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$STAGING/"
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
             BASE=/opt/ravuna-site
             test -f '$STAGING/index.html'

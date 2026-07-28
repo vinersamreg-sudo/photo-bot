@@ -1,4 +1,4 @@
-"""Offline benchmark for Pixora's local composite and enhancement stages.
+"""Offline benchmark for Ravuna's local composite and enhancement stages.
 
 The benchmark creates procedural fixtures in a temporary directory. It never
 downloads assets, loads user data, or invokes an external image provider.
@@ -77,7 +77,7 @@ def _write_fixtures(root: Path, size: int) -> tuple[Path, Path, Path]:
 
 
 def run(iterations: int, size: int) -> dict[str, object]:
-    with tempfile.TemporaryDirectory(prefix="pixora-benchmark-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="ravuna-benchmark-") as temporary:
         root = Path(temporary)
         source_path, background_path, mask_path = _write_fixtures(root, size)
         checksum = hashlib.sha256(background_path.read_bytes()).hexdigest()
@@ -99,7 +99,7 @@ def run(iterations: int, size: int) -> dict[str, object]:
                 "source_type": "synthetic_test",
                 "source_reference": "generated-in-process",
                 "license_type": "synthetic_test",
-                "license_record": "Pixora procedural benchmark fixture",
+                "license_record": "Ravuna procedural benchmark fixture",
                 "commercial_use_allowed": True,
                 "attribution_required": False,
                 "file_checksum": checksum,

@@ -38,7 +38,7 @@ MAX webhook, queue/workers, object storage and horizontal scale are deferred. Th
 
 ## Operator content plane
 
-Pixora Content Studio lives under `app/content_studio` and has a separate SQLite
+Ravuna Content Studio lives under `app/content_studio` and has a separate SQLite
 database and storage root under `data/content_studio`. It consumes only explicitly
 licensed demonstration before/after files. It shares no tables, services or runtime
 handlers with MAX UX, Gallery, AI Brain or payments. Platform-neutral domain and

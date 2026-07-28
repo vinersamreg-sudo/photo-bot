@@ -23,7 +23,7 @@ class RobokassaSignatureBisectTests(TestCase):
         self.password = "fixture-password-one"
         self.base_invoice = 1_800_000_000_000_000
         self.variants = build_variants(
-            merchant_login="pixora-fixture",
+            merchant_login="ravuna-fixture",
             password1=self.password,
             base_invoice_id=self.base_invoice,
             now=datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc),
@@ -69,23 +69,23 @@ class RobokassaSignatureBisectTests(TestCase):
         fail = quote(FAIL_URL, safe="")
         expected = {
             "A": (
-                f"pixora-fixture:{OUT_SUM}:{self.base_invoice + 1}:[REDACTED]"
+                f"ravuna-fixture:{OUT_SUM}:{self.base_invoice + 1}:[REDACTED]"
             ),
             "B": (
-                f"pixora-fixture:{OUT_SUM}:{self.base_invoice + 2}:"
+                f"ravuna-fixture:{OUT_SUM}:{self.base_invoice + 2}:"
                 f"{receipt}:[REDACTED]"
             ),
             "C": (
-                f"pixora-fixture:{OUT_SUM}:{self.base_invoice + 3}:"
+                f"ravuna-fixture:{OUT_SUM}:{self.base_invoice + 3}:"
                 f"{receipt}:[REDACTED]:Shp_order=bisect_{self.base_invoice + 3}"
             ),
             "D": (
-                f"pixora-fixture:{OUT_SUM}:{self.base_invoice + 4}:"
+                f"ravuna-fixture:{OUT_SUM}:{self.base_invoice + 4}:"
                 f"{receipt}:{success}:GET:{fail}:GET:[REDACTED]:"
                 f"Shp_order=bisect_{self.base_invoice + 4}"
             ),
             "E": (
-                f"pixora-fixture:{OUT_SUM}:{self.base_invoice + 5}:"
+                f"ravuna-fixture:{OUT_SUM}:{self.base_invoice + 5}:"
                 f"{receipt}:{success}:GET:{fail}:GET:[REDACTED]:"
                 f"Shp_order=bisect_{self.base_invoice + 5}"
             ),

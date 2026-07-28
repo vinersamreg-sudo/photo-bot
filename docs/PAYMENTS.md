@@ -1,15 +1,15 @@
-# Pixora Payments
+# Ravuna Payments
 
 ## Product
 
-Pixora sells one digital service: «Пакет доступа Pixora» for 49 ₽. It includes two photo processing operations and one original without a watermark. There is no subscription or automatic renewal. A verified ResultURL atomically grants two internal credits and one independent original entitlement; it never auto-selects a version.
+Ravuna sells one digital service: «Пакет доступа Ravuna» for 49 ₽. It includes two photo processing operations and one original without a watermark. There is no subscription or automatic renewal. A verified ResultURL atomically grants two internal credits and one independent original entitlement; it never auto-selects a version.
 
 ## Fiscal model
 
 The mandatory single-item Receipt is:
 
 ```json
-{"items":[{"name":"Пакет доступа Pixora","quantity":1,"sum":49.00,"tax":"none"}]}
+{"items":[{"name":"Пакет доступа Ravuna","quantity":1,"sum":49.00,"tax":"none"}]}
 ```
 
 This is the final model confirmed in writing by Robokassa support for a self-employed merchant using active «Робочеки СМЗ». `sno`, `payment_method` and `payment_object` are omitted. `PRICE_MINOR=4900` is the money source; rendered item sum and `OutSum` are both 49.00. See [the support decision](ROBOKASSA_SUPPORT_DECISION.md).

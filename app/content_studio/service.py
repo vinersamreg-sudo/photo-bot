@@ -63,7 +63,10 @@ class ContentStudioService:
         commercial_allowed: bool = True,
     ) -> DemoAsset:
         if source_type is not AssetSourceType.CREATED_FOR_PIXORA:
-            raise ValueError("v1 accepts only assets created specifically for Pixora")
+            raise ValueError(
+                "v1 accepts only assets created specifically for Ravuna "
+                "(stored under the legacy created_for_pixora enum)"
+            )
         if license_status is not LicenseStatus.VERIFIED or not commercial_allowed:
             raise ValueError("asset must have verified commercial permission")
         title = title.strip()
