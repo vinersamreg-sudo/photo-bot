@@ -375,18 +375,19 @@ class MaxApiClient:
         image: Path,
         caption: str,
         buttons: Sequence[Button],
-    ) -> bool:
+    ) -> Optional[str]:
         try:
             token = self.upload_image(image)
-            self.send_message(platform_user_id, caption, buttons, image_token=token)
-            return True
+            return self.send_message(
+                platform_user_id, caption, buttons, image_token=token
+            )
         except MaxTransportError as exc:
             LOGGER.warning(
                 "MAX image delivery failed (kind=%s,http_status=%s)",
                 exc.kind,
                 exc.http_status,
             )
-            return False
+            return None
 
 
 class SingleInstanceLock:

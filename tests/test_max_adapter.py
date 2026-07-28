@@ -36,7 +36,7 @@ class Transport:
 
     def send_image(self, platform_user_id, image, caption, buttons):
         self.sent.append((platform_user_id, image, caption, buttons))
-        return True
+        return f"image-{len(self.sent)}"
 
 
 class MaxAdapterTests(TestCase):

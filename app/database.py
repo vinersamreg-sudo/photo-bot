@@ -289,6 +289,15 @@ CREATE TABLE IF NOT EXISTS max_dialogs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS max_active_keyboards (
+    platform_user_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    message_text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(platform_user_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_max_active_keyboards_user
+ON max_active_keyboards(platform_user_id, created_at);
 CREATE TABLE IF NOT EXISTS max_legal_documents (
     document_type TEXT NOT NULL,
     version TEXT NOT NULL,

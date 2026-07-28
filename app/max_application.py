@@ -115,7 +115,7 @@ class LiveMaxTransport(Protocol):
     def send_image(
         self, platform_user_id: str, image: Path, caption: str,
         buttons: Sequence[Button],
-    ) -> bool: ...
+    ) -> Optional[str]: ...
 
 
 class MaxApplication:
@@ -166,9 +166,9 @@ class MaxApplication:
                     try:
                         self.transport.edit_message(row["status_message_id"], text)
                     except MaxTransportError:
-                        self.transport.send_message(row["platform_user_id"], text)
+                        self._send_message(row["platform_user_id"], text)
                 else:
-                    self.transport.send_message(row["platform_user_id"], text)
+                    self._send_message(row["platform_user_id"], text)
             except MaxTransportError:
                 LOGGER.warning(
                     "Interrupted-processing notice deferred because MAX is unavailable"
@@ -187,6 +187,7 @@ class MaxApplication:
         """Handle one deduplicated event. Returns false for a known duplicate."""
 
         if not self.store.begin_event(event.event_key, event.event_type):
+            self._deactivate_active_keyboards(event)
             return False
         try:
             if event.user_id not in self.settings.max_allowed_user_ids:
@@ -194,9 +195,10 @@ class MaxApplication:
                     self.transport.answer_callback(
                         event.callback_id, "Сервис находится в закрытом тестировании"
                     )
-                self.transport.send_message(event.user_id, OWNER_ONLY_TEXT)
+                self._send_message(event.user_id, OWNER_ONLY_TEXT)
                 self.store.finish_event(event.event_key, True)
                 return True
+            self._deactivate_active_keyboards(event)
             self._dispatch(event)
         except MaxTransportError:
             self.store.finish_event(event.event_key, False)
@@ -207,7 +209,7 @@ class MaxApplication:
                 type(exc).__name__,
             )
             try:
-                self.transport.send_message(
+                self._send_message(
                     event.user_id,
                     "Сервис временно недоступен. Попытка не списана.",
                 )
@@ -217,7 +219,7 @@ class MaxApplication:
         except DemoExpiredError:
             LOGGER.info("MAX demo session expired (event_type=%s)", event.event_type)
             self._reset_dialog_to_main(event.user_id, event.event_key)
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Сессия завершилась.\n\nОтправьте фотографию снова.",
                 upload_view().buttons,
@@ -363,14 +365,14 @@ class MaxApplication:
         status_id = dialog.status_message_id if dialog else None
         if status_id:
             try:
-                self.transport.edit_message(status_id, text, buttons)
+                self._edit_message(user_id, status_id, text, buttons)
             except MaxTransportError:
                 LOGGER.info("MAX processing status edit failed; using one fallback message")
-                self.transport.send_message(user_id, text, buttons)
+                self._send_message(user_id, text, buttons)
             finally:
                 self.store.update(user_id, status_message_id=None)
             return
-        self.transport.send_message(user_id, text, buttons)
+        self._send_message(user_id, text, buttons)
 
     def _dispatch(self, event: MaxIncomingEvent) -> None:
         dialog = self.store.get_or_create(event.user_id, event.chat_id)
@@ -392,7 +394,6 @@ class MaxApplication:
                 }
                 notification = notifications.get(event.callback_payload, "Готово")
                 self.transport.answer_callback(event.callback_id, notification)
-            self._deactivate_callback_keyboard(event)
             self._callback(event, dialog)
             return
         if event.event_type != "message_created":
@@ -409,12 +410,12 @@ class MaxApplication:
                     pending_prompt=text,
                     pending_action="initial",
                 )
-                self.transport.send_message(
+                self._send_message(
                     event.user_id,
                     "Теперь прикрепите фотографию через скрепку 📎.",
                 )
             else:
-                self.transport.send_message(
+                self._send_message(
                     event.user_id,
                     "Прикрепите фотографию через скрепку 📎.",
                 )
@@ -434,7 +435,62 @@ class MaxApplication:
         self._show_main(event.user_id, dialog, event.event_key)
 
     def _send_view(self, user_id: str, view: View) -> str:
-        return self.transport.send_message(user_id, view.text, view.buttons)
+        return self._send_message(user_id, view.text, view.buttons)
+
+    def _send_message(
+        self, user_id: str, text: str, buttons: Sequence[Button] = (), **kwargs
+    ) -> str:
+        message_id = self.transport.send_message(user_id, text, buttons, **kwargs)
+        if buttons:
+            self.store.register_keyboard(user_id, message_id, text)
+        return message_id
+
+    def _send_image(
+        self,
+        user_id: str,
+        image: Path,
+        caption: str,
+        buttons: Sequence[Button],
+    ) -> Optional[str]:
+        message_id = self.transport.send_image(user_id, image, caption, buttons)
+        if message_id and buttons:
+            self.store.register_keyboard(user_id, message_id, caption)
+        return message_id
+
+    def _edit_message(
+        self,
+        user_id: str,
+        message_id: str,
+        text: str,
+        buttons: Sequence[Button] = (),
+    ) -> None:
+        self.transport.edit_message(message_id, text, buttons)
+        if buttons:
+            self.store.register_keyboard(user_id, message_id, text)
+        else:
+            self.store.clear_keyboard(user_id, message_id)
+
+    def _deactivate_active_keyboards(self, event: MaxIncomingEvent) -> None:
+        """Remove every keyboard left by earlier dialog states."""
+
+        active = self.store.active_keyboards(event.user_id)
+        active_ids = {message_id for message_id, _ in active}
+        for message_id, message_text in active:
+            try:
+                self.transport.edit_message(message_id, message_text, ())
+            except MaxTransportError:
+                LOGGER.info(
+                    "MAX stale keyboard could not be deactivated "
+                    "(message_id_present=true)"
+                )
+            else:
+                self.store.clear_keyboard(event.user_id, message_id)
+        if (
+            event.event_type == "message_callback"
+            and event.message_id
+            and event.message_id not in active_ids
+        ):
+            self._deactivate_callback_keyboard(event)
 
     def _deactivate_callback_keyboard(self, event: MaxIncomingEvent) -> None:
         """Make the keyboard that triggered a state transition single-use."""
@@ -480,7 +536,7 @@ class MaxApplication:
             self._send_view(event.user_id, legal_details_view())
             return
         if action == "legal:offer":
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Условия использования\n\n"
                 "Сервис создаёт демо-обработку. Пакет доступа Ravuna включает "
@@ -489,7 +545,7 @@ class MaxApplication:
             )
             return
         if action == "legal:privacy":
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Приватность\n\nФото используется для обработки и передаётся AI-провайдеру.",
                 (Button("← Назад", "settings"),),
@@ -556,7 +612,7 @@ class MaxApplication:
                 event.user_id, "waiting_for_correction", event_key=event.event_key,
                 pending_prompt=None, pending_action="correction",
             )
-            self.transport.send_message(event.user_id, CORRECTION_REQUEST_TEXT)
+            self._send_message(event.user_id, CORRECTION_REQUEST_TEXT)
         elif action == "result:repeat":
             self._track(
                 "repeat_started",
@@ -667,12 +723,12 @@ class MaxApplication:
             current_version_id=None,
         )
         if target == "waiting_for_source":
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Пришлите фотографию 📷",
             )
         else:
-            self.transport.send_message(event.user_id, PHOTO_REUSED_TEXT)
+            self._send_message(event.user_id, PHOTO_REUSED_TEXT)
 
     def _receive_source(
         self,
@@ -680,7 +736,7 @@ class MaxApplication:
         dialog: MaxDialog,
     ) -> None:
         if not event.image_url:
-            self.transport.send_message(event.user_id, "Пришлите фотографию 📷")
+            self._send_message(event.user_id, "Пришлите фотографию 📷")
             return
         destination = self.settings.temp_dir / f"max-{event.message_id or event.event_key}.upload"
         try:
@@ -761,7 +817,7 @@ class MaxApplication:
                     )
                 self._receive_prompt(prompt_event, updated)
             else:
-                self.transport.send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
+                self._send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
 
     def _session_is_usable(self, session_id: str) -> bool:
         with self.database.read() as connection:
@@ -798,7 +854,7 @@ class MaxApplication:
     def _receive_prompt(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         prompt = (event.text or "").strip()
         if not prompt:
-            self.transport.send_message(event.user_id, "Что изменить?")
+            self._send_message(event.user_id, "Что изменить?")
             return
         if len(prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is too long")
@@ -836,7 +892,7 @@ class MaxApplication:
     def _show_intent_ambiguity(
         self, platform_user_id: str, _exc: IntentAmbiguityError
     ) -> None:
-        self.transport.send_message(
+        self._send_message(
             platform_user_id,
             "Оставить текущий фон и только улучшить его?",
             (
@@ -888,7 +944,7 @@ class MaxApplication:
             self._send_view(event.user_id, result_actions(0))
             return
         remaining_after = available - 1
-        status_id = self.transport.send_message(event.user_id, PROCESSING_TEXT)
+        status_id = self._send_message(event.user_id, PROCESSING_TEXT)
         self.store.transition(
             event.user_id, "processing", event_key=event.event_key,
             status_message_id=status_id,
@@ -901,9 +957,9 @@ class MaxApplication:
 
         def deliver(preview: Path, _attempt_id: str) -> bool:
             caption = result_actions(remaining_after).text
-            return self.transport.send_image(
+            return bool(self._send_image(
                 event.user_id, preview, caption, result_actions(remaining_after).buttons
-            )
+            ))
 
         try:
             result = self.adapter.generate(
@@ -964,7 +1020,7 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        self.transport.send_message(platform_user_id, "Добавлено в избранное ⭐")
+        self._send_message(platform_user_id, "Добавлено в избранное ⭐")
 
     def _unlock_or_deliver(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_version_id:
@@ -977,7 +1033,7 @@ class MaxApplication:
             self._buy_continuation_pack(event, dialog)
             return
         try:
-            delivered = self.transport.send_image(
+            delivered = self._send_image(
                 event.user_id,
                 reservation.original_path,
                 "Оригинал без водяного знака.",
@@ -1011,13 +1067,13 @@ class MaxApplication:
             gallery_item_id=dialog.current_gallery_item_id,
         )
         if delivered:
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Оригинал готов ✅",
                 delivered_actions(),
             )
         else:
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Не удалось отправить оригинал. Право на скачивание сохранено.",
                 retry_delivery_actions(),
@@ -1032,7 +1088,7 @@ class MaxApplication:
             gallery_item_id=dialog.current_gallery_item_id,
         )
         if not self.settings.payments_enabled:
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Пакет доступа Ravuna — 49 ₽\n\n"
                 "После оплаты начисляется:\n"
@@ -1071,20 +1127,20 @@ class MaxApplication:
                     dialog.user_id, version_id, f"max:{event.event_key}"
                 )
             except PaymentUnavailable:
-                self.transport.send_message(event.user_id, UNLOCK_PLACEHOLDER)
+                self._send_message(event.user_id, UNLOCK_PLACEHOLDER)
                 return
             except PaymentError:
-                self.transport.send_message(
+                self._send_message(
                     event.user_id, "Не удалось подготовить оплату. Попробуйте позже."
                 )
                 return
             if self._payment_card_was_sent(order.id):
-                self.transport.send_message(
+                self._send_message(
                     event.user_id,
                     "Ссылка на оплату уже создана.",
                 )
                 return
-            payment_message_id = self.transport.send_message(
+            payment_message_id = self._send_message(
                 event.user_id,
                 "Пакет доступа Ravuna — 49 ₽\n\n"
                 "После оплаты начисляется:\n"
@@ -1152,17 +1208,21 @@ class MaxApplication:
     def _deactivate_payment_card(self, order_id: str) -> None:
         with self.database.read() as connection:
             row = connection.execute(
-                """SELECT provider_request_id FROM payment_attempts
-                   WHERE order_id=? AND purpose='max_checkout_card'
-                         AND status='succeeded'
-                   ORDER BY started_at DESC LIMIT 1""",
+                """SELECT a.provider_request_id,u.platform_user_id
+                   FROM payment_attempts AS a
+                   JOIN payment_orders AS o ON o.id=a.order_id
+                   JOIN users AS u ON u.id=o.user_id
+                   WHERE a.order_id=? AND a.purpose='max_checkout_card'
+                         AND a.status='succeeded'
+                   ORDER BY a.started_at DESC LIMIT 1""",
                 (order_id,),
             ).fetchone()
         message_id = row["provider_request_id"] if row else None
         if not message_id:
             return
         try:
-            self.transport.edit_message(
+            self._edit_message(
+                row["platform_user_id"],
                 message_id,
                 "Оплата подтверждена ✅",
                 (),
@@ -1198,13 +1258,13 @@ class MaxApplication:
         balance = self.demo.commerce.balance(row["user_id"])
         entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
         actions = paid_actions()
-        self.transport.send_message(
+        self._send_message(
             row["platform_user_id"],
             "✅ Оплата прошла успешно\n\n"
             "Ваш оригинал готов к скачиванию.",
             actions[:1],
         )
-        self.transport.send_message(
+        self._send_message(
             row["platform_user_id"],
             "Осталось:\n"
             f"• обработок — {balance.available};\n"
@@ -1239,7 +1299,7 @@ class MaxApplication:
         )
         original = self.payments.original_for_order(order_id, row["user_id"])
         try:
-            delivered = self.transport.send_image(
+            delivered = self._send_image(
                 row["platform_user_id"],
                 original,
                 "Оригинал без водяного знака.",
@@ -1254,7 +1314,7 @@ class MaxApplication:
         )
         if delivered:
             try:
-                self.transport.send_message(
+                self._send_message(
                     row["platform_user_id"],
                     "Оригинал готов ✅",
                     delivered_actions(),
@@ -1263,7 +1323,7 @@ class MaxApplication:
                 LOGGER.info("Paid original delivered but follow-up actions were not sent")
         else:
             try:
-                self.transport.send_message(
+                self._send_message(
                     row["platform_user_id"],
                     "Не удалось отправить оригинал. Право на скачивание сохранено.",
                     retry_delivery_actions(),
@@ -1279,7 +1339,7 @@ class MaxApplication:
             gallery_item_id=dialog.current_gallery_item_id,
         )
         if not dialog.user_id:
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Здесь пока пусто.\n\nСоздайте первую фотографию.",
                 (Button("← В меню", "menu"),),
@@ -1302,13 +1362,13 @@ class MaxApplication:
             status_message_id=None,
         )
         if not rows:
-            self.transport.send_message(
+            self._send_message(
                 event.user_id,
                 "Здесь пока пусто.\n\nСоздайте первую фотографию.",
                 (Button("← В меню", "menu"),),
             )
             return
-        self.transport.send_message(event.user_id, "📂 Мои работы\n\nВыберите работу.")
+        self._send_message(event.user_id, "📂 Мои работы\n\nВыберите работу.")
         fallback_buttons: list[Button] = []
         for row in rows:
             favorite = " ⭐" if row["favorite"] else ""
@@ -1323,7 +1383,7 @@ class MaxApplication:
                 f"{created} · {count} {version_word}"
             )
             preview = Path(row["cover_preview_path"]) if row["cover_preview_path"] else None
-            if preview and preview.is_file() and self.transport.send_image(
+            if preview and preview.is_file() and self._send_image(
                 event.user_id,
                 preview,
                 caption,
@@ -1337,7 +1397,7 @@ class MaxApplication:
                 )
             )
         if fallback_buttons:
-            self.transport.send_message(
+            self._send_message(
                 event.user_id, "Работы без доступного превью.", tuple(fallback_buttons)
             )
     def _open_work(
@@ -1370,12 +1430,12 @@ class MaxApplication:
         history: bool = False,
     ) -> None:
         if current is None or current.preview_path is None:
-            self.transport.send_message(platform_user_id, "Результат ещё не готов.")
+            self._send_message(platform_user_id, "Результат ещё не готов.")
             return
         heading = "История версий" if history else title
         caption = f"{heading}{' ⭐' if favorite or current.favorite else ''}\nВерсия {current.version_number} из {len(versions)}"
         buttons = version_history_actions() if history else gallery_item_actions()
-        if not self.transport.send_image(
+        if not self._send_image(
             platform_user_id, current.preview_path, caption, buttons
         ):
             raise MaxTransportError("MAX gallery preview delivery failed")
@@ -1434,7 +1494,7 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        self.transport.send_message(platform_user_id, "Выбрано как основное.")
+        self._send_message(platform_user_id, "Выбрано как основное.")
 
     def _delete_current(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id:
@@ -1451,7 +1511,7 @@ class MaxApplication:
             event.user_id, "deleted", event_key=event.event_key, force=True,
             pending_prompt=None, pending_action=None, status_message_id=None,
         )
-        self.transport.send_message(
+        self._send_message(
             event.user_id,
             "Работа перемещена в корзину.",
             (

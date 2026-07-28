@@ -151,9 +151,29 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                                         event.callback_id,
                                         "Сервис временно недоступен",
                                     )
+                                active_keyboards = store.active_keyboards(event.user_id)
+                                active_ids = {
+                                    message_id
+                                    for message_id, _message_text in active_keyboards
+                                }
+                                for message_id, message_text in active_keyboards:
+                                    try:
+                                        client.edit_message(
+                                            message_id, message_text, ()
+                                        )
+                                    except MaxTransportError:
+                                        LOGGER.info(
+                                            "Observe-only stale keyboard "
+                                            "could not be deactivated"
+                                        )
+                                    else:
+                                        store.clear_keyboard(
+                                            event.user_id, message_id
+                                        )
                                 if (
                                     event.message_id
                                     and event.event_type == "message_callback"
+                                    and event.message_id not in active_ids
                                 ):
                                     try:
                                         client.edit_message(

@@ -190,6 +190,44 @@ class MaxConversationStore:
                 ("completed" if success else "failed", _iso(self.clock()), event_key),
             )
 
+    def register_keyboard(
+        self, platform_user_id: str, message_id: str, message_text: str
+    ) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO max_active_keyboards(
+                       platform_user_id,message_id,message_text,created_at
+                   ) VALUES(?,?,?,?)
+                   ON CONFLICT(platform_user_id,message_id) DO UPDATE SET
+                       message_text=excluded.message_text,
+                       created_at=excluded.created_at""",
+                (
+                    platform_user_id,
+                    message_id,
+                    message_text,
+                    _iso(self.clock()),
+                ),
+            )
+
+    def active_keyboards(self, platform_user_id: str) -> list[tuple[str, str]]:
+        with self.database.read() as connection:
+            rows = connection.execute(
+                """SELECT message_id,message_text
+                   FROM max_active_keyboards
+                   WHERE platform_user_id=?
+                   ORDER BY created_at,message_id""",
+                (platform_user_id,),
+            ).fetchall()
+        return [(row["message_id"], row["message_text"]) for row in rows]
+
+    def clear_keyboard(self, platform_user_id: str, message_id: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """DELETE FROM max_active_keyboards
+                   WHERE platform_user_id=? AND message_id=?""",
+                (platform_user_id, message_id),
+            )
+
     def required_documents(self) -> dict[str, str]:
         with self.database.read() as connection:
             rows = connection.execute(

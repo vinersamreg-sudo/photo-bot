@@ -44,7 +44,13 @@ class View:
 
 
 class MaxTransport(Protocol):
-    def send_image(self, platform_user_id: str, image: Path, caption: str, buttons: Sequence[Button]) -> bool: ...
+    def send_image(
+        self,
+        platform_user_id: str,
+        image: Path,
+        caption: str,
+        buttons: Sequence[Button],
+    ) -> str | None: ...
 
 
 def upload_view() -> View:
@@ -366,12 +372,12 @@ class MaxDemoAdapter:
     ) -> DemoGenerationResult:
         self._require_consent(platform_user_id)
         def deliver(preview: Path, _attempt_id: str) -> bool:
-            return self.transport.send_image(
+            return bool(self.transport.send_image(
                 platform_user_id,
                 preview,
                 "Это демо с водяным знаком.",
                 (),
-            )
+            ))
 
         return self.service.generate(
             session_id,

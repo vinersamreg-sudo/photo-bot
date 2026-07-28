@@ -95,6 +95,10 @@ class MaxRuntimeTests(TestCase):
                 max_bot_token="test-token", max_transport_mode="polling",
                 max_poll_observe_only=True,
             )
+            before = MaxConversationStore(Database(settings.database_path))
+            before.register_keyboard(
+                "owner", "registered-message", "Старая кнопка"
+            )
             stop_event = threading.Event()
             fake = FakeObserveOnlyClient(stop_event)
             with patch("app.max_runtime.MaxApiClient", return_value=fake):
@@ -103,13 +107,18 @@ class MaxRuntimeTests(TestCase):
                 fake.callbacks,
                 [("cb-observe", "Сервис временно недоступен")],
             )
-            self.assertEqual(fake.edits, [("old-message", "Готово", ())])
+            self.assertEqual(
+                [edit[0] for edit in fake.edits],
+                ["registered-message", "old-message"],
+            )
+            self.assertTrue(all(not edit[2] for edit in fake.edits))
             self.assertEqual(
                 fake.messages,
                 [("owner", OBSERVE_ONLY_TEXT, ())],
             )
             store = MaxConversationStore(Database(settings.database_path))
             self.assertEqual(store.get_marker(), 78)
+            self.assertEqual(store.active_keyboards("owner"), [])
             self.assertFalse(
                 store.begin_event("callback:cb-observe", "message_callback")
             )

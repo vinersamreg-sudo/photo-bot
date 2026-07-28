@@ -23,6 +23,7 @@ from app.domain import (
 )
 from app.edit_intent import EditPlan
 from app.image_provider import FakeImageProvider
+from app.max_adapter import Button
 from app.max_application import (
     CORRECTION_REQUEST_TEXT,
     MaxApplication,
@@ -86,7 +87,9 @@ class FakeMaxTransport:
 
     def send_image(self, user_id, image, caption, buttons):
         self.images.append((user_id, Path(image), caption, tuple(buttons)))
-        return self.image_delivery
+        if not self.image_delivery:
+            return None
+        return f"image-{len(self.images)}"
 
 
 class MaxApplicationTests(TestCase):
@@ -174,6 +177,71 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.callbacks[-1][0], "callback-id")
         self.assertEqual(self.transport.messages[-1][0:2], ("outsider", OWNER_ONLY_TEXT))
         self.assertIsNone(self.store.get("outsider"))
+
+    def test_start_deactivates_keyboard_from_previous_state(self) -> None:
+        self.app.handle(self.event("bot_started"))
+        previous_message_id = self.transport.messages[-1][4]
+        self.assertEqual(
+            self.store.active_keyboards("u1"),
+            [(previous_message_id, self.transport.messages[-1][1])],
+        )
+
+        self.app.handle(self.event("message_created", text="/start"))
+
+        self.assertIn(
+            (previous_message_id, self.transport.messages[0][1], ()),
+            self.transport.edits,
+        )
+        active = self.store.active_keyboards("u1")
+        self.assertEqual(len(active), 1)
+        self.assertNotEqual(active[0][0], previous_message_id)
+
+    def test_all_keyboards_survive_restart_and_are_deactivated_together(self) -> None:
+        self.store.get_or_create("u1", "c1")
+        first_id = self.app._send_message(
+            "u1", "РљР°СЂС‚РѕС‡РєР° 1", (Button("РћС‚РєСЂС‹С‚СЊ", "work:1"),)
+        )
+        second_id = self.app._send_message(
+            "u1", "РљР°СЂС‚РѕС‡РєР° 2", (Button("РћС‚РєСЂС‹С‚СЊ", "work:2"),)
+        )
+        restarted_store = MaxConversationStore(self.database, self.clock)
+        restarted = MaxApplication(
+            self.settings,
+            self.database,
+            self.demo,
+            self.transport,
+            restarted_store,
+        )
+
+        restarted.handle(self.event("message_created", text="/start"))
+
+        edited_ids = {
+            message_id
+            for message_id, _text, buttons in self.transport.edits
+            if not buttons
+        }
+        self.assertTrue({first_id, second_id}.issubset(edited_ids))
+        active = restarted_store.active_keyboards("u1")
+        self.assertEqual(len(active), 1)
+        self.assertNotIn(active[0][0], {first_id, second_id})
+
+    def test_callback_source_keyboard_is_deactivated_once(self) -> None:
+        self.store.get_or_create("u1", "c1")
+        source_id = self.app._send_message(
+            "u1", "Р”РµР№СЃС‚РІРёРµ", (Button("Р’ РјРµРЅСЋ", "menu"),)
+        )
+        event = replace(
+            self.event("message_callback", action="menu"),
+            message_id=source_id,
+            text="Р”РµР№СЃС‚РІРёРµ",
+        )
+
+        self.app.handle(event)
+
+        source_edits = [
+            edit for edit in self.transport.edits if edit[0] == source_id
+        ]
+        self.assertEqual(source_edits, [(source_id, "Р”РµР№СЃС‚РІРёРµ", ())])
 
     def onboard_to_prompt(self) -> None:
         self.app.handle(self.event("bot_started"))
