@@ -888,6 +888,34 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(row["sentiment"], "negative")
         self.assertIsNone(row["reason_category"])
 
+    def test_gallery_navigation_clears_abandoned_correction_state(self) -> None:
+        self.generate_first()
+        item_id = self.store.get("u1").current_gallery_item_id
+
+        self.callback("result:correct")
+        correction = self.store.get("u1")
+        self.assertEqual(correction.state, "waiting_for_correction")
+        self.assertEqual(correction.pending_action, "correction")
+
+        self.callback("studio:works")
+        gallery = self.store.get("u1")
+        self.assertEqual(gallery.state, "gallery")
+        self.assertIsNone(gallery.pending_prompt)
+        self.assertIsNone(gallery.pending_action)
+        self.assertIsNone(gallery.status_message_id)
+
+        self.callback(f"works:open:{item_id}")
+        opened = self.store.get("u1")
+        self.assertEqual(opened.state, "gallery")
+        self.assertIsNone(opened.pending_prompt)
+        self.assertIsNone(opened.pending_action)
+
+        self.callback("work:history")
+        history = self.store.get("u1")
+        self.assertEqual(history.state, "gallery")
+        self.assertIsNone(history.pending_prompt)
+        self.assertIsNone(history.pending_action)
+
     def test_correction_repeat_gallery_navigation_favorite_and_physical_delete(self) -> None:
         self.generate_first()
         first = self.store.get("u1").current_version_id

@@ -1292,7 +1292,15 @@ class MaxApplication:
                    ORDER BY updated_at DESC LIMIT 5""",
                 (dialog.user_id,),
             ).fetchall()
-        self.store.transition(event.user_id, "gallery", event_key=event.event_key, force=True)
+        self.store.transition(
+            event.user_id,
+            "gallery",
+            event_key=event.event_key,
+            force=True,
+            pending_prompt=None,
+            pending_action=None,
+            status_message_id=None,
+        )
         if not rows:
             self.transport.send_message(
                 event.user_id,
@@ -1345,6 +1353,9 @@ class MaxApplication:
             event.user_id, "gallery", event_key=event.event_key, force=True,
             current_gallery_item_id=item.id,
             current_version_id=best.id if best else None,
+            pending_prompt=None,
+            pending_action=None,
+            status_message_id=None,
         )
         self._send_work(event.user_id, item.title, item.favorite, versions, best)
 
@@ -1379,6 +1390,15 @@ class MaxApplication:
         current = next(
             (version for version in versions if version.id == dialog.current_version_id),
             best or (versions[-1] if versions else None),
+        )
+        self.store.transition(
+            event.user_id,
+            "gallery",
+            event_key=event.event_key,
+            force=True,
+            pending_prompt=None,
+            pending_action=None,
+            status_message_id=None,
         )
         self._send_work(
             event.user_id, item.title, item.favorite, versions, current, history=True
