@@ -24,6 +24,7 @@ from app.domain import (
 from app.edit_intent import EditPlan
 from app.image_provider import FakeImageProvider
 from app.max_application import (
+    CORRECTION_REQUEST_TEXT,
     MaxApplication,
     OWNER_ONLY_TEXT,
     PHOTO_ACCEPTED_TEXT,
@@ -136,7 +137,13 @@ class MaxApplicationTests(TestCase):
         return MaxIncomingEvent(
             event_type, key, "u1", "c1", self.sequence,
             message_id=f"mid-{self.sequence}" if event_type != "bot_started" else None,
-            text=text,
+            text=(
+                text
+                if text is not None
+                else "Сообщение с кнопками"
+                if event_type == "message_callback"
+                else None
+            ),
             image_url=image_url,
             callback_id=f"cb-{self.sequence}" if event_type == "message_callback" else None,
             callback_payload=action,
@@ -706,6 +713,12 @@ class MaxApplicationTests(TestCase):
         paid_dialog = self.store.get("u1")
         self.assertEqual(paid_dialog.current_version_id, intent_version_id)
         self.assertEqual(paid_dialog.current_gallery_item_id, gallery_item_id)
+        self.assertTrue(
+            any(
+                edit[1:] == ("Оплата подтверждена ✅", ())
+                for edit in self.transport.edits
+            )
+        )
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute(
@@ -879,6 +892,12 @@ class MaxApplicationTests(TestCase):
         self.generate_first()
         first = self.store.get("u1").current_version_id
         self.callback("result:correct")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_correction")
+        self.assertEqual(self.transport.messages[-1][1], CORRECTION_REQUEST_TEXT)
+        self.assertEqual(
+            self.transport.edits[-1],
+            (f"mid-{self.sequence}", "Сообщение с кнопками", ()),
+        )
         self.clock.advance(2)
         self.app.handle(self.event("message_created", text="Сделай лицо естественнее"))
         second = self.store.get("u1").current_version_id

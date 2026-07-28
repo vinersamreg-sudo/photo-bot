@@ -85,6 +85,14 @@ OWNER_ONLY_TEXT = (
     "Ravuna пока в закрытом тестировании.\n\n"
     "Скоро откроем доступ."
 )
+CORRECTION_REQUEST_TEXT = (
+    "Напишите одним сообщением, что нужно изменить в фотографии.\n\n"
+    "Например:\n"
+    "• сделать фон светлее;\n"
+    "• убрать лишний предмет;\n"
+    "• изменить цвет одежды;\n"
+    "• сохранить лицо без изменений."
+)
 
 
 def _version_word(count: int) -> str:
@@ -384,6 +392,7 @@ class MaxApplication:
                 }
                 notification = notifications.get(event.callback_payload, "Готово")
                 self.transport.answer_callback(event.callback_id, notification)
+            self._deactivate_callback_keyboard(event)
             self._callback(event, dialog)
             return
         if event.event_type != "message_created":
@@ -426,6 +435,24 @@ class MaxApplication:
 
     def _send_view(self, user_id: str, view: View) -> str:
         return self.transport.send_message(user_id, view.text, view.buttons)
+
+    def _deactivate_callback_keyboard(self, event: MaxIncomingEvent) -> None:
+        """Make the keyboard that triggered a state transition single-use."""
+
+        if not event.message_id:
+            return
+        try:
+            self.transport.edit_message(
+                event.message_id,
+                event.text or "Действие выбрано ✅",
+                (),
+            )
+        except MaxTransportError:
+            LOGGER.info(
+                "MAX source keyboard could not be deactivated "
+                "(action=%s,message_id_present=true)",
+                event.callback_payload or "unknown",
+            )
 
     def _show_legal(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
         self._send_view(user_id, legal_view())
@@ -529,6 +556,7 @@ class MaxApplication:
                 event.user_id, "waiting_for_correction", event_key=event.event_key,
                 pending_prompt=None, pending_action="correction",
             )
+            self.transport.send_message(event.user_id, CORRECTION_REQUEST_TEXT)
         elif action == "result:repeat":
             self._track(
                 "repeat_started",
@@ -1056,7 +1084,7 @@ class MaxApplication:
                     "Ссылка на оплату уже создана.",
                 )
                 return
-            self.transport.send_message(
+            payment_message_id = self.transport.send_message(
                 event.user_id,
                 "Пакет доступа Ravuna — 49 ₽\n\n"
                 "После оплаты начисляется:\n"
@@ -1065,7 +1093,11 @@ class MaxApplication:
                 "Пакет начисляется сразу после оплаты.",
                 (Button("Оплатить 49 ₽", order.payment_url or "package:buy"),),
             )
-            self._mark_payment_card_sent(order.id, order.payment_url or "")
+            self._mark_payment_card_sent(
+                order.id,
+                order.payment_url or "",
+                payment_message_id,
+            )
 
     def _paid_order_exists(self, user_id: str, version_id: str) -> bool:
         with self.database.read() as connection:
@@ -1087,7 +1119,9 @@ class MaxApplication:
                 (order_id,),
             ).fetchone() is not None
 
-    def _mark_payment_card_sent(self, order_id: str, payment_url: str) -> None:
+    def _mark_payment_card_sent(
+        self, order_id: str, payment_url: str, message_id: str
+    ) -> None:
         now = self.demo.clock().isoformat()
         idempotency_key = hashlib.sha256(
             f"max-checkout-card:{order_id}".encode("utf-8")
@@ -1099,19 +1133,42 @@ class MaxApplication:
         with self.database.transaction() as connection:
             connection.execute(
                 """INSERT OR IGNORE INTO payment_attempts(
-                       id,order_id,purpose,idempotency_key,request_digest,status,
+                       id,order_id,purpose,idempotency_key,request_digest,
+                       provider_request_id,status,
                        started_at,completed_at
-                   ) VALUES(?,?,?,?,?,'succeeded',?,?)""",
+                   ) VALUES(?,?,?,?,?,?,'succeeded',?,?)""",
                 (
                     uuid4().hex,
                     order_id,
                     "max_checkout_card",
                     idempotency_key,
                     request_digest,
+                    message_id,
                     now,
                     now,
                 ),
             )
+
+    def _deactivate_payment_card(self, order_id: str) -> None:
+        with self.database.read() as connection:
+            row = connection.execute(
+                """SELECT provider_request_id FROM payment_attempts
+                   WHERE order_id=? AND purpose='max_checkout_card'
+                         AND status='succeeded'
+                   ORDER BY started_at DESC LIMIT 1""",
+                (order_id,),
+            ).fetchone()
+        message_id = row["provider_request_id"] if row else None
+        if not message_id:
+            return
+        try:
+            self.transport.edit_message(
+                message_id,
+                "Оплата подтверждена ✅",
+                (),
+            )
+        except MaxTransportError:
+            LOGGER.info("MAX payment keyboard could not be deactivated")
 
     def notify_continuation_pack_paid(self, order_id: str) -> bool:
         """Notify after the atomic ledger grant; no original is auto-unlocked."""
@@ -1130,6 +1187,7 @@ class MaxApplication:
             ).fetchone()
         if row is None:
             raise PaymentError("Payment order was not found")
+        self._deactivate_payment_card(order_id)
         self.store.get_or_create(row["platform_user_id"], None)
         self.store.update(
             row["platform_user_id"],

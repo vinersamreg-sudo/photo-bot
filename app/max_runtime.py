@@ -21,6 +21,10 @@ from app.payment_webhook import PaymentWebhookServer
 
 
 LOGGER = logging.getLogger(__name__)
+OBSERVE_ONLY_TEXT = (
+    "Ravuna временно недоступна.\n\n"
+    "Попробуйте немного позже."
+)
 
 
 def build_max_application(
@@ -121,6 +125,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                     )
                     store.touch_poll_success()
                     if settings.max_poll_observe_only:
+                        batch_ok = True
                         if updates:
                             event_types = sorted(
                                 {
@@ -134,9 +139,46 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                                 len(updates),
                                 ",".join(event_types),
                             )
-                        if next_marker is not None:
+                        for raw_update in updates:
+                            event = parse_update(raw_update)
+                            if event is None or not store.begin_event(
+                                event.event_key, event.event_type
+                            ):
+                                continue
+                            try:
+                                if event.callback_id:
+                                    client.answer_callback(
+                                        event.callback_id,
+                                        "Сервис временно недоступен",
+                                    )
+                                if (
+                                    event.message_id
+                                    and event.event_type == "message_callback"
+                                ):
+                                    try:
+                                        client.edit_message(
+                                            event.message_id,
+                                            event.text
+                                            or "Сервис временно недоступен",
+                                            (),
+                                        )
+                                    except MaxTransportError:
+                                        LOGGER.info(
+                                            "Observe-only callback keyboard "
+                                            "could not be deactivated"
+                                        )
+                                client.send_message(event.user_id, OBSERVE_ONLY_TEXT)
+                                store.finish_event(event.event_key, True)
+                            except MaxTransportError:
+                                store.finish_event(event.event_key, False)
+                                batch_ok = False
+                                break
+                        if batch_ok and next_marker is not None:
                             marker = next_marker
                         store.set_marker(marker)
+                        if not batch_ok:
+                            stop_event.wait(settings.max_poll_retry_seconds)
+                            continue
                         if not updates:
                             stop_event.wait(settings.max_poll_idle_seconds)
                         continue

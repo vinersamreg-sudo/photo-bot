@@ -41,10 +41,14 @@ class MaxTransportTests(TestCase):
             "update_type": "message_callback",
             "timestamp": 11,
             "callback": {"callback_id": "cb-1", "payload": "custom", "user": {"user_id": 42}},
-            "message": {"recipient": {"chat_id": 77}, "body": {"mid": "mid-2"}},
+            "message": {
+                "recipient": {"chat_id": 77},
+                "body": {"mid": "mid-2", "text": "Result card"},
+            },
         })
         self.assertEqual(callback.event_key, "callback:cb-1")
         self.assertEqual(callback.callback_payload, "custom")
+        self.assertEqual(callback.text, "Result card")
 
         started = parse_update({
             "update_type": "bot_started", "timestamp": 12,
@@ -119,6 +123,11 @@ class MaxTransportTests(TestCase):
             self.assertEqual(downloaded.read_bytes(), image_bytes)
         client.answer_callback("cb-1", "Принято")
         client.edit_message("sent-1", "changed")
+        edit_request = next(
+            request for request in api_requests
+            if request.url.path == "/messages" and request.method == "PUT"
+        )
+        self.assertEqual(json.loads(edit_request.content)["attachments"], [])
         client.delete_message("sent-1")
         self.assertTrue(api_requests)
         self.assertTrue(media_requests)

@@ -107,6 +107,7 @@ def parse_update(update: dict[str, Any]) -> Optional[MaxIncomingEvent]:
             _string_id(recipient.get("chat_id")),
             timestamp,
             message_id=_string_id(body.get("mid")),
+            text=body.get("text"),
             callback_id=callback_id,
             callback_payload=callback.get("payload"),
         )
@@ -284,9 +285,10 @@ class MaxApiClient:
     def edit_message(
         self, message_id: str, text: str, buttons: Sequence[Button] = ()
     ) -> None:
-        body: dict[str, Any] = {"text": text}
-        if buttons:
-            body["attachments"] = self._keyboard(buttons)
+        body: dict[str, Any] = {
+            "text": text,
+            "attachments": self._keyboard(buttons),
+        }
         self._request("PUT", "/messages", params={"message_id": message_id}, json=body)
 
     def answer_callback(self, callback_id: str, notification: str) -> None:
