@@ -200,6 +200,7 @@ class MaxTransportTests(TestCase):
                 headers={"Authorization": "max-secret-test"},
             ),
             media_client=httpx.Client(transport=httpx.MockTransport(media_handler)),
+            sleeper=lambda _seconds: None,
         )
         with tempfile.TemporaryDirectory() as directory:
             original = Path(directory) / "private-uuid.png"
@@ -216,6 +217,143 @@ class MaxTransportTests(TestCase):
         self.assertEqual(attachment["type"], "file")
         self.assertEqual(attachment["payload"]["token"], "file-token")
         self.assertEqual(len(media_requests), 1)
+
+    def test_file_delivery_retries_documented_attachment_not_ready(self) -> None:
+        api_requests = []
+        delays = []
+        message_attempts = 0
+
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            nonlocal message_attempts
+            api_requests.append(request)
+            if request.url.path == "/uploads":
+                return httpx.Response(
+                    200, json={"url": "https://fu.oneme.ru/upload"}
+                )
+            if request.url.path == "/messages":
+                message_attempts += 1
+                if message_attempts == 1:
+                    return httpx.Response(
+                        400,
+                        json={
+                            "code": "attachment.not.ready",
+                            "message": "Key: errors.process.attachment.file.not.processed",
+                        },
+                    )
+                return httpx.Response(
+                    200, json={"message": {"body": {"mid": "sent-after-retry"}}}
+                )
+            return httpx.Response(200, json={"success": True})
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(
+                        200, json={"token": "file-token"}
+                    )
+                )
+            ),
+            sleeper=delays.append,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original.png"
+            original.write_bytes(b"original")
+            self.assertEqual(
+                client.send_file("42", original, "Original", ()),
+                "sent-after-retry",
+            )
+        self.assertEqual(message_attempts, 2)
+        self.assertEqual(
+            sum(request.url.path == "/uploads" for request in api_requests), 1
+        )
+        self.assertEqual(delays, [0.5, 0.5])
+
+    def test_file_delivery_does_not_retry_permanent_http_400(self) -> None:
+        message_attempts = 0
+        delays = []
+
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            nonlocal message_attempts
+            if request.url.path == "/uploads":
+                return httpx.Response(
+                    200, json={"url": "https://fu.oneme.ru/upload"}
+                )
+            if request.url.path == "/messages":
+                message_attempts += 1
+                return httpx.Response(
+                    400,
+                    json={"code": "invalid.request", "message": "invalid file"},
+                )
+            return httpx.Response(200, json={"success": True})
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(
+                        200, json={"token": "file-token"}
+                    )
+                )
+            ),
+            sleeper=delays.append,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original.png"
+            original.write_bytes(b"original")
+            self.assertIsNone(client.send_file("42", original, "Original", ()))
+        self.assertEqual(message_attempts, 1)
+        self.assertEqual(delays, [0.5])
+
+    def test_file_delivery_stops_after_three_bounded_attempts(self) -> None:
+        message_attempts = 0
+        delays = []
+
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            nonlocal message_attempts
+            if request.url.path == "/uploads":
+                return httpx.Response(
+                    200, json={"url": "https://fu.oneme.ru/upload"}
+                )
+            if request.url.path == "/messages":
+                message_attempts += 1
+                return httpx.Response(
+                    400, json={"code": "attachment.not.ready"}
+                )
+            return httpx.Response(200, json={"success": True})
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(
+                        200, json={"token": "file-token"}
+                    )
+                )
+            ),
+            sleeper=delays.append,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original.png"
+            original.write_bytes(b"original")
+            self.assertIsNone(client.send_file("42", original, "Original", ()))
+        self.assertEqual(message_attempts, 3)
+        self.assertEqual(delays, [0.5, 0.5, 1.0])
 
     def test_rejects_unknown_media_host_and_redacts_api_error(self) -> None:
         api = httpx.Client(

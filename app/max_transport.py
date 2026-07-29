@@ -7,9 +7,10 @@ import logging
 import mimetypes
 import os
 import ssl
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 from urllib.parse import urlparse
 
 import httpx
@@ -24,11 +25,21 @@ class MaxTransportError(RuntimeError):
     """Safe transport error which never includes response bodies or secret URLs."""
 
     def __init__(
-        self, message: str, *, kind: str = "transport", http_status: int | None = None
+        self,
+        message: str,
+        *,
+        kind: str = "transport",
+        http_status: int | None = None,
+        stage: str = "unknown",
+        error_code: str = "",
+        error_message: str = "",
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.http_status = http_status
+        self.stage = stage
+        self.error_code = error_code
+        self.error_message = error_message
 
 
 @dataclass(frozen=True)
@@ -128,6 +139,7 @@ class MaxApiClient:
         media_host_suffixes: Sequence[str] = (".max.ru", ".oneme.ru", ".okcdn.ru"),
         client: Optional[httpx.Client] = None,
         media_client: Optional[httpx.Client] = None,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         if not token:
             raise MaxTransportError(
@@ -157,6 +169,7 @@ class MaxApiClient:
         )
         self.media_client = media_client or httpx.Client(timeout=timeout_seconds)
         self._owns_media_client = media_client is None
+        self._sleep = sleeper
         self.last_status_code: int | None = None
 
     def close(self) -> None:
@@ -164,16 +177,20 @@ class MaxApiClient:
         if self._owns_media_client:
             self.media_client.close()
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    def _request(
+        self, method: str, path: str, *, stage: str = "api_request", **kwargs: Any
+    ) -> dict[str, Any]:
         try:
             response = self.client.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
             raise MaxTransportError(
-                "MAX API request timed out", kind="timeout"
+                "MAX API request timed out", kind="timeout", stage=stage
             ) from exc
         except httpx.HTTPError as exc:
             raise MaxTransportError(
-                f"MAX API network failure ({type(exc).__name__})", kind="network"
+                f"MAX API network failure ({type(exc).__name__})",
+                kind="network",
+                stage=stage,
             ) from exc
         self.last_status_code = response.status_code
         if response.status_code >= 400:
@@ -188,6 +205,7 @@ class MaxApiClient:
             except ValueError:
                 error_payload = {}
             error_code = ""
+            error_message = ""
             if isinstance(error_payload, dict):
                 error_code = str(
                     error_payload.get("code")
@@ -195,12 +213,16 @@ class MaxApiClient:
                     or error_payload.get("error")
                     or ""
                 ).lower()
+                error_message = str(error_payload.get("message") or "")[:160]
             if "bot_not_active" in error_code or "bot_inactive" in error_code:
                 kind = "bot_not_active"
             raise MaxTransportError(
                 f"MAX API returned HTTP {response.status_code}",
                 kind=kind,
                 http_status=response.status_code,
+                stage=stage,
+                error_code=error_code,
+                error_message=error_message,
             )
         try:
             payload = response.json()
@@ -279,7 +301,20 @@ class MaxApiClient:
         body: dict[str, Any] = {"text": text, "notify": notify}
         if attachments:
             body["attachments"] = attachments
-        data = self._request("POST", "/messages", params={"user_id": user_id}, json=body)
+        stage = (
+            "file_message_send"
+            if file_token
+            else "image_message_send"
+            if image_token
+            else "message_send"
+        )
+        data = self._request(
+            "POST",
+            "/messages",
+            stage=stage,
+            params={"user_id": user_id},
+            json=body,
+        )
         message = data.get("message") if isinstance(data.get("message"), dict) else data
         message_id = ((message.get("body") or {}).get("mid")) if isinstance(message, dict) else None
         if not message_id:
@@ -374,7 +409,12 @@ class MaxApiClient:
         return str(token)
 
     def upload_file(self, file_path: Path, upload_name: str | None = None) -> str:
-        upload = self._request("POST", "/uploads", params={"type": "file"})
+        upload = self._request(
+            "POST",
+            "/uploads",
+            stage="file_upload_init",
+            params={"type": "file"},
+        )
         url = upload.get("url")
         if not isinstance(url, str):
             raise MaxTransportError("MAX did not return a file upload URL")
@@ -388,10 +428,31 @@ class MaxApiClient:
                     files={"data": (name, content, content_type)},
                 )
         except httpx.HTTPError as exc:
-            raise MaxTransportError(f"MAX file upload failed ({type(exc).__name__})") from exc
-        if response.status_code >= 400:
             raise MaxTransportError(
-                f"MAX file upload returned HTTP {response.status_code}"
+                f"MAX file upload failed ({type(exc).__name__})",
+                kind="network",
+                stage="file_upload_content",
+            ) from exc
+        if response.status_code >= 400:
+            try:
+                error_payload = response.json()
+            except ValueError:
+                error_payload = {}
+            raise MaxTransportError(
+                f"MAX file upload returned HTTP {response.status_code}",
+                kind="http_error",
+                http_status=response.status_code,
+                stage="file_upload_content",
+                error_code=str(
+                    error_payload.get("code") or ""
+                    if isinstance(error_payload, dict)
+                    else ""
+                ).lower(),
+                error_message=str(
+                    error_payload.get("message") or ""
+                    if isinstance(error_payload, dict)
+                    else ""
+                )[:160],
             )
         try:
             result = response.json()
@@ -432,14 +493,49 @@ class MaxApiClient:
         suffix = file_path.suffix.lower() or ".png"
         try:
             token = self.upload_file(file_path, f"ravuna-original{suffix}")
-            return self.send_message(
-                platform_user_id, caption, buttons, file_token=token
-            )
+            # MAX processes uploaded files asynchronously. Its documented
+            # attachment.not.ready response is safe to retry because the
+            # message was explicitly rejected, so no duplicate was created.
+            self._sleep(0.5)
+            backoff_seconds = (0.5, 1.0)
+            for attempt in range(len(backoff_seconds) + 1):
+                try:
+                    return self.send_message(
+                        platform_user_id, caption, buttons, file_token=token
+                    )
+                except MaxTransportError as exc:
+                    transient_rejection = (
+                        exc.stage == "file_message_send"
+                        and (
+                            exc.error_code == "attachment.not.ready"
+                            or exc.http_status in {408, 429, 503}
+                        )
+                    )
+                    if not transient_rejection or attempt >= len(backoff_seconds):
+                        raise
+                    delay = backoff_seconds[attempt]
+                    LOGGER.info(
+                        "MAX file attachment is not ready; retrying "
+                        "(stage=%s,kind=%s,http_status=%s,error_code=%s,"
+                        "attempt=%s,delay_seconds=%s)",
+                        exc.stage,
+                        exc.kind,
+                        exc.http_status,
+                        exc.error_code or "none",
+                        attempt + 2,
+                        delay,
+                    )
+                    self._sleep(delay)
         except MaxTransportError as exc:
             LOGGER.warning(
-                "MAX file delivery failed (kind=%s,http_status=%s)",
+                "MAX file delivery failed "
+                "(stage=%s,kind=%s,http_status=%s,error_code=%s,"
+                "error_message=%s)",
+                exc.stage,
                 exc.kind,
                 exc.http_status,
+                exc.error_code or "none",
+                exc.error_message or "none",
             )
             return None
 

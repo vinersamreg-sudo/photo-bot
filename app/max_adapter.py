@@ -57,6 +57,7 @@ def upload_view() -> View:
     return View(
         WELCOME_TEXT,
         (
+            Button("📁 Мои работы", "studio:works"),
             Button(
                 "Публичная оферта",
                 "https://ravuna.ru/legal/offer.html",

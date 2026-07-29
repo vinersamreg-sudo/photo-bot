@@ -44,7 +44,11 @@ class MaxAdapterTests(TestCase):
         menu = main_menu()
         self.assertEqual(
             [button.text for button in menu.buttons],
-            ["Публичная оферта", "Обработка персональных данных"],
+            [
+                "📁 Мои работы",
+                "Публичная оферта",
+                "Обработка персональных данных",
+            ],
         )
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
         self.assertGreaterEqual(len(scenario_catalog().buttons), 12)

@@ -86,7 +86,7 @@ OWNER_ONLY_TEXT = (
     "Скоро откроем доступ."
 )
 CORRECTION_REQUEST_TEXT = (
-    "Напишите одним сообщением, что нужно изменить в фотографии.\n\n"
+    "Напишите одним сообщением, что нужно изменить в этой фотографии.\n\n"
     "Например:\n"
     "• сделать фон светлее;\n"
     "• убрать лишний предмет;\n"
@@ -476,6 +476,33 @@ class MaxApplication:
             self.store.register_keyboard(user_id, message_id, caption)
         return message_id
 
+    def _send_selected_preview(
+        self,
+        platform_user_id: str,
+        dialog: MaxDialog,
+        caption: str,
+    ) -> str:
+        """Send the exact selected version without silently switching lineage."""
+
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No gallery version selected")
+        with self.database.read() as connection:
+            row = connection.execute(
+                """SELECT v.preview_watermarked_path AS preview_path
+                   FROM gallery_versions AS v
+                   JOIN gallery_items AS i ON i.id=v.gallery_item_id
+                   WHERE v.id=? AND i.user_id=? AND i.deleted=0
+                         AND v.status='succeeded'""",
+                (dialog.current_version_id, dialog.user_id),
+            ).fetchone()
+        preview = Path(row["preview_path"]) if row and row["preview_path"] else None
+        if preview is None or not preview.is_file():
+            raise AssetUnavailableError("Selected preview is not available")
+        message_id = self._send_image(platform_user_id, preview, caption, ())
+        if not message_id:
+            raise MaxTransportError("MAX selected preview delivery failed")
+        return message_id
+
     def _edit_message(
         self,
         user_id: str,
@@ -630,6 +657,9 @@ class MaxApplication:
             self.store.transition(
                 event.user_id, "waiting_for_correction", event_key=event.event_key,
                 pending_prompt=None, pending_action="correction",
+            )
+            self._send_selected_preview(
+                event.user_id, dialog, "Текущая версия"
             )
             self._send_message(event.user_id, CORRECTION_REQUEST_TEXT)
         elif action == "result:repeat":
@@ -1049,7 +1079,7 @@ class MaxApplication:
                 dialog.user_id, dialog.current_version_id
             )
         except PaymentRequiredError:
-            self._buy_continuation_pack(event, dialog)
+            self._show_continuation_pack_offer(event, dialog)
             return
         try:
             delivered = self._send_file(
@@ -1097,6 +1127,35 @@ class MaxApplication:
                 "Не удалось отправить оригинал. Право на скачивание сохранено.",
                 retry_delivery_actions(),
             )
+
+    def _show_continuation_pack_offer(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        """Show the selected result before checkout without creating an order."""
+
+        if dialog.pending_action != "checkout":
+            self._send_selected_preview(
+                event.user_id, dialog, "Выбранная версия"
+            )
+        self.store.transition(
+            event.user_id,
+            "result_ready",
+            event_key=event.event_key,
+            force=True,
+            pending_prompt=None,
+            pending_action="checkout",
+        )
+        self._send_message(
+            event.user_id,
+            "Пакет доступа Ravuna — 49 ₽\n\n"
+            "После оплаты начисляется:\n"
+            "• 2 обработки\n"
+            "• 1 оригинал\n\n"
+            "После оплаты вы сможете скачать оригинал этой фотографии "
+            "без водяного знака.\n\n"
+            "Пакет начисляется сразу после оплаты.",
+            (Button("Оплатить 49 ₽", "package:buy"),),
+        )
 
     def _buy_continuation_pack(
         self, event: MaxIncomingEvent, dialog: MaxDialog
