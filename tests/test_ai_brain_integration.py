@@ -220,7 +220,7 @@ class AiBrainIntegrationTests(TestCase):
         self.assertEqual(json.loads(row["edit_plan_json"])["source_user_text"], "Фон на скалы")
         self.assertEqual(
             row["prompt_builder_version"],
-            "technical-en-v4-request-first",
+            "technical-en-v5-target-completion",
         )
         self.assertTrue(row["provider_prompt"].isascii())
         self.assertEqual(json.loads(row["edit_plan_json"])["schema_version"], 3)

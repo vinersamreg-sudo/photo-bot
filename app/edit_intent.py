@@ -411,9 +411,11 @@ def parse_edit_intent(
         targets.append("background")
         actions.append("improve_quality")
         changes.append(
-            "Improve the existing background visibly: refine its lighting, clarity, "
-            "color balance and distracting imperfections while keeping the same "
-            "location and layout."
+            "Visibly upgrade the existing background while keeping the same broad "
+            "location, camera perspective and subject placement. Improve the decor "
+            "and surfaces, remove distracting clutter, and refine lighting, clarity "
+            "and color balance. The environmental improvement must be unmistakable, "
+            "not merely a brightness, contrast or color adjustment."
         )
         background = BackgroundIntent(
             "enhance", None, "improve", None, "photorealistic", "preserve"
@@ -475,8 +477,21 @@ def parse_edit_intent(
     ):
         targets.append("clothing")
         actions.append("change_clothes")
-        every_person = _has(text, r"\b(?:все|всех|людей|кажд\w*)\b")
-        subject = "every visible person" if every_person else "the requested visible subject"
+        explicit_single_person = _has(
+            text,
+            r"\b(?:мне|меня|ему|ей|его|её)\b",
+            r"\b(?:мужчину|женщину|ребенка|ребёнка|девочку|мальчика|человека)\b",
+            r"\b(?:слева|справа|в\s+центре)\b",
+        )
+        every_person = (
+            _has(text, r"\b(?:все|всех|людей|кажд\w*)\b")
+            or not explicit_single_person
+        )
+        subject = (
+            "every visible person whose clothing is visible"
+            if every_person
+            else "the requested visible subject"
+        )
         if _has(text, r"торжествен|празднич|нарядн|вечерн"):
             style = (
                 "realistic formal, occasion-appropriate clothing suited individually "
@@ -497,11 +512,23 @@ def parse_edit_intent(
             changes.append(f"Replace the clothing of {subject} with {style}.")
             outfit = OutfitIntent("replace", style)
         else:
-            changes.append(
-                f"Replace the clothing of {subject} according to the user's request. "
-                "Make the requested wardrobe change clearly visible and photorealistic."
-            )
-            outfit = OutfitIntent("replace", "the clearly requested realistic clothing")
+            if every_person:
+                style = (
+                    "clearly different, realistic, context-appropriate outfits "
+                    "coordinated naturally across the group"
+                )
+                changes.append(
+                    f"Replace the complete visible outfit of {subject} with {style}. "
+                    "Apply the wardrobe change independently to each person and do "
+                    "not leave any targeted person's original outfit unchanged."
+                )
+                outfit = OutfitIntent("replace", style)
+            else:
+                changes.append(
+                    f"Replace the clothing of {subject} according to the user's request. "
+                    "Make the requested wardrobe change clearly visible and photorealistic."
+                )
+                outfit = OutfitIntent("replace", "the clearly requested realistic clothing")
 
     if _has(text, r"(?:добавь|надень|сделай).{0,15}(?:куртк|пиджак)"):
         targets.append("clothing")

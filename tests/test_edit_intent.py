@@ -173,10 +173,37 @@ class EditIntentTests(TestCase):
 
         self.assertIn("clothing", plan.target_regions)
         self.assertIn("background", plan.target_regions)
-        self.assertIn("Replace the clothing", prompt)
-        self.assertIn("Improve the existing background visibly", prompt)
+        self.assertIn(
+            "every visible person whose clothing is visible",
+            prompt,
+        )
+        self.assertIn(
+            "do not leave any targeted person's original outfit unchanged",
+            prompt,
+        )
+        self.assertIn("Do not stop after changing only one person", prompt)
+        self.assertIn("Visibly upgrade the existing background", prompt)
+        self.assertIn(
+            "not merely a brightness, contrast or color shift",
+            prompt,
+        )
+        self.assertIn(
+            "Treat each visible face as an independent protected identity reference",
+            prompt,
+        )
         self.assertNotIn("Preserve the current clothing", prompt)
         self.assertNotIn("Preserve the current background", prompt)
+
+    def test_explicit_single_person_clothing_request_remains_scoped(self) -> None:
+        plan = parse_edit_intent("Переодень только женщину слева")
+        prompt = build_provider_prompt(plan)
+
+        self.assertIn("the requested visible subject", prompt)
+        self.assertNotIn("GROUP WARDROBE COVERAGE", prompt)
+        self.assertNotIn(
+            "every visible person whose clothing is visible",
+            prompt,
+        )
 
     def test_new_correction_drops_stale_clothing_preservation(self) -> None:
         parent = parse_edit_intent("Замени фон на скалы")

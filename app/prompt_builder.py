@@ -9,7 +9,7 @@ from app.edit_intent import EditPlan
 from app.processing_modes import ProcessingMode, ProcessingPlan
 
 
-PROMPT_BUILDER_VERSION = "technical-en-v4-request-first"
+PROMPT_BUILDER_VERSION = "technical-en-v5-target-completion"
 
 
 def _unique(values: Iterable[str]) -> tuple[str, ...]:
@@ -86,8 +86,10 @@ def _structured_change_lines(
         lines.append("Apply natural background blur while keeping the subject sharp.")
     elif render_background and background.operation == "enhance":
         lines.append(
-            "Improve the existing background visibly while keeping the same location, "
-            "layout and perspective."
+            "Visibly upgrade the existing background design and finish while keeping "
+            "the same broad location, camera perspective and subject placement. "
+            "Improve decor, surfaces, visual clutter and lighting; the result must "
+            "not be limited to brightness, contrast or color correction."
         )
     if (
         render_background
@@ -101,7 +103,14 @@ def _structured_change_lines(
     if scene.camera.framing and (render_all or "whole_image" in targets):
         lines.append(f"Use {scene.camera.framing} framing.")
     if scene.outfit.operation == "replace" and (render_all or "clothing" in targets):
-        lines.append(f"Replace the outfit with {scene.outfit.style or 'the requested clothing'}.")
+        if any("every visible person" in value.lower() for value in lines):
+            lines.append(
+                "Ensure every visible person's complete visible outfit is replaced."
+            )
+        else:
+            lines.append(
+                f"Replace the outfit with {scene.outfit.style or 'the requested clothing'}."
+            )
     elif scene.outfit.operation == "recolor" and (render_all or "clothing" in targets):
         lines.append(
             f"Change only the clothing color to {scene.outfit.color or 'the requested color'}."
@@ -221,9 +230,42 @@ def build_provider_prompt(
         ):
             sections.append("- Use a deep depth of field: the background must be sharp, not blurred or replaced.")
 
+    clothing_changes = " ".join(changes).lower()
+    if (
+        "clothing" in plan.target_regions
+        and "every visible person" in clothing_changes
+    ):
+        sections.extend((
+            "",
+            "GROUP WARDROBE COVERAGE",
+            "- Identify every visible person whose clothing can be seen, including "
+            "smaller and partially occluded group members.",
+            "- Apply a complete, visibly different outfit to each identified person independently.",
+            "- Do not stop after changing only one person, and do not leave any "
+            "identified person's original outfit unchanged.",
+            "- Keep each person's face, head, hairstyle, expression, age and identity unchanged; "
+            "confine wardrobe edits below the face and hair boundary.",
+        ))
+
+    if (
+        "background" in plan.target_regions
+        and plan.scene.background.operation == "enhance"
+    ):
+        sections.extend((
+            "",
+            "BACKGROUND COMPLETION CHECK",
+            "- The background must show a clearly noticeable environmental improvement "
+            "in decor, surfaces or distracting details, not merely a brightness, "
+            "contrast or color shift.",
+            "- Preserve the broad location and camera perspective while allowing "
+            "coherent, realistic improvements within the background.",
+        ))
+
     sections.extend((
         "",
         "SUBJECT AND REALISM REQUIREMENTS",
+        "- Treat each visible face as an independent protected identity reference; "
+        "preserve every person, not only the largest or most prominent face.",
         "- Keep the result photorealistic with coherent lighting, shadows, perspective and color response.",
         "- Blend edited regions naturally; avoid halos, cutout edges and plastic textures.",
         "",
