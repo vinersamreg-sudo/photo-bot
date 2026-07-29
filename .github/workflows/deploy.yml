@@ -380,16 +380,15 @@ jobs:
             set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
             set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Ravuna'
             set_env PAYMENT_RECEIPT_TAX none
-            # Commercial integrations require a separate, explicit rollout.
-            set_env PAYMENTS_ENABLED false
-            set_env PAYMENT_PROVIDER disabled
-            # Publish only the loopback transport. Business callback processing
-            # stays disabled until the separately approved owner sandbox window.
+            # Safe defaults apply only to a fresh environment. A normal deploy
+            # must preserve the already approved production operating state.
+            ensure_env PAYMENTS_ENABLED false
+            ensure_env PAYMENT_PROVIDER disabled
             set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
-            set_env PAYMENT_WEBHOOK_ENABLED false
-            set_env PAYMENT_REFUNDS_ENABLED false
-            set_env ROBOKASSA_MODE sandbox
-            set_env ROBOKASSA_PRODUCTION_APPROVED false
+            ensure_env PAYMENT_WEBHOOK_ENABLED false
+            ensure_env PAYMENT_REFUNDS_ENABLED false
+            ensure_env ROBOKASSA_MODE sandbox
+            ensure_env ROBOKASSA_PRODUCTION_APPROVED false
             set_env CONTENT_STUDIO_PUBLISHING_ENABLED false
             ensure_env ROBOKASSA_COMMISSION_PERCENT 0
             set_env APP_ENV production
@@ -404,7 +403,7 @@ jobs:
             if [ "$MAX_OWNER_HANDLERS_ENABLED" = true ] && grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env" && grep -Eq '^MAX_OWNER_USER_IDS=.+$' "$ROOT/.env"; then
               set_env MAX_POLL_OBSERVE_ONLY false
             else
-              set_env MAX_POLL_OBSERVE_ONLY true
+              ensure_env MAX_POLL_OBSERVE_ONLY true
             fi
             set_env MAX_POLL_TIMEOUT_SECONDS 20
             set_env MAX_POLL_RETRY_SECONDS 5
@@ -573,12 +572,22 @@ jobs:
           assert migration_v9
           assert credit_accounts == users
           assert negative_credit_accounts == 0
-          assert settings.payments_enabled is False
           assert settings.payment_webhook_listener_enabled is True
-          assert settings.payment_webhook_enabled is False
           assert settings.payment_refunds_enabled is False
-          assert settings.robokassa_mode == "sandbox"
           assert settings.robokassa_hash_algorithm == "sha256"
+          if settings.payments_enabled:
+              assert settings.payment_provider == "robokassa"
+              assert settings.payment_webhook_enabled is True
+              assert settings.robokassa_mode == "production"
+              assert settings.robokassa_production_approved is True
+              assert settings.robokassa_merchant_login
+              assert settings.robokassa_password1
+              assert settings.robokassa_password2
+          else:
+              assert settings.payment_provider == "disabled"
+              assert settings.payment_webhook_enabled is False
+              assert settings.robokassa_mode == "sandbox"
+              assert settings.robokassa_production_approved is False
           assert settings.payment_result_url == "https://pixoraai.ru/payments/robokassa/result"
           assert settings.payment_success_url == (
               "https://ravuna.ru/payment-success.html"
@@ -690,7 +699,7 @@ jobs:
             test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"
             printf 'deployed_commit=%s\n' "$DEPLOY_SHA"
           REMOTE
-      - name: Verify fail-closed ResultURL transport
+      - name: Verify ResultURL transport
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
@@ -702,14 +711,19 @@ jobs:
             GET_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
               --resolve pixoraai.ru:443:127.0.0.1 \
               https://pixoraai.ru/payments/robokassa/result)
-            POST_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-              --resolve pixoraai.ru:443:127.0.0.1 \
-              --request POST --data 'readiness_probe=1' \
-              https://pixoraai.ru/payments/robokassa/result)
             test "$GET_STATUS" = 405
-            test "$POST_STATUS" = 503
             printf 'resulturl_get_status=%s\n' "$GET_STATUS"
-            printf 'resulturl_post_disabled_status=%s\n' "$POST_STATUS"
+            WEBHOOK_ENABLED=$(grep '^PAYMENT_WEBHOOK_ENABLED=' /opt/photo-bot/.env | tail -n 1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')
+            if [ "$WEBHOOK_ENABLED" = true ]; then
+              printf 'resulturl_post_probe=skipped_enabled\n'
+            else
+              POST_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                --resolve pixoraai.ru:443:127.0.0.1 \
+                --request POST --data 'readiness_probe=1' \
+                https://pixoraai.ru/payments/robokassa/result)
+              test "$POST_STATUS" = 503
+              printf 'resulturl_post_disabled_status=%s\n' "$POST_STATUS"
+            fi
           REMOTE
       - name: Reset owner dialog to a clean main-menu state
         if: >-

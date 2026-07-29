@@ -654,6 +654,42 @@ class MaxApplicationTests(TestCase):
         )
         self.assertIn("Пакет доступа Ravuna — 49 ₽", self.transport.messages[-1][1])
 
+    def test_new_photo_with_caption_and_zero_edits_opens_checkout(self) -> None:
+        self.generate_first()
+        self.clock.advance(2)
+        self.callback("result:repeat")
+        self.assertEqual(self.demo.commerce.balance(self.store.get("u1").user_id).available, 0)
+
+        self.app.handle(self.event("message_created", text="/start"))
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        provider_calls = self.provider.calls
+        with self.database.read() as connection:
+            error_events_before = connection.execute(
+                "SELECT COUNT(*) FROM product_events WHERE event_type='error'"
+            ).fetchone()[0]
+
+        self.app.handle(
+            self.event(
+                "message_created",
+                text="Поменять одежду. Улучшить фон.",
+                image_url="https://iu.oneme.ru/new-source",
+            )
+        )
+
+        dialog = self.store.get("u1")
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(dialog.state, "result_ready")
+        self.assertEqual(dialog.pending_action, "checkout")
+        self.assertIsNotNone(dialog.current_version_id)
+        self.assertIn("Пакет доступа Ravuna — 49 ₽", self.transport.messages[-1][1])
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM product_events WHERE event_type='error'"
+                ).fetchone()[0],
+                error_events_before,
+            )
+
     def test_gallery_with_zero_edits_does_not_offer_correction_or_repeat(self) -> None:
         self.generate_first()
         self.clock.advance(2)

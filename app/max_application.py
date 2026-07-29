@@ -1138,7 +1138,23 @@ class MaxApplication:
     ) -> None:
         """Show the selected result before checkout without creating an order."""
 
-        if dialog.pending_action != "checkout":
+        if not dialog.current_version_id and dialog.user_id:
+            with self.database.read() as connection:
+                latest = connection.execute(
+                    """SELECT v.id,v.gallery_item_id
+                       FROM gallery_versions v
+                       JOIN gallery_items i ON i.id=v.gallery_item_id
+                       WHERE i.user_id=? AND i.deleted=0 AND v.status='succeeded'
+                       ORDER BY v.created_at DESC,v.version_number DESC LIMIT 1""",
+                    (dialog.user_id,),
+                ).fetchone()
+            if latest:
+                dialog = self.store.update(
+                    event.user_id,
+                    current_gallery_item_id=latest["gallery_item_id"],
+                    current_version_id=latest["id"],
+                )
+        if dialog.pending_action != "checkout" and dialog.current_version_id:
             self._send_selected_preview(
                 event.user_id, dialog, "Выбранная версия"
             )
