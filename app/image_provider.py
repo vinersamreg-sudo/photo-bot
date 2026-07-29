@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from openai import (
     APIConnectionError,
     APITimeoutError,
@@ -42,6 +42,20 @@ def _validate_provider_prompt(prompt: str) -> None:
         raise ValueError("Image providers accept normalized English ASCII prompts only")
 
 
+def _resolve_output_size(configured_size: str, source_path: Path) -> str:
+    """Map an automatic edit request to a provider-supported aspect ratio."""
+
+    if configured_size != "auto":
+        return configured_size
+    with Image.open(source_path) as opened:
+        width, height = ImageOps.exif_transpose(opened).size
+    if height > width:
+        return "1024x1536"
+    if width > height:
+        return "1536x1024"
+    return "1024x1024"
+
+
 def _provider_error_code(exc: OpenAIError) -> str | None:
     direct = getattr(exc, "code", None)
     if direct:
@@ -64,7 +78,7 @@ class OpenAIImageProvider:
         client: Any,
         model: str,
         quality: str = "medium",
-        size: str = "1024x1024",
+        size: str = "auto",
         input_fidelity: str = "auto",
         output_format: str = "png",
     ) -> None:
@@ -74,6 +88,9 @@ class OpenAIImageProvider:
         self.size = size
         self.input_fidelity = input_fidelity
         self.output_format = output_format
+
+    def resolve_size(self, source_path: Path) -> str:
+        return _resolve_output_size(self.size, source_path)
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
         _validate_provider_prompt(prompt)
@@ -86,7 +103,7 @@ class OpenAIImageProvider:
                     image=source,
                     prompt=prompt,
                     quality=self.quality,
-                    size=self.size,
+                    size=self.resolve_size(source_path),
                     output_format=self.output_format,
                 )
                 # GPT Image 2 always uses high input fidelity and rejects attempts
@@ -159,7 +176,7 @@ class OpenAIResponsesImageProvider:
         model: str,
         image_model: str,
         quality: str = "medium",
-        size: str = "1024x1024",
+        size: str = "auto",
         output_format: str = "png",
     ) -> None:
         self.client = client
@@ -168,6 +185,9 @@ class OpenAIResponsesImageProvider:
         self.quality = quality
         self.size = size
         self.output_format = output_format
+
+    def resolve_size(self, source_path: Path) -> str:
+        return _resolve_output_size(self.size, source_path)
 
     @staticmethod
     def _image_data_url(source_path: Path) -> str:
@@ -208,7 +228,7 @@ class OpenAIResponsesImageProvider:
                     "action": "edit",
                     "model": self.image_model,
                     "quality": self.quality,
-                    "size": self.size,
+                    "size": self.resolve_size(source_path),
                     "output_format": self.output_format,
                 }
             ],
@@ -313,6 +333,10 @@ class ContextAwareImageProvider:
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
         return self.stateless.edit(source_path, prompt)
+
+    def resolve_size(self, source_path: Path) -> str:
+        resolver = getattr(self.stateless, "resolve_size", None)
+        return resolver(source_path) if resolver else str(self.size)
 
     def edit_with_context(
         self,

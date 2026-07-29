@@ -171,6 +171,52 @@ class MaxTransportTests(TestCase):
         self.assertEqual(sent["attachments"][0]["type"], "image")
         self.assertEqual(sent["attachments"][0]["payload"]["token"], "photo-token")
 
+    def test_paid_original_is_uploaded_and_sent_as_a_file(self) -> None:
+        api_requests = []
+        media_requests = []
+
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            api_requests.append(request)
+            if request.url.path == "/uploads":
+                self.assertEqual(request.url.params["type"], "file")
+                return httpx.Response(200, json={"url": "https://iu.oneme.ru/upload"})
+            if request.url.path == "/messages":
+                return httpx.Response(
+                    200, json={"message": {"body": {"mid": "sent-file"}}}
+                )
+            return httpx.Response(200, json={"success": True})
+
+        def media_handler(request: httpx.Request) -> httpx.Response:
+            media_requests.append(request)
+            self.assertIn('filename="ravuna-original.png"', request.content.decode("latin-1"))
+            self.assertIn("Content-Type: image/png", request.content.decode("latin-1"))
+            return httpx.Response(200, json={"token": "file-token"})
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(transport=httpx.MockTransport(media_handler)),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "private-uuid.png"
+            original.write_bytes(b"original-png-bytes")
+            self.assertEqual(
+                client.send_file("42", original, "Original", ()),
+                "sent-file",
+            )
+        message_request = next(
+            request for request in api_requests
+            if request.url.path == "/messages" and request.method == "POST"
+        )
+        attachment = json.loads(message_request.content)["attachments"][0]
+        self.assertEqual(attachment["type"], "file")
+        self.assertEqual(attachment["payload"]["token"], "file-token")
+        self.assertEqual(len(media_requests), 1)
+
     def test_rejects_unknown_media_host_and_redacts_api_error(self) -> None:
         api = httpx.Client(
             base_url="https://platform-api2.max.ru",

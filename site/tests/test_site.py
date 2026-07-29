@@ -96,9 +96,17 @@ class RavunaSiteTests(unittest.TestCase):
             self.assertIn(text, self.html)
 
     # 04
-    def test_closed_pilot_is_disclosed(self) -> None:
-        self.assertGreaterEqual(self.html.count("Закрытое тестирование"), 1)
-        self.assertIn("Платежи отключены", self.html)
+    def test_public_launch_and_payment_copy_are_current(self) -> None:
+        lowered = self.html.lower()
+        for stale in (
+            "закрытое тестирование",
+            "закрытый пилот",
+            "оплата отключена",
+            "платежи отключены",
+            "после модерации",
+        ):
+            self.assertNotIn(stale, lowered)
+        self.assertIn("оплачивается через Robokassa", self.html)
 
     # 05
     def test_price_is_49_rubles_for_continuation_pack(self) -> None:
@@ -313,10 +321,11 @@ class RavunaSiteTests(unittest.TestCase):
     # 36
     def test_payment_page_is_truthful(self) -> None:
         payment = self.pages["legal/payment-refund.html"]
-        self.assertIn("Оплата сейчас отключена", payment)
+        self.assertIn("Ravuna принимает оплату через Robokassa", payment)
         self.assertIn("49 ₽", payment)
-        self.assertIn("Полностью неиспользованный пакет", payment)
+        self.assertIn("Обращение о возврате рассматривается вручную", payment)
         self.assertIn("рассматривается вручную", payment)
+        self.assertNotIn("автоматически отозван", payment)
 
     def test_payment_return_pages_are_static_and_fail_closed(self) -> None:
         for path in PAYMENT_STATUS:

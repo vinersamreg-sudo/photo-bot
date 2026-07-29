@@ -21,7 +21,7 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.app_env, "test")
         self.assertEqual(settings.base_dir, PROJECT_ROOT)
         self.assertEqual(settings.image_edit_quality, "medium")
-        self.assertEqual(settings.image_edit_size, "1024x1024")
+        self.assertEqual(settings.image_edit_size, "auto")
         self.assertEqual(settings.image_edit_input_fidelity, "auto")
         self.assertEqual(settings.image_edit_output_format, "png")
         self.assertEqual(settings.openai_max_retries, 2)

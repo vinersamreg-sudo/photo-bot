@@ -54,9 +54,11 @@ class FakeMaxTransport:
         self.source = source
         self.messages = []
         self.images = []
+        self.files = []
         self.edits = []
         self.callbacks = []
         self.image_delivery = True
+        self.file_delivery = True
         self.fail_next_message = False
         self.fail_next_edit = False
         self.on_send_message = None
@@ -90,6 +92,12 @@ class FakeMaxTransport:
         if not self.image_delivery:
             return None
         return f"image-{len(self.images)}"
+
+    def send_file(self, user_id, file_path, caption, buttons):
+        self.files.append((user_id, Path(file_path), caption, tuple(buttons)))
+        if not self.file_delivery:
+            return None
+        return f"file-{len(self.files)}"
 
 
 class MaxApplicationTests(TestCase):
@@ -693,7 +701,7 @@ class MaxApplicationTests(TestCase):
 
         paid_app.handle(self.event("message_callback", action="package:buy"))
 
-        self.assertEqual(self.transport.images[-1][1], original)
+        self.assertEqual(self.transport.files[-1][1], original)
         self.assertEqual(len(self.transport.messages), message_count + 1)
         self.assertEqual(self.transport.messages[-1][1], "Оригинал готов ✅")
         self.assertEqual(
@@ -816,7 +824,7 @@ class MaxApplicationTests(TestCase):
                 "UPDATE payment_orders SET version_id=? WHERE id=?",
                 (intent_version_id, order["id"]),
             )
-        self.transport.image_delivery = False
+        self.transport.file_delivery = False
         paid_app.handle(self.event("message_callback", action="result:unlock"))
         failed_delivery = self.transport.messages[-1]
         self.assertEqual(
@@ -846,9 +854,9 @@ class MaxApplicationTests(TestCase):
                 ).fetchone()[0],
                 "demo",
             )
-        self.transport.image_delivery = True
+        self.transport.file_delivery = True
         paid_app.handle(self.event("message_callback", action="result:unlock"))
-        self.assertEqual(self.transport.images[-1][1], original)
+        self.assertEqual(self.transport.files[-1][1], original)
         delivered_message = self.transport.messages[-1]
         self.assertEqual(delivered_message[1], "Оригинал готов ✅")
         self.assertEqual(
@@ -862,7 +870,7 @@ class MaxApplicationTests(TestCase):
         self.assertNotIn("Оплат", delivered_message[1])
         self.assertLessEqual(len(delivered_message[2]), 3)
         paid_app.handle(self.event("message_callback", action="result:unlock"))
-        self.assertEqual(self.transport.images[-1][1], original)
+        self.assertEqual(self.transport.files[-1][1], original)
         self.assertEqual(self.transport.messages[-1][1], "Оригинал готов ✅")
         with self.database.read() as connection:
             self.assertEqual(

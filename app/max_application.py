@@ -116,6 +116,10 @@ class LiveMaxTransport(Protocol):
         self, platform_user_id: str, image: Path, caption: str,
         buttons: Sequence[Button],
     ) -> Optional[str]: ...
+    def send_file(
+        self, platform_user_id: str, file_path: Path, caption: str,
+        buttons: Sequence[Button],
+    ) -> Optional[str]: ...
 
 
 class MaxApplication:
@@ -456,6 +460,18 @@ class MaxApplication:
         buttons: Sequence[Button],
     ) -> Optional[str]:
         message_id = self.transport.send_image(user_id, image, caption, buttons)
+        if message_id and buttons:
+            self.store.register_keyboard(user_id, message_id, caption)
+        return message_id
+
+    def _send_file(
+        self,
+        user_id: str,
+        file_path: Path,
+        caption: str,
+        buttons: Sequence[Button],
+    ) -> Optional[str]:
+        message_id = self.transport.send_file(user_id, file_path, caption, buttons)
         if message_id and buttons:
             self.store.register_keyboard(user_id, message_id, caption)
         return message_id
@@ -1036,7 +1052,7 @@ class MaxApplication:
             self._buy_continuation_pack(event, dialog)
             return
         try:
-            delivered = self._send_image(
+            delivered = self._send_file(
                 event.user_id,
                 reservation.original_path,
                 "Оригинал без водяного знака.",
@@ -1302,7 +1318,7 @@ class MaxApplication:
         )
         original = self.payments.original_for_order(order_id, row["user_id"])
         try:
-            delivered = self._send_image(
+            delivered = self._send_file(
                 row["platform_user_id"],
                 original,
                 "Оригинал без водяного знака.",

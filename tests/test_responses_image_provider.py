@@ -106,6 +106,19 @@ class ResponsesImageProviderTests(TestCase):
         self.assertEqual(responses.kwargs["tools"][0]["model"], "gpt-image-2")
         self.assertEqual(responses.kwargs["model"], "gpt-5.4-mini")
 
+    def test_auto_size_preserves_source_orientation(self) -> None:
+        portrait = Path(self.temporary.name) / "portrait.png"
+        Image.new("RGB", (442, 960), "white").save(portrait)
+        responses = RawResponses(self.image_bytes)
+        provider = OpenAIResponsesImageProvider(
+            SimpleNamespace(responses=responses),
+            "gpt-5.4-mini",
+            "gpt-image-2",
+            size="auto",
+        )
+        provider.edit_with_context(portrait, "Preserve identity.", self.context)
+        self.assertEqual(responses.kwargs["tools"][0]["size"], "1024x1536")
+
     def test_02_request_includes_previous_original_as_data_url(self) -> None:
         responses = RawResponses(self.image_bytes)
         self._provider(responses).edit_with_context(self.source, "Preserve identity.", self.context)

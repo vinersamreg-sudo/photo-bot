@@ -27,7 +27,7 @@ class Settings:
     app_env: str
     base_dir: Path
     image_edit_quality: str = "medium"
-    image_edit_size: str = "1024x1024"
+    image_edit_size: str = "auto"
     image_edit_input_fidelity: str = "auto"
     image_edit_output_format: str = "png"
     openai_max_retries: int = 2
@@ -266,7 +266,7 @@ def load_settings(
     image_edit_quality = values.get("IMAGE_EDIT_QUALITY", "medium").strip().lower() or "medium"
     if image_edit_quality not in {"low", "medium", "high", "auto"}:
         raise ValueError("IMAGE_EDIT_QUALITY must be low, medium, high or auto")
-    image_edit_size = values.get("IMAGE_EDIT_SIZE", "1024x1024").strip().lower() or "1024x1024"
+    image_edit_size = values.get("IMAGE_EDIT_SIZE", "auto").strip().lower() or "auto"
     if image_edit_size != "auto" and not re.fullmatch(r"[1-9]\d{2,3}x[1-9]\d{2,3}", image_edit_size):
         raise ValueError("IMAGE_EDIT_SIZE must be auto or WIDTHxHEIGHT")
     image_edit_input_fidelity = (

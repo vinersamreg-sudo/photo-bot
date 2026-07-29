@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import ssl
 from dataclasses import dataclass
@@ -266,11 +267,14 @@ class MaxApiClient:
         buttons: Sequence[Button] = (),
         *,
         image_token: Optional[str] = None,
+        file_token: Optional[str] = None,
         notify: bool = True,
     ) -> str:
         attachments: list[dict[str, Any]] = []
         if image_token:
             attachments.append({"type": "image", "payload": {"token": image_token}})
+        if file_token:
+            attachments.append({"type": "file", "payload": {"token": file_token}})
         attachments.extend(self._keyboard(buttons))
         body: dict[str, Any] = {"text": text, "notify": notify}
         if attachments:
@@ -369,6 +373,35 @@ class MaxApiClient:
             raise MaxTransportError("MAX upload did not return a media token")
         return str(token)
 
+    def upload_file(self, file_path: Path, upload_name: str | None = None) -> str:
+        upload = self._request("POST", "/uploads", params={"type": "file"})
+        url = upload.get("url")
+        if not isinstance(url, str):
+            raise MaxTransportError("MAX did not return a file upload URL")
+        self._validate_media_url(url)
+        name = upload_name or file_path.name
+        content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        try:
+            with file_path.open("rb") as content:
+                response = self.media_client.post(
+                    url,
+                    files={"data": (name, content, content_type)},
+                )
+        except httpx.HTTPError as exc:
+            raise MaxTransportError(f"MAX file upload failed ({type(exc).__name__})") from exc
+        if response.status_code >= 400:
+            raise MaxTransportError(
+                f"MAX file upload returned HTTP {response.status_code}"
+            )
+        try:
+            result = response.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise MaxTransportError("MAX file upload returned invalid JSON") from exc
+        token = result.get("token") or upload.get("token")
+        if not token:
+            raise MaxTransportError("MAX file upload did not return a media token")
+        return str(token)
+
     def send_image(
         self,
         platform_user_id: str,
@@ -384,6 +417,27 @@ class MaxApiClient:
         except MaxTransportError as exc:
             LOGGER.warning(
                 "MAX image delivery failed (kind=%s,http_status=%s)",
+                exc.kind,
+                exc.http_status,
+            )
+            return None
+
+    def send_file(
+        self,
+        platform_user_id: str,
+        file_path: Path,
+        caption: str,
+        buttons: Sequence[Button],
+    ) -> Optional[str]:
+        suffix = file_path.suffix.lower() or ".png"
+        try:
+            token = self.upload_file(file_path, f"ravuna-original{suffix}")
+            return self.send_message(
+                platform_user_id, caption, buttons, file_token=token
+            )
+        except MaxTransportError as exc:
+            LOGGER.warning(
+                "MAX file delivery failed (kind=%s,http_status=%s)",
                 exc.kind,
                 exc.http_status,
             )

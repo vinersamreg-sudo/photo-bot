@@ -79,6 +79,39 @@ class OpenAIImageProviderTests(TestCase):
             self.assertEqual(images.kwargs["output_format"], "png")
             self.assertNotIn("input_fidelity", images.kwargs)
 
+    def test_auto_size_preserves_source_orientation(self) -> None:
+        cases = (
+            ((442, 960), "1024x1536"),
+            ((960, 442), "1536x1024"),
+            ((640, 640), "1024x1024"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for index, (dimensions, expected) in enumerate(cases):
+                with self.subTest(dimensions=dimensions):
+                    source = Path(directory) / f"source-{index}.png"
+                    output = io.BytesIO()
+                    Image.new("RGB", dimensions, "white").save(output, format="PNG")
+                    source.write_bytes(output.getvalue())
+                    images = Images(base64.b64encode(output.getvalue()).decode("ascii"))
+                    provider = OpenAIImageProvider(
+                        SimpleNamespace(images=images), "gpt-image-2", size="auto"
+                    )
+                    provider.edit(source, "Preserve the composition.")
+                    self.assertEqual(images.kwargs["size"], expected)
+
+    def test_explicit_size_remains_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            output = io.BytesIO()
+            Image.new("RGB", (442, 960), "white").save(output, format="PNG")
+            source.write_bytes(output.getvalue())
+            images = Images(base64.b64encode(output.getvalue()).decode("ascii"))
+            provider = OpenAIImageProvider(
+                SimpleNamespace(images=images), "gpt-image-2", size="1024x1024"
+            )
+            provider.edit(source, "Preserve the composition.")
+            self.assertEqual(images.kwargs["size"], "1024x1024")
+
     def test_rejects_non_normalized_provider_prompt_before_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.png"

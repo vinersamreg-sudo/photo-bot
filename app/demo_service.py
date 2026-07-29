@@ -470,6 +470,15 @@ class DemoService:
                     "Можно вернуться позже или получить результат через платную операцию"
                 )
 
+            requested_size = "source"
+            if not processing_plan.provider.startswith("local-"):
+                resolver = getattr(self.provider, "resolve_size", None)
+                requested_size = (
+                    resolver(source_path)
+                    if resolver is not None
+                    else getattr(self.provider, "size", None)
+                )
+
             connection.execute(
                 """INSERT INTO generation_attempts(
                        id,idempotency_key,session_id,user_id,prompt,scenario_id,status,started_at,
@@ -494,11 +503,7 @@ class DemoService:
                     processing_plan.provider_model,
                     str(source_path),
                     source_path.stat().st_size,
-                    (
-                        "source"
-                        if processing_plan.provider.startswith("local-")
-                        else getattr(self.provider, "size", None)
-                    ),
+                    requested_size,
                     (
                         "local"
                         if processing_plan.provider.startswith("local-")
@@ -670,7 +675,7 @@ class DemoService:
                 "completed_at": iso(completed),
                 "provider": self.provider.name,
                 "model": self.provider.model,
-                "requested_size": getattr(self.provider, "size", None),
+                "requested_size": requested_size,
                 "requested_quality": getattr(self.provider, "quality", None),
                 "intent_category": edit_plan.primary_action,
                 "edit_mode": edit_plan.mode,
