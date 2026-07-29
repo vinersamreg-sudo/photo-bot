@@ -316,7 +316,10 @@ class ProcessingModeTests(TestCase):
         local = self.router.route(correction, parent=parent_processing)
         prompt = build_provider_prompt(correction, local)
         self.assertTrue(prompt.isascii())
-        self.assertIn("Edit only the explicitly targeted local regions", prompt)
+        self.assertIn(
+            "Edit every explicitly targeted region sufficiently",
+            prompt,
+        )
         main_section = prompt.split("PRESERVE", 1)[0]
         self.assertNotIn("Replace the background with realistic rocky mountains", main_section)
         enhancement = self.router.route(parse_edit_intent("Улучши качество"))

@@ -181,7 +181,16 @@ def studio_menu_contract() -> View:
 
 
 def result_actions(remaining: int) -> View:
-    _ = remaining
+    if remaining <= 0:
+        return View(
+            "Готово",
+            (
+                Button("Получить оригинал", "result:unlock"),
+                Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
+                Button("История версий", "work:history"),
+                Button("Мои работы", "studio:works"),
+            ),
+        )
     return View(
         "Готово",
         (
@@ -227,7 +236,15 @@ def delete_confirmation_view() -> View:
     )
 
 
-def gallery_item_actions() -> tuple[Button, ...]:
+def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
+    if remaining <= 0:
+        return (
+            Button("⬇ Получить оригинал", "result:unlock"),
+            Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
+            Button("История версий", "work:history"),
+            Button("Ещё", "work:more"),
+            Button("📂 К работам", "studio:works"),
+        )
     return (
         Button("⬇ Получить оригинал", "result:unlock"),
         Button("✏️ Исправить", "result:correct"),

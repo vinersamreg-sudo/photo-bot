@@ -22,7 +22,7 @@ PrimaryAction = Literal[
     "custom",
 ]
 
-PARSER_VERSION = "rules-ru-v3"
+PARSER_VERSION = "rules-ru-v4"
 EDIT_PLAN_SCHEMA_VERSION = 3
 
 
@@ -318,7 +318,7 @@ def parse_edit_intent(
 
     explicit_replace_background = _has(
         text,
-        r"(?:замени|поменяй|смени|измени)\s+(?:мне\s+)?(?:фон|задн\w*\s+план)",
+        r"(?:замени|поменяй|смени|измени|заменить|поменять|сменить|изменить)\s+(?:мне\s+)?(?:фон|задн\w*\s+план)",
         r"фон\s+(?:на|в)\s+скал",
         r"(?:сделай|добавь)\s+скал\w*\s+(?:на\s+)?фон",
         r"(?:сделай|поставь)\s+(?:на\s+фон\s+)?(?:горы|скалы|альпы)",
@@ -374,9 +374,17 @@ def parse_edit_intent(
                 "light_photo_studio", "photorealistic", "forbidden",
             )
         else:
-            changes.append("Replace the background according to the user's requested setting.")
+            changes.append(
+                "Replace the entire background with a clearly different, realistic, "
+                "clean and context-appropriate setting."
+            )
             background = BackgroundIntent(
-                "replace", "requested setting", "preserve", None, "preserve", "preserve"
+                "replace",
+                "a clearly different realistic clean context-appropriate setting",
+                "sharp",
+                None,
+                "photorealistic",
+                "forbidden",
             )
         if explicit_ai_background:
             background = replace(background, source="ai")
@@ -389,6 +397,27 @@ def parse_edit_intent(
         actions.append("preserve_background")
         background = BackgroundIntent("preserve", None, "preserve", None, "preserve", "preserve")
         negative.append("replace background")
+
+    improve_existing_background = (
+        not explicit_replace_background
+        and not explicit_preserve_background
+        and _has(
+            text,
+            r"(?:улучш|сделай\s+красив|приведи\s+в\s+порядок).{0,24}(?:фон|задн\w*\s+план)",
+            r"(?:фон|задн\w*\s+план).{0,24}(?:улучш|красив|аккурат|качествен)",
+        )
+    )
+    if improve_existing_background:
+        targets.append("background")
+        actions.append("improve_quality")
+        changes.append(
+            "Improve the existing background visibly: refine its lighting, clarity, "
+            "color balance and distracting imperfections while keeping the same "
+            "location and layout."
+        )
+        background = BackgroundIntent(
+            "enhance", None, "improve", None, "photorealistic", "preserve"
+        )
 
     blur_complaint = _has(
         text,
@@ -437,18 +466,42 @@ def parse_edit_intent(
         )
         negative.append("new replacement background")
 
-    if _has(text, r"(?:переодень|смени\s+(?:только\s+)?одежд|замени\s+(?:только\s+)?одежд|поменяй\s+(?:только\s+)?одежд|одежд\w*\s+для\s+хайкинг)"):
+    if _has(
+        text,
+        r"(?:переодень|переодеть|одень|одеть)(?:\s+(?:всех|людей|их))?",
+        r"(?:смени|замени|заменить|поменяй|поменять)\s+(?:всех\s+|людей\s+|их\s+|только\s+)?одежд",
+        r"(?:сделай|измени)\s+одежд\w*",
+        r"одежд\w*\s+(?:для\s+хайкинг|торжествен|празднич|нарядн|вечерн)",
+    ):
         targets.append("clothing")
         actions.append("change_clothes")
-        if _has(text, r"хайкинг|поход|турист"):
-            changes.append("Replace the clothing with realistic, practical hiking clothing.")
-            outfit = OutfitIntent("replace", "realistic practical hiking clothing")
+        every_person = _has(text, r"\b(?:все|всех|людей|кажд\w*)\b")
+        subject = "every visible person" if every_person else "the requested visible subject"
+        if _has(text, r"торжествен|празднич|нарядн|вечерн"):
+            style = (
+                "realistic formal, occasion-appropriate clothing suited individually "
+                "to each person's age and role"
+            )
+            changes.append(
+                f"Replace the clothing of {subject} with {style}. "
+                "Make the wardrobe change clear and complete; do not leave a targeted "
+                "person's original outfit unchanged."
+            )
+            outfit = OutfitIntent("replace", style)
+        elif _has(text, r"хайкинг|поход|турист"):
+            style = "realistic, practical hiking clothing"
+            changes.append(f"Replace the clothing of {subject} with {style}.")
+            outfit = OutfitIntent("replace", style)
         elif _has(text, r"делов|бизнес|костюм"):
-            changes.append("Replace the clothing with a realistic modern business outfit.")
-            outfit = OutfitIntent("replace", "realistic modern business outfit")
+            style = "a realistic modern business outfit"
+            changes.append(f"Replace the clothing of {subject} with {style}.")
+            outfit = OutfitIntent("replace", style)
         else:
-            changes.append("Change only the subject's clothing as requested.")
-            outfit = OutfitIntent("replace", "requested clothing")
+            changes.append(
+                f"Replace the clothing of {subject} according to the user's request. "
+                "Make the requested wardrobe change clearly visible and photorealistic."
+            )
+            outfit = OutfitIntent("replace", "the clearly requested realistic clothing")
 
     if _has(text, r"(?:добавь|надень|сделай).{0,15}(?:куртк|пиджак)"):
         targets.append("clothing")
@@ -517,7 +570,26 @@ def parse_edit_intent(
         actions.append("improve_quality")
         changes.append("Improve natural sharpness, lighting and detail across the photograph.")
 
-    if _has(text, r"(?:убери|удали(?:ть)?)\s+(?:объект|предмет|человека|девушк\w*|мужчин\w*|надпись)"):
+    if (
+        _has(
+            text,
+            r"(?:сделай|сделать)\s+(?:фото\s+)?красив",
+            r"(?:улучш|обработай)\s+(?:это\s+)?(?:фото|фотограф)\w*$",
+        )
+        and not actions
+    ):
+        targets.append("whole_image")
+        actions.append("improve_quality")
+        changes.append(
+            "Improve the photograph visibly with natural lighting, balanced color, "
+            "clean detail and restrained retouching, without redesigning its people, "
+            "objects, setting or composition."
+        )
+
+    if _has(
+        text,
+        r"(?:убери|удали(?:ть)?)\s+(?:(?:лишн|ненужн)\w*\s+)?(?:объект|предмет|человека|девушк\w*|мужчин\w*|надпись)",
+    ):
         targets.append("object")
         actions.append("remove_object")
         changes.append("Remove only the requested object and reconstruct the occluded area naturally.")
@@ -632,7 +704,10 @@ def parse_edit_intent(
                 camera = CameraIntent("respectful memorial portrait")
 
     if not changes and source:
-        changes.append("Apply the user's requested edit faithfully and conservatively.")
+        changes.append(
+            "Carry out the user's requested edit visibly and faithfully while preserving "
+            "unrelated details."
+        )
 
     target_set = set(targets)
     if "face" not in target_set:
@@ -697,8 +772,49 @@ def merge_edit_plans(parent: EditPlan, correction: EditPlan) -> EditPlan:
     inherited_text = _unique(
         (*parent.inherited_user_text, parent.source_user_text, *correction.inherited_user_text)
     )
+    override_fields: set[str] = set()
+    if correction.scene.outfit.operation != "unchanged":
+        override_fields.add("clothing")
+    if correction.scene.background.operation in {"replace", "restore_previous"}:
+        override_fields.add("background")
+    if correction.scene.pose.operation != "unchanged":
+        override_fields.add("pose")
+    if correction.scene.lighting.style is not None:
+        override_fields.add("lighting")
+    if correction.scene.camera.framing is not None:
+        override_fields.add("camera")
+    if "hair" in correction.target_regions:
+        override_fields.add("hair")
+
+    field_terms = {
+        "clothing": ("clothing", "outfit", "wardrobe", "accessor", "jacket"),
+        "background": (
+            "background", "scene", "setting", "rock", "mountain", "landmark"
+        ),
+        "pose": ("pose",),
+        "lighting": ("lighting", "light", "sunset"),
+        "camera": ("camera", "framing", "viewpoint"),
+        "hair": ("hair", "hairstyle", "hairline"),
+    }
+
+    def superseded(value: str) -> bool:
+        normalized = value.lower()
+        return any(
+            term in normalized
+            for field in override_fields
+            for term in field_terms[field]
+        )
+
+    parent_preservation = tuple(
+        value for value in parent.preservation_rules if not superseded(value)
+    )
+    parent_forbidden = tuple(
+        value for value in parent.forbidden_changes if not superseded(value)
+    )
     inherited_constraints = _unique(
-        (*parent.inherited_constraints, *parent.requested_changes)
+        value
+        for value in (*parent.inherited_constraints, *parent.requested_changes)
+        if not superseded(value)
     )
     continuity = list(parent.continuity_requirements)
     continuity.extend(correction.continuity_requirements)
@@ -737,13 +853,17 @@ def merge_edit_plans(parent: EditPlan, correction: EditPlan) -> EditPlan:
             add=_unique((*parent_scene.objects.add, *correction_scene.objects.add)),
             remove=_unique((*parent_scene.objects.remove, *correction_scene.objects.remove)),
         ),
-        negative=_unique((*parent_scene.negative, *correction_scene.negative)),
+        negative=_unique(
+            value
+            for value in (*parent_scene.negative, *correction_scene.negative)
+            if value in correction_scene.negative or not superseded(value)
+        ),
     )
 
     return replace(
         correction,
-        preservation_rules=_unique((*parent.preservation_rules, *correction.preservation_rules)),
-        forbidden_changes=_unique((*parent.forbidden_changes, *correction.forbidden_changes)),
+        preservation_rules=_unique((*parent_preservation, *correction.preservation_rules)),
+        forbidden_changes=_unique((*parent_forbidden, *correction.forbidden_changes)),
         continuity_requirements=_unique(continuity),
         inherited_user_text=inherited_text,
         inherited_constraints=inherited_constraints,

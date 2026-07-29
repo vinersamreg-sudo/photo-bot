@@ -613,6 +613,61 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
+    def test_zero_remaining_edits_replaces_edit_actions_with_purchase_offer(self) -> None:
+        self.generate_first()
+
+        self.clock.advance(2)
+        self.callback("result:repeat")
+
+        self.assertEqual(self.provider.calls, 2)
+        self.assertEqual(self.demo.commerce.balance(self.store.get("u1").user_id).available, 0)
+        buttons = self.transport.images[-1][3]
+        button_texts = [button.text for button in buttons]
+        self.assertNotIn("Исправить", button_texts)
+        self.assertNotIn("Другой вариант", button_texts)
+        self.assertIn("💳 Купить ещё 2 обработки — 49 ₽", button_texts)
+        self.assertIn("Получить оригинал", button_texts)
+
+    def test_stale_correction_callback_with_zero_edits_opens_checkout_without_prompt(self) -> None:
+        self.generate_first()
+        self.clock.advance(2)
+        self.callback("result:repeat")
+        provider_calls = self.provider.calls
+        correction_requests = sum(
+            message[1] == CORRECTION_REQUEST_TEXT
+            for message in self.transport.messages
+        )
+
+        self.callback("result:correct")
+
+        dialog = self.store.get("u1")
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(dialog.state, "result_ready")
+        self.assertEqual(dialog.pending_action, "checkout")
+        self.assertNotEqual(dialog.state, "waiting_for_correction")
+        self.assertEqual(
+            sum(
+                message[1] == CORRECTION_REQUEST_TEXT
+                for message in self.transport.messages
+            ),
+            correction_requests,
+        )
+        self.assertIn("Пакет доступа Ravuna — 49 ₽", self.transport.messages[-1][1])
+
+    def test_gallery_with_zero_edits_does_not_offer_correction_or_repeat(self) -> None:
+        self.generate_first()
+        self.clock.advance(2)
+        self.callback("result:repeat")
+
+        self.callback("studio:works")
+        item_id = self.store.get("u1").current_gallery_item_id
+        self.callback(f"works:open:{item_id}")
+
+        button_texts = [button.text for button in self.transport.images[-1][3]]
+        self.assertNotIn("✏️ Исправить", button_texts)
+        self.assertNotIn("🎲 Другой вариант", button_texts)
+        self.assertIn("💳 Купить ещё 2 обработки — 49 ₽", button_texts)
+
     def test_repeated_payment_click_sends_one_card_and_one_short_notice(self) -> None:
         self.generate_first()
         paid_app, _payments = self.paid_application()

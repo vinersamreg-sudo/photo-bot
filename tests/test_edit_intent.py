@@ -152,8 +152,88 @@ class EditIntentTests(TestCase):
         plan = parse_edit_intent("Поменяй только одежду")
         restored = EditPlan.from_json(plan.to_json())
         self.assertEqual(restored, plan)
-        self.assertEqual(restored.parser_version, "rules-ru-v3")
+        self.assertEqual(restored.parser_version, "rules-ru-v4")
         self.assertEqual(restored.schema_version, 3)
+
+    def test_short_formal_clothing_request_expands_for_every_visible_person(self) -> None:
+        plan = parse_edit_intent("Одень всех людей в торжественную одежду")
+        prompt = build_provider_prompt(plan)
+
+        self.assertEqual(plan.primary_action, "change_clothes")
+        self.assertIn("clothing", plan.target_regions)
+        self.assertIn("every visible person", prompt)
+        self.assertIn("formal", prompt)
+        self.assertIn("clearly visible", prompt)
+        self.assertIn("recognizable identity", prompt)
+        self.assertNotIn("Preserve the current clothing", prompt)
+
+    def test_infinitive_clothing_and_background_improvement_are_both_expanded(self) -> None:
+        plan = parse_edit_intent("Поменять одежду. Улучшить фон.")
+        prompt = build_provider_prompt(plan)
+
+        self.assertIn("clothing", plan.target_regions)
+        self.assertIn("background", plan.target_regions)
+        self.assertIn("Replace the clothing", prompt)
+        self.assertIn("Improve the existing background visibly", prompt)
+        self.assertNotIn("Preserve the current clothing", prompt)
+        self.assertNotIn("Preserve the current background", prompt)
+
+    def test_new_correction_drops_stale_clothing_preservation(self) -> None:
+        parent = parse_edit_intent("Замени фон на скалы")
+        correction = parse_edit_intent(
+            "Переодень людей в торжественную одежду", mode="correction"
+        )
+        merged = merge_edit_plans(parent, correction)
+        prompt = build_provider_prompt(merged)
+
+        self.assertIn("formal", prompt)
+        self.assertNotIn("Preserve the current clothing", prompt)
+        self.assertNotIn(
+            "preserve rather than recreate: Preserve the current clothing",
+            prompt,
+        )
+
+    def test_short_beautify_request_is_visible_but_does_not_redesign_scene(self) -> None:
+        plan = parse_edit_intent("Сделай красивее")
+        prompt = build_provider_prompt(plan)
+
+        self.assertEqual(plan.primary_action, "improve_quality")
+        self.assertIn("Improve the photograph visibly", prompt)
+        self.assertIn("without redesigning", prompt)
+        self.assertIn("recognizable identity", prompt)
+
+    def test_request_priority_precedes_preservation_defaults(self) -> None:
+        prompt = build_provider_prompt(
+            parse_edit_intent("Переодень людей в торжественную одежду")
+        )
+
+        request_priority = prompt.index(
+            "First, fully perform every explicit requested change"
+        )
+        identity_priority = prompt.index(
+            "Second, preserve each person's recognizable identity"
+        )
+        realism_priority = prompt.index(
+            "Third, preserve photographic realism"
+        )
+        self.assertLess(request_priority, identity_priority)
+        self.assertLess(identity_priority, realism_priority)
+
+    def test_core_product_scenarios_keep_explicit_scope_and_identity_guard(self) -> None:
+        cases = (
+            ("Восстанови старое фото", "restore_photo", "Restore damage"),
+            ("Удали лишний предмет", "remove_object", "Remove only"),
+            ("Замени фон", "replace_background", "clearly different"),
+            ("Переодень в деловую одежду", "change_clothes", "business outfit"),
+            ("Улучши качество фотографии", "improve_quality", "Improve natural"),
+        )
+        for phrase, action, expected in cases:
+            with self.subTest(phrase=phrase):
+                plan = parse_edit_intent(phrase)
+                prompt = build_provider_prompt(plan)
+                self.assertEqual(plan.primary_action, action)
+                self.assertIn(expected, prompt)
+                self.assertIn("recognizable identity", prompt)
 
     def test_structured_scene_accumulates_field_updates(self) -> None:
         first = parse_edit_intent("Замени фон на Альпы")

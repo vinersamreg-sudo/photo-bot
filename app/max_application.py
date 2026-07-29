@@ -648,7 +648,12 @@ class MaxApplication:
             self._unlock_or_deliver(event, dialog)
         elif action == "package:buy":
             self._buy_continuation_pack(event, dialog)
+        elif action == "package:offer":
+            self._show_continuation_pack_offer(event, dialog)
         elif action == "result:correct":
+            if not dialog.session_id or self._remaining(dialog.session_id) <= 0:
+                self._show_continuation_pack_offer(event, dialog)
+                return
             self._track(
                 "correction_started",
                 session_id=dialog.session_id,
@@ -663,6 +668,9 @@ class MaxApplication:
             )
             self._send_message(event.user_id, CORRECTION_REQUEST_TEXT)
         elif action == "result:repeat":
+            if not dialog.session_id or self._remaining(dialog.session_id) <= 0:
+                self._show_continuation_pack_offer(event, dialog)
+                return
             self._track(
                 "repeat_started",
                 session_id=dialog.session_id,
@@ -987,10 +995,7 @@ class MaxApplication:
                 session_id=dialog.session_id,
                 gallery_item_id=dialog.current_gallery_item_id,
             )
-            self.store.transition(
-                event.user_id, "demo_exhausted", event_key=event.event_key, force=True
-            )
-            self._send_view(event.user_id, result_actions(0))
+            self._show_continuation_pack_offer(event, dialog)
             return
         remaining_after = available - 1
         status_id = self._send_message(event.user_id, PROCESSING_TEXT)
@@ -1512,7 +1517,17 @@ class MaxApplication:
             return
         heading = "История версий" if history else title
         caption = f"{heading}{' ⭐' if favorite or current.favorite else ''}\nВерсия {current.version_number} из {len(versions)}"
-        buttons = version_history_actions() if history else gallery_item_actions()
+        dialog = self.store.get(platform_user_id)
+        remaining = (
+            self.demo.commerce.balance(dialog.user_id).available
+            if dialog and dialog.user_id
+            else 0
+        )
+        buttons = (
+            version_history_actions()
+            if history
+            else gallery_item_actions(remaining)
+        )
         if not self._send_image(
             platform_user_id, current.preview_path, caption, buttons
         ):

@@ -9,7 +9,7 @@ from app.edit_intent import EditPlan
 from app.processing_modes import ProcessingMode, ProcessingPlan
 
 
-PROMPT_BUILDER_VERSION = "technical-en-v3-modes"
+PROMPT_BUILDER_VERSION = "technical-en-v4-request-first"
 
 
 def _unique(values: Iterable[str]) -> tuple[str, ...]:
@@ -27,15 +27,19 @@ def _safe_user_text(text: str) -> str:
 
 
 def contextual_preservation_rules(plan: EditPlan) -> tuple[str, ...]:
-    """Apply conservative defaults, allowing only explicitly targeted regions to change."""
+    """Protect identity and non-target details without suppressing the requested edit."""
 
     targets = set(plan.target_regions)
     rules: list[str] = list(plan.preservation_rules)
     if "face" not in targets:
         rules.extend((
             "Preserve the same recognizable identity and facial geometry.",
-            "Preserve eyes, nose, mouth, age, ethnicity, hairline and natural skin texture.",
+            "Preserve eyes, nose, mouth, age, perceived gender, ethnicity, hairline and natural skin texture.",
         ))
+    else:
+        rules.append(
+            "Preserve the same recognizable identity while changing only the explicitly requested facial attribute."
+        )
     if "hair" not in targets:
         rules.append("Preserve the hairstyle, hair color and hair identity.")
     if "pose" not in targets:
@@ -65,7 +69,7 @@ def _structured_change_lines(
     """Translate provider-neutral scene fields into English model instructions."""
 
     scene = plan.scene
-    lines: list[str] = []
+    lines: list[str] = list(plan.requested_changes)
     targets = set(plan.target_regions)
     render_all = plan.mode in {"initial_edit", "scenario", "repeat"}
     background = scene.background
@@ -80,6 +84,11 @@ def _structured_change_lines(
         lines.append("Keep the current background and make it sharp, detailed and clearly readable.")
     elif render_background and background.operation == "blur":
         lines.append("Apply natural background blur while keeping the subject sharp.")
+    elif render_background and background.operation == "enhance":
+        lines.append(
+            "Improve the existing background visibly while keeping the same location, "
+            "layout and perspective."
+        )
     if (
         render_background
         and background.sharpness == "sharp"
@@ -111,7 +120,9 @@ def _structured_change_lines(
     elif plan.primary_action == "improve_quality":
         lines.append("Improve natural sharpness, lighting and detail without redesigning the photograph.")
     elif plan.primary_action == "custom" and not lines:
-        lines.append("Apply a conservative photorealistic edit within the structured constraints.")
+        lines.append(
+            "Carry out the expanded requested changes visibly and faithfully."
+        )
     if processing_plan is not None:
         if processing_plan.selected_mode == ProcessingMode.AI_GENERATION:
             lines.extend((
@@ -124,7 +135,10 @@ def _structured_change_lines(
                 "Limit any finishing to edge, shadow, light and color integration.",
             ))
         elif processing_plan.selected_mode == ProcessingMode.LOCAL_AI_EDIT:
-            lines.append("Edit only the explicitly targeted local regions.")
+            lines.append(
+                "Edit every explicitly targeted region sufficiently for the requested "
+                "change to be clearly visible; leave unrelated regions unchanged."
+            )
         elif processing_plan.selected_mode == ProcessingMode.ENHANCEMENT:
             lines.extend((
                 "Enhance only existing pixels and detail.",
@@ -168,6 +182,15 @@ def build_provider_prompt(
 
     sections: list[str] = [
         "Edit the provided image as a realistic photograph.",
+        "",
+        "PRIORITY ORDER",
+        "- First, fully perform every explicit requested change. The requested edit "
+        "must be clearly visible, not reduced to a minor color, brightness or contrast adjustment.",
+        "- Second, preserve each person's recognizable identity and facial geometry "
+        "unless the user explicitly requests a facial attribute change.",
+        "- Third, preserve photographic realism, natural anatomy and coherent lighting.",
+        "- Preservation rules apply only outside the requested target regions and must "
+        "never cancel or weaken an explicit requested change.",
         "",
         "MAIN EDIT INSTRUCTION",
         f"- Mode: {plan.mode}.",

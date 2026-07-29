@@ -218,6 +218,9 @@ class AiBrainIntegrationTests(TestCase):
         self.assertEqual(row["prompt"], "Фон на скалы")
         self.assertNotEqual(row["provider_prompt"], row["prompt"])
         self.assertEqual(json.loads(row["edit_plan_json"])["source_user_text"], "Фон на скалы")
-        self.assertEqual(row["prompt_builder_version"], "technical-en-v3-modes")
+        self.assertEqual(
+            row["prompt_builder_version"],
+            "technical-en-v4-request-first",
+        )
         self.assertTrue(row["provider_prompt"].isascii())
         self.assertEqual(json.loads(row["edit_plan_json"])["schema_version"], 3)

@@ -77,6 +77,15 @@ class MaxAdapterTests(TestCase):
             ],
         )
         self.assertEqual(
+            [button.text for button in result_actions(0).buttons],
+            [
+                "Получить оригинал",
+                "💳 Купить ещё 2 обработки — 49 ₽",
+                "История версий",
+                "Мои работы",
+            ],
+        )
+        self.assertEqual(
             [button.text for button in paid_actions()],
             [
                 "📥 Скачать оригинал",
@@ -100,6 +109,16 @@ class MaxAdapterTests(TestCase):
             ],
         )
         self.assertEqual(len(gallery_item_actions()), 6)
+        self.assertEqual(
+            [button.text for button in gallery_item_actions(0)],
+            [
+                "⬇ Получить оригинал",
+                "💳 Купить ещё 2 обработки — 49 ₽",
+                "История версий",
+                "Ещё",
+                "📂 К работам",
+            ],
+        )
         self.assertEqual(len(gallery_more_actions().buttons), 4)
         self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])
         self.assertNotIn("👎 Не то", [button.text for button in gallery_item_actions()])
