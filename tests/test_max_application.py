@@ -178,6 +178,22 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.messages[-1][0:2], ("outsider", OWNER_ONLY_TEXT))
         self.assertIsNone(self.store.get("outsider"))
 
+    def test_public_access_allows_non_owner_start_without_generation(self) -> None:
+        self.app.settings = replace(
+            self.settings,
+            max_public_access_enabled=True,
+        )
+        event = MaxIncomingEvent(
+            "message_created", "message:public", "public-user", "c2", 1,
+            message_id="public-message", text="/start",
+        )
+
+        self.assertTrue(self.app.handle(event))
+
+        self.assertIsNotNone(self.store.get("public-user"))
+        self.assertNotEqual(self.transport.messages[-1][1], OWNER_ONLY_TEXT)
+        self.assertEqual(self.provider.calls, 0)
+
     def test_start_deactivates_keyboard_from_previous_state(self) -> None:
         self.app.handle(self.event("bot_started"))
         previous_message_id = self.transport.messages[-1][4]

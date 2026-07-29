@@ -45,8 +45,22 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.max_poll_retry_seconds, 5)
         self.assertEqual(settings.max_poll_max_stale_seconds, 90)
         self.assertTrue(settings.max_poll_observe_only)
+        self.assertFalse(settings.max_public_access_enabled)
         self.assertEqual(settings.max_owner_user_ids, ("owner-1", "owner-2"))
         self.assertFalse(settings.payment_webhook_listener_enabled)
+
+    def test_public_access_is_explicit_and_defaults_closed(self) -> None:
+        self.assertFalse(
+            load_settings(environ={"APP_ENV": "test"}).max_public_access_enabled
+        )
+        self.assertTrue(
+            load_settings(
+                environ={
+                    "APP_ENV": "test",
+                    "MAX_PUBLIC_ACCESS_ENABLED": "true",
+                }
+            ).max_public_access_enabled
+        )
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]

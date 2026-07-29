@@ -401,6 +401,11 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         and settings.pilot_user_limit == 0
         and budget["image_requests_enabled"]
     )
+    public_launch_ready = bool(
+        operational_ready
+        and settings.max_public_access_enabled
+        and not settings.max_poll_observe_only
+    )
     alerts: dict[str, list[dict[str, str]]] = {"p0": [], "p1": []}
 
     def add_alert(priority: str, code: str, message: str) -> None:
@@ -465,6 +470,7 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
             "environment": settings.app_env,
             "transport": settings.max_transport_mode,
             "observe_only": settings.max_poll_observe_only,
+            "public_access_enabled": settings.max_public_access_enabled,
             "owner_allowlist_configured": bool(settings.max_owner_user_ids),
             "pilot_limit": settings.pilot_user_limit,
             "pilot_configured_count": len(settings.max_pilot_user_ids),
@@ -549,8 +555,12 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
             "robokassa_production_ready": production_payment_ready,
             "owner_e2e_ready": bool(owner_e2e["ready"]),
             "pilot_5_ready": pilot_5_ready,
-            "public_launch_ready": False,
-            "mode": "closed_pilot",
+            "public_launch_ready": public_launch_ready,
+            "mode": (
+                "public"
+                if settings.max_public_access_enabled
+                else "closed_pilot"
+            ),
         },
     }
 

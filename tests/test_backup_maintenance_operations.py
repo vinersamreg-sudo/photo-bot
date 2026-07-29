@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import TestCase
@@ -133,6 +134,17 @@ class BackupMaintenanceOperationsTests(TestCase):
             self.assertFalse(report["readiness"]["owner_e2e_ready"])
             self.assertFalse(report["readiness"]["pilot_5_ready"])
             self.assertFalse(report["readiness"]["public_launch_ready"])
+            public_report = collect_launch_status(
+                replace(
+                    settings,
+                    max_public_access_enabled=True,
+                    max_poll_observe_only=False,
+                ),
+                online=False,
+            )
+            self.assertTrue(public_report["runtime"]["public_access_enabled"])
+            self.assertTrue(public_report["readiness"]["public_launch_ready"])
+            self.assertEqual(public_report["readiness"]["mode"], "public")
             serialized = json.dumps(report)
             for secret in ("openai-secret", "max-secret", "owner-private"):
                 self.assertNotIn(secret, serialized)

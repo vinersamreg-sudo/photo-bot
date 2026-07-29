@@ -104,6 +104,7 @@ class Settings:
     max_poll_idle_seconds: int = 1
     max_poll_max_stale_seconds: int = 90
     max_poll_observe_only: bool = True
+    max_public_access_enabled: bool = False
     max_owner_user_ids: tuple[str, ...] = ()
     max_pilot_user_ids: tuple[str, ...] = ()
     pilot_user_limit: int = 0
@@ -600,6 +601,9 @@ def load_settings(
         max_poll_idle_seconds=_positive_int(values, "MAX_POLL_IDLE_SECONDS", 1),
         max_poll_max_stale_seconds=_positive_int(values, "MAX_POLL_MAX_STALE_SECONDS", 90),
         max_poll_observe_only=_boolean(values, "MAX_POLL_OBSERVE_ONLY", True),
+        max_public_access_enabled=_boolean(
+            values, "MAX_PUBLIC_ACCESS_ENABLED", False
+        ),
         max_owner_user_ids=owner_user_ids,
         max_pilot_user_ids=pilot_user_ids,
         pilot_user_limit=pilot_user_limit,

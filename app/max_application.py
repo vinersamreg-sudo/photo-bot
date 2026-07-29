@@ -190,7 +190,10 @@ class MaxApplication:
             self._deactivate_active_keyboards(event)
             return False
         try:
-            if event.user_id not in self.settings.max_allowed_user_ids:
+            if (
+                not self.settings.max_public_access_enabled
+                and event.user_id not in self.settings.max_allowed_user_ids
+            ):
                 if event.callback_id:
                     self.transport.answer_callback(
                         event.callback_id, "Сервис находится в закрытом тестировании"

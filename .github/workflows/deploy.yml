@@ -350,6 +350,7 @@ jobs:
             ensure_env PAID_RETENTION_DAYS 180
             ensure_env TRASH_RETENTION_DAYS 30
             ensure_env MAX_BOT_TOKEN ''
+            ensure_env MAX_PUBLIC_ACCESS_ENABLED false
             ensure_env MAX_OWNER_USER_IDS ''
             ensure_env MAX_PILOT_USER_IDS ''
             ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
