@@ -4,6 +4,7 @@ from unittest import TestCase
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
+ENV_EXAMPLE = ROOT / ".env.example"
 SERVICE = ROOT / "ops" / "photo-bot.service"
 NGINX_RESULTURL_DEPLOY = ROOT / "ops" / "deploy_nginx_resulturl.sh"
 
@@ -17,10 +18,41 @@ class DeployPolicyTests(TestCase):
     def test_supports_manual_deploy(self) -> None:
         self.assertIn("workflow_dispatch:", self.workflow)
 
+    def test_pull_requests_use_fast_profiles_without_deploy(self) -> None:
+        self.assertIn("pull_request:", self.workflow)
+        self.assertIn("Run fast pull-request profiles", self.workflow)
+        self.assertIn("python scripts/test_fast.py payments", self.workflow)
+        self.assertIn("Run full tests and healthcheck", self.workflow)
+        self.assertIn("if: github.event_name != 'pull_request'", self.workflow)
+
     def test_preserves_runtime_state(self) -> None:
         for protected_path in (".env", "venv/", "data/", "logs/", "temp/"):
             self.assertIn(f"--exclude='{protected_path}'", self.workflow)
         self.assertIn("--exclude='site/'", self.workflow)
+
+    def test_operating_flags_preserve_live_state_but_fresh_env_is_fail_closed(self) -> None:
+        for key, default in (
+            ("MAX_PUBLIC_ACCESS_ENABLED", "false"),
+            ("MAX_POLL_OBSERVE_ONLY", "true"),
+            ("PAYMENTS_ENABLED", "false"),
+            ("PAYMENT_PROVIDER", "disabled"),
+            ("PAYMENT_WEBHOOK_ENABLED", "false"),
+            ("ROBOKASSA_MODE", "sandbox"),
+            ("ROBOKASSA_PRODUCTION_APPROVED", "false"),
+            ("OPENAI_IMAGE_REQUESTS_ENABLED", "true"),
+        ):
+            self.assertIn(f"ensure_env {key} {default}", self.workflow)
+        env_example = ENV_EXAMPLE.read_text(encoding="utf-8")
+        for line in (
+            "MAX_PUBLIC_ACCESS_ENABLED=false",
+            "MAX_POLL_OBSERVE_ONLY=true",
+            "PAYMENTS_ENABLED=false",
+            "PAYMENT_PROVIDER=disabled",
+            "PAYMENT_WEBHOOK_ENABLED=false",
+            "ROBOKASSA_MODE=sandbox",
+            "ROBOKASSA_PRODUCTION_APPROVED=false",
+        ):
+            self.assertIn(line, env_example)
 
     def test_uses_scoped_safe_operations(self) -> None:
         self.assertNotIn("pkill", self.workflow)

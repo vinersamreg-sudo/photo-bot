@@ -15,7 +15,9 @@ class ReadinessControlTests(TestCase):
             env_file = root / ".env"
             snapshot_file = root / "runtime-state.env"
             original = (
+                "MAX_PUBLIC_ACCESS_ENABLED=true\n"
                 "MAX_POLL_OBSERVE_ONLY=false\n"
+                "MAX_TRANSPORT_MODE=polling\n"
                 "PAYMENTS_ENABLED=true\n"
                 "PAYMENT_PROVIDER=robokassa\n"
                 "PILOT_USER_LIMIT=5\n"
@@ -27,6 +29,8 @@ class ReadinessControlTests(TestCase):
             snapshot(env_file, snapshot_file)
             env_file.write_text(
                 "MAX_POLL_OBSERVE_ONLY=true\n"
+                "MAX_PUBLIC_ACCESS_ENABLED=false\n"
+                "MAX_TRANSPORT_MODE=disabled\n"
                 "PAYMENTS_ENABLED=false\n"
                 "PAYMENT_PROVIDER=disabled\n"
                 "PILOT_USER_LIMIT=0\n",

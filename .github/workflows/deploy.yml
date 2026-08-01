@@ -3,6 +3,8 @@ name: Test and deploy
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       enable_owner_handlers:
@@ -84,7 +86,19 @@ jobs:
         run: |
           python scripts/scan_secrets.py
           python scripts/check_asset_licenses.py
-      - name: Run unit tests and healthcheck
+      - name: Run fast pull-request profiles
+        if: github.event_name == 'pull_request'
+        env:
+          APP_ENV: ci
+          BASE_DIR: ${{ github.workspace }}
+        run: |
+          python scripts/test_fast.py max
+          python scripts/test_fast.py payments
+          python scripts/test_fast.py openai
+          python scripts/test_fast.py storage
+          python scripts/test_fast.py site
+      - name: Run full tests and healthcheck
+        if: github.event_name != 'pull_request'
         env:
           APP_ENV: ci
           BASE_DIR: ${{ github.workspace }}
@@ -96,6 +110,7 @@ jobs:
         run: echo "OpenAI credential is configured; external validation is intentionally skipped."
   deploy:
     needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment: production
     env:

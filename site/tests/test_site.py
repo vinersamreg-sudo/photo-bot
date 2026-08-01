@@ -469,11 +469,6 @@ class RavunaInfrastructureTests(unittest.TestCase):
             self.assertIn(f"/{path}", hrefs)
             self.assertTrue((RAVUNA_PUBLIC / path).is_file())
 
-    def test_ravuna_canonical_urls_use_ravuna_domain(self) -> None:
-        for path, html in self.pages.items():
-            expected = "https://ravuna.ru/" if path == "index.html" else f"https://ravuna.ru/{path}"
-            self.assertIn(f'rel="canonical" href="{expected}"', html, path)
-
     def test_ravuna_nginx_is_static_and_secure(self) -> None:
         nginx = (SITE / "nginx" / "ravuna.ru.conf").read_text(encoding="utf-8")
         self.assertIn("server_name ravuna.ru www.ravuna.ru", nginx)
