@@ -21,6 +21,10 @@ The public digital product is **«Пакет доступа Ravuna»** for 49 �
 Internal product code `continuation_pack_2_plus_1`, credit ledger, entitlement
 ledger, SQLite schema and historical records are stable compatibility contracts.
 
+The public MVP and real payment-to-original path are confirmed. Scale readiness
+is not claimed as complete: current management status, roles, risks and remaining
+work are documented in [PROJECT_MANAGEMENT.md](docs/PROJECT_MANAGEMENT.md).
+
 ## AI and lineage
 
 Production uses OpenAI `gpt-image-2`. `SceneIntent` and `EditPlan` are

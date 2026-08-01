@@ -2,6 +2,18 @@
 
 Официальный бренд продукта — **Ravuna**. Отдельный статический лендинг находится в [`site/`](site/README.md); он не импортирует backend и имеет собственный CI/deploy boundary.
 
+## Статус проекта
+
+Ravuna — работающий публичный MVP в production. Полный коммерческий путь
+`фото → preview с водяным знаком → оплата Robokassa → оригинал` подтверждён
+реальным платежом. При этом проект не считается завершённым для неограниченного
+масштабирования: качество сложных групповых изменений, мониторинг, recovery
+drills и capacity-пороги остаются в работе.
+
+Состав команды, роли, инструменты, контроль сроков, риски и разделение
+«реализовано / в работе» описаны в
+[управлении проектом и текущем статусе](docs/PROJECT_MANAGEMENT.md).
+
 ## Content Studio
 
 `app/content_studio` — независимый операторский контур для честных
@@ -35,7 +47,7 @@ python -m app.main ai-inspect --attempt-id <opaque-attempt-id>
 
 Команда не выводит platform user ID, файловые пути, ключи или исходный пользовательский free text.
 
-Личная AI-фотостудия: все работы пользователя, их версии и избранное живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Ravuna. Ravuna v1 использует только OpenAI `gpt-image-2`; экспериментальные hybrid-processing модули выключены. Доступ закрыт allowlist: owner и управляемые этапы 5/10/20 пользователей. Обычный deploy всегда возвращает `MAX_POLL_OBSERVE_ONLY=true` и pilot limit 0.
+Личная AI-фотостудия: все работы пользователя, их версии и избранное живут в одном месте. `photo-bot` — техническое имя, публичный бренд — Ravuna. Ravuna v1 использует только OpenAI `gpt-image-2`; экспериментальные hybrid-processing модули выключены. Публичный MVP доступен пользователям MAX. Owner-only и observe-only режимы сохранены как эксплуатационные средства безопасной диагностики и обслуживания, но не описывают текущий продуктовый статус.
 
 ## MAX production smoke
 
@@ -96,13 +108,13 @@ python -m app.main cost-status
 
 Retention задают `DEMO_RETENTION_DAYS=30`, `PAID_RETENTION_DAYS=180` и `TRASH_RETENTION_DAYS=30`. MAX показывает последние работы как preview-карточки, версию, correction/repeat/current-best/favorite/delete. Collections, сложный поиск, before/after slider и экспорт не входят в основной v1 UX.
 
-## MAX closed-test transport
+## MAX transport
 
-Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы owner allowlist, закрытый ответ для остальных и прямой UX `/start → фото → текст → результат`. Загрузка валидного source автоматически фиксирует согласие; отдельного Continue и prompt confirmation нет. Следующий текст после результата автоматически продолжает работу как correction. «✨ Идеи» — необязательный каталог. Processing, watermarked preview, correction/repeat, «Мои работы», favorite, корзина и restore сохранены.
+Официальный API contract и результаты поиска старого бота описаны в [MAX_TRANSPORT_AUDIT.md](docs/MAX_TRANSPORT_AUDIT.md). Реализованы публичный MAX-сценарий, owner allowlist для контролируемых проверок и прямой UX `/start → фото с инструкцией → результат`. Загрузка валидного source автоматически фиксирует согласие; отдельного Continue и prompt confirmation нет. Следующий текст после результата автоматически продолжает работу как correction. «✨ Идеи» — необязательный каталог. Processing, watermarked preview, correction/repeat, «Мои работы», favorite, корзина и restore сохранены.
 
 ## Commercial payments
 
-Публичный цифровой продукт называется **«Пакет доступа Ravuna»** и стоит 49 ₽. После подтверждения оплаты пользователю начисляются две обработки и один оригинал без водяного знака. Для самозанятого с активными «Робочеками СМЗ» письменный ответ Robokassa закрепляет один чек продажи и Receipt `{"items":[{"name":"Пакет доступа Ravuna","quantity":1,"sum":49.00,"tax":"none"}]`; `sno`, `payment_method` и `payment_object` не передаются. Внутренний код `continuation_pack_2_plus_1`, credit ledger и entitlement ledger не меняются: платёж не выбирает версию автоматически, entitlement можно применить к любой доступной собственной версии, созданной до или после покупки. Использование пакета новых чеков не создаёт. ResultURL атомарно начисляет обе части пакета и остаётся идемпотентным. Реальные деньги не включены: каждый deploy принудительно оставляет payment/webhook/refund flags off, sandbox mode и no production approval. Read [support decision](docs/ROBOKASSA_SUPPORT_DECISION.md), [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
+Публичный цифровой продукт называется **«Пакет доступа Ravuna»** и стоит 49 ₽. После подтверждения оплаты пользователю начисляются две обработки и один оригинал без водяного знака. Для самозанятого с активными «Робочеками СМЗ» письменный ответ Robokassa закрепляет один чек продажи и Receipt `{"items":[{"name":"Пакет доступа Ravuna","quantity":1,"sum":49.00,"tax":"none"}]`; `sno`, `payment_method` и `payment_object` не передаются. Внутренний код `continuation_pack_2_plus_1`, credit ledger и entitlement ledger не меняются: платёж не выбирает версию автоматически, entitlement можно применить к любой доступной собственной версии, созданной до или после покупки. Использование пакета новых чеков не создаёт. ResultURL атомарно начисляет обе части пакета и остаётся идемпотентным. Production-путь оплаты и выдачи оригинала подтверждён реальной операцией; sandbox и выключенные флаги используются только в контролируемых тестовых или аварийных режимах. Read [support decision](docs/ROBOKASSA_SUPPORT_DECISION.md), [Payments](docs/PAYMENTS.md), [Robokassa](docs/ROBOKASSA.md), [architecture](docs/PAYMENT_ARCHITECTURE.md), [security](docs/PAYMENT_SECURITY.md) and [launch runbook](docs/COMMERCIAL_LAUNCH.md) before changing any commercial flag.
 
 Read-only and dry-run-first operator tools:
 
