@@ -8,6 +8,7 @@ from unittest import TestCase
 import httpx
 from PIL import Image
 
+from app.direct_prompt import build_direct_prompt
 from app.domain import (
     PolicyRejectedError,
     ProviderInvalidRequestError,
@@ -29,7 +30,7 @@ class GeminiImageProviderTests(TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_interactions_payload_keeps_exact_unicode_prompt(self) -> None:
+    def test_interactions_payload_keeps_unicode_prompt_and_deterministic_guard(self) -> None:
         captured = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -57,13 +58,17 @@ class GeminiImageProviderTests(TestCase):
             size="1024x1024",
             output_format="png",
         )
-        prompt = "Замени девушку на фото на Монику Беллуччи"
+        user_text = "Поменять одежду. Улучшить фон"
+        prompt = build_direct_prompt(user_text)
 
         result = provider.edit(self.source, prompt)
 
         self.assertEqual(set(captured), {"model", "input", "response_format"})
         self.assertEqual(captured["model"], "gemini-3.1-flash-image")
         self.assertEqual(captured["input"][0], {"type": "text", "text": prompt})
+        self.assertTrue(captured["input"][0]["text"].startswith(user_text + "\n\n"))
+        self.assertIn("личности и узнаваемые лица", captured["input"][0]["text"])
+        self.assertNotIn("system_instruction", captured)
         self.assertEqual(captured["input"][1]["type"], "image")
         self.assertEqual(captured["input"][1]["mime_type"], "image/png")
         self.assertEqual(

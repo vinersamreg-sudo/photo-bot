@@ -91,7 +91,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env IMAGE_PROVIDER gemini", self.workflow)
         self.assertIn("set_env GEMINI_IMAGE_MODEL gemini-3.1-flash-image", self.workflow)
         self.assertIn("set_env IMAGE_DIRECT_PROMPT_ENABLED true", self.workflow)
+        self.assertIn("set_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true", self.workflow)
         self.assertIn("set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED false", self.workflow)
+        self.assertIn("subject_preserve_guard_enabled", self.workflow)
         self.assertIn("gemini_api_key_configured", self.workflow)
         self.assertIn('printf \'%s\' "$GEMINI_API_KEY" |', self.workflow)
 

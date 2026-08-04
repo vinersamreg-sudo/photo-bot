@@ -1094,16 +1094,26 @@ class MaxApplicationTests(TestCase):
         self.demo.settings = direct_settings
         self.app.settings = direct_settings
         self.onboard_to_prompt()
+        user_text = "Поменяй фон, но фон не меняй"
         with patch(
             "app.max_application.parse_edit_intent",
             side_effect=AssertionError("legacy intent parser must be bypassed"),
+        ), patch(
+            "app.demo_service.build_provider_prompt",
+            side_effect=AssertionError("technical prompt builder must be bypassed"),
         ):
             self.app.handle(
-                self.event("message_created", text="Поменяй фон, но фон не меняй")
+                self.event("message_created", text=user_text)
             )
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.store.get("u1").state, "result_ready")
         self.assertFalse(any("Оставить текущий фон" in row[1] for row in self.transport.messages))
+        with self.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT prompt,provider_prompt FROM generation_attempts"
+            ).fetchone()
+        self.assertEqual(attempt["prompt"], user_text)
+        self.assertTrue(attempt["provider_prompt"].startswith(user_text + "\n\n"))
 
     def test_text_after_result_continues_as_field_level_correction(self) -> None:
         self.onboard_to_prompt()

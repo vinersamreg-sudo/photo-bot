@@ -86,6 +86,7 @@ Production is a public, working commercial service. The approved normal state is
 - `IMAGE_PROVIDER=gemini`;
 - `GEMINI_IMAGE_MODEL=gemini-3.1-flash-image`;
 - `IMAGE_DIRECT_PROMPT_ENABLED=true`;
+- `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true`;
 - `IMAGE_FACE_PRESERVE_GUARD_ENABLED=false`;
 - `PILOT_USER_LIMIT=0`.
 

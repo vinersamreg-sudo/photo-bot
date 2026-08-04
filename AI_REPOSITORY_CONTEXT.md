@@ -30,9 +30,10 @@ Robokassa
 - Runtime/CLI: `app/main.py`.
 - Settings: `app/config.py`.
 - MAX: `app/max_application.py`, `app/max_transport.py`.
-- Editing: `app/direct_prompt.py`, `app/provider_router.py`,
-  `app/gemini_image_provider.py`, `app/image_provider.py`; the preserved legacy
-  layer is `app/edit_intent.py` plus `app/prompt_builder.py`.
+- Editing: `app/direct_prompt.py` preserves the Unicode user text and appends a
+  deterministic modular subject guard; `app/provider_router.py`,
+  `app/gemini_image_provider.py`, `app/image_provider.py` execute the request.
+  The preserved legacy layer is `app/edit_intent.py` plus `app/prompt_builder.py`.
 - State: `app/database.py`, `app/storage.py`, `app/gallery.py`.
 - Commercial: `app/commerce.py`, `app/payments.py`, `app/robokassa.py`,
   `app/payment_webhook.py`.

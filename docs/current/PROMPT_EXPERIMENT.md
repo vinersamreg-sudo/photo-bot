@@ -1,4 +1,4 @@
-# Prompt Layer Experiment: Direct Provider Mode
+# Direct Provider Mode and Subject Preservation Guard
 
 ## Why this experiment exists
 
@@ -7,12 +7,19 @@ expanded English technical prompt. The experiment tests the hypothesis that this
 layer can conflict with the original intent or make the requested change less
 visible.
 
-Direct Provider Mode sends the exact Unicode string received from the product flow
-to the configured image adapter. It performs no translation, artistic
-interpretation, prompt expansion, system-instruction injection, preservation rule
-or face guard. API format, provider safety handling, source/parent selection,
-private storage, version lineage, original persistence, watermarked preview,
-delivery and debit behavior remain unchanged.
+Direct Provider Mode keeps the exact Unicode string received from the product flow
+as the first provider-prompt segment. It performs no translation, artistic
+interpretation, prompt expansion, system-instruction injection, `edit_intent`,
+`prompt_builder` or LLM analysis. A short deterministic subject-preservation guard
+is appended after the unchanged text so Gemini does not regenerate people when the
+request only targets clothing, background or another local attribute.
+
+The guard protects identities and recognizable faces, expressions, poses, body
+positions, proportions, viewpoint and composition. Each protection is removed
+independently when the user explicitly asks to change that attribute. Requests for
+glasses, hairstyle or makeup therefore keep identity, pose and composition
+protection. The final sentence always limits the edit to what the user directly
+requested.
 
 The same passthrough rule applies to initial requests, corrections, scenarios and
 repeats: the current user text is the provider text. Scenario templates and parent
@@ -24,6 +31,7 @@ The feature flag is:
 
 ```text
 IMAGE_DIRECT_PROMPT_ENABLED=true
+IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true
 IMAGE_FACE_PRESERVE_GUARD_ENABLED=false
 ```
 
@@ -33,7 +41,11 @@ restore the preserved `edit_intent` plus English technical prompt layer. The old
 when the provider-neutral flag is absent. A production change or deploy still
 requires separate approval and an exact pre-test snapshot/restoration plan.
 
-Attempts are labeled with `prompt_builder_version=direct-unicode-v3` in direct mode
+Set `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=false` for exact prompt-only rollback.
+When the new flag is absent, the deprecated `IMAGE_FACE_PRESERVE_GUARD_ENABLED`
+value is accepted as a compatibility fallback.
+
+Attempts are labeled with `prompt_builder_version=direct-unicode-v4` in direct mode
 and the current technical builder version in the baseline mode.
 
 Provider selection is independent:

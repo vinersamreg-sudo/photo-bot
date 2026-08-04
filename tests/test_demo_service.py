@@ -12,6 +12,7 @@ from PIL import Image, ImageChops
 from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
+from app.direct_prompt import build_direct_prompt
 from app.domain import (
     ConcurrentGenerationError,
     CooldownError,
@@ -308,6 +309,9 @@ class DemoServiceTests(TestCase):
         with patch(
             "app.demo_service.build_provider_prompt",
             side_effect=AssertionError("technical prompt builder must be bypassed"),
+        ), patch(
+            "app.demo_service.parse_edit_intent",
+            side_effect=AssertionError("legacy intent parser must be bypassed"),
         ):
             first = service.generate(session.session_id, first_text, "direct-1")
             self.clock.advance(2)
@@ -325,8 +329,10 @@ class DemoServiceTests(TestCase):
             )
 
         self.assertEqual(len(provider.prompts), 2)
-        self.assertEqual(provider.prompts[0], first_text)
-        self.assertEqual(provider.prompts, [first_text, second_text])
+        self.assertEqual(
+            provider.prompts,
+            [build_direct_prompt(first_text), build_direct_prompt(second_text)],
+        )
         self.assertEqual(second.remaining_generations, 0)
         with service.database.read() as connection:
             attempts = connection.execute(
@@ -343,11 +349,15 @@ class DemoServiceTests(TestCase):
 
         self.assertEqual([row["provider_prompt"] for row in attempts], provider.prompts)
         self.assertEqual(
-            [row["provider_prompt"] for row in attempts],
+            [row["prompt"] for row in attempts],
+            [first_text, second_text],
+        )
+        self.assertEqual(
+            [row["provider_prompt"].split("\n\n", 1)[0] for row in attempts],
             [row["prompt"] for row in attempts],
         )
         self.assertTrue(
-            all(row["prompt_builder_version"] == "direct-unicode-v3" for row in attempts)
+            all(row["prompt_builder_version"] == "direct-unicode-v4" for row in attempts)
         )
         self.assertEqual(len(versions), 2)
         self.assertIsNone(versions[0]["parent_version_id"])
@@ -381,7 +391,7 @@ class DemoServiceTests(TestCase):
         service.generate(session.session_id, "сделай меня красивее", "direct-router-1")
 
         router.route.assert_not_called()
-        self.assertEqual(provider.prompts, ["сделай меня красивее"])
+        self.assertEqual(provider.prompts, [build_direct_prompt("сделай меня красивее")])
 
     def test_default_prompt_mode_keeps_current_technical_builder(self) -> None:
         provider = RecordingProvider()
@@ -434,7 +444,10 @@ class DemoServiceTests(TestCase):
         self.assertEqual(len(provider.prompts), 2)
         self.assertEqual(
             provider.prompts,
-            ["Применить выбранный сценарий", "Другой вариант"],
+            [
+                build_direct_prompt("Применить выбранный сценарий"),
+                build_direct_prompt("Другой вариант"),
+            ],
         )
         self.assertTrue(all("PRIORITY ORDER" not in prompt for prompt in provider.prompts))
         with service.database.read() as connection:
@@ -444,7 +457,7 @@ class DemoServiceTests(TestCase):
             ).fetchall()
         self.assertTrue(
             all(
-                row["prompt_builder_version"] == "direct-unicode-v3"
+                row["prompt_builder_version"] == "direct-unicode-v4"
                 for row in versions
             )
         )

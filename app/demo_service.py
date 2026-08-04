@@ -431,7 +431,12 @@ class DemoService:
                 DIRECT_PROMPT_VERSION if direct_prompt_active else PROMPT_BUILDER_VERSION
             )
             if direct_prompt_active:
-                provider_prompt = build_direct_prompt(prompt)
+                provider_prompt = build_direct_prompt(
+                    prompt,
+                    preservation_guard_enabled=(
+                        self.settings.image_subject_preserve_guard_enabled
+                    ),
+                )
             else:
                 provider_prompt = build_provider_prompt(edit_plan, processing_plan)
             contextual_modes = {

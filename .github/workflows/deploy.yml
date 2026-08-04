@@ -172,6 +172,7 @@ jobs:
               "IMAGE_PROVIDER",
               "GEMINI_IMAGE_MODEL",
               "IMAGE_DIRECT_PROMPT_ENABLED",
+              "IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED",
               "IMAGE_FACE_PRESERVE_GUARD_ENABLED",
           )
           values = {}
@@ -460,11 +461,13 @@ jobs:
             ensure_env IMAGE_PROVIDER gemini
             ensure_env GEMINI_IMAGE_MODEL gemini-3.1-flash-image
             ensure_env IMAGE_DIRECT_PROMPT_ENABLED true
+            ensure_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true
             ensure_env IMAGE_FACE_PRESERVE_GUARD_ENABLED false
             if [ "$ACTIVATE_GEMINI" = true ]; then
               set_env IMAGE_PROVIDER gemini
               set_env GEMINI_IMAGE_MODEL gemini-3.1-flash-image
               set_env IMAGE_DIRECT_PROMPT_ENABLED true
+              set_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true
               set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED false
             fi
             set_env IMAGE_EDIT_SIZE auto
@@ -713,6 +716,7 @@ jobs:
               assert settings.image_provider == "gemini"
               assert settings.gemini_image_model == "gemini-3.1-flash-image"
               assert settings.image_direct_prompt_enabled is True
+              assert settings.image_subject_preserve_guard_enabled is True
               assert settings.image_face_preserve_guard_enabled is False
               assert settings.gemini_api_key
           assert os.environ.get("CONTENT_STUDIO_PUBLISHING_ENABLED", "").lower() == "false"
@@ -748,6 +752,7 @@ jobs:
                   else "/v1/images/edits"
               ),
               "direct_prompt_enabled": settings.image_direct_prompt_enabled,
+              "subject_preserve_guard_enabled": settings.image_subject_preserve_guard_enabled,
               "face_preserve_guard_enabled": settings.image_face_preserve_guard_enabled,
               "gemini_api_key_configured": bool(settings.gemini_api_key),
               "quality": settings.image_edit_quality,
