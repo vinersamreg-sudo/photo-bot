@@ -127,7 +127,9 @@ with this list.
 ## Security and privacy invariants
 
 - Never print, commit, report or echo tokens, passwords, IDs or private paths.
-- Do not use secrets from chat as durable configuration.
+- If the project's confirmed monetization is below USD 1,000 per month, keys may be provided in the current task chat for an explicitly authorized operation.
+- Chat-provided keys must still never be repeated in output or logs, committed, or passed through command-line arguments when stdin or a secret input is available; store them only in approved secret storage.
+- At USD 1,000 per month or above, keys must not be provided through chat.
 - Secrets belong only in local/production `.env` and GitHub Environment secrets.
 - Do not put secrets in command-line arguments when stdin is available.
 - Operator output must avoid user IDs, prompts, image bytes and payment secrets.
