@@ -13,8 +13,8 @@ source of truth; use the repository and the current production snapshot.
   `photo-bot`; do not rename internal identifiers merely for branding.
 - The public product is “Пакет доступа Ravuna”: 49 ₽, two photo edits and one
   original without a watermark.
-- The repository default image provider is Google Gemini Nano Banana 2 using
-  `gemini-3.1-flash-image`; OpenAI `gpt-image-2` remains a selectable option.
+- The repository default image provider is Google Gemini Nano Banana Pro using
+  `gemini-3-pro-image`; OpenAI `gpt-image-2` remains a selectable option.
 - Robokassa confirms payment through the server-side ResultURL.
 - SQLite and private filesystem storage are the production persistence layer.
 
@@ -84,10 +84,10 @@ Production is a public, working commercial service. The approved normal state is
 - `ROBOKASSA_PRODUCTION_APPROVED=true`;
 - `OPENAI_IMAGE_REQUESTS_ENABLED=true`;
 - `IMAGE_PROVIDER=gemini`;
-- `GEMINI_IMAGE_MODEL=gemini-3.1-flash-image`;
+- `GEMINI_IMAGE_MODEL=gemini-3-pro-image`;
 - `IMAGE_DIRECT_PROMPT_ENABLED=true`;
 - `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true`;
-- `IMAGE_FACE_PRESERVE_GUARD_ENABLED=false`;
+- `IMAGE_FACE_PRESERVE_GUARD_ENABLED=true`;
 - `PILOT_USER_LIMIT=0`.
 
 Always confirm the actual snapshot before a test or release. If it differs, treat

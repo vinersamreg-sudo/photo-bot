@@ -24,5 +24,5 @@ class ImageServiceTests(TestCase):
 
             self.assertIsInstance(service.provider, GeminiImageProvider)
             self.assertEqual(service.provider.name, "gemini")
-            self.assertEqual(service.provider.model, "gemini-3.1-flash-image")
+            self.assertEqual(service.provider.model, "gemini-3-pro-image")
             self.assertIsNone(service.provider_context_service.gateway)

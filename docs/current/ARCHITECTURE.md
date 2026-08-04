@@ -71,8 +71,8 @@ delivery failures must not consume the user’s edit allowance.
 
 - MAX: transport, media download and user delivery.
 - Google Gemini or OpenAI: photo plus direct edit prompt; no payment or account
-  data. The repository default is Gemini Nano Banana 2 with model id
-  `gemini-3.1-flash-image`; Gemini 3 Pro Image and OpenAI remain selectable.
+  data. The repository default is Gemini Nano Banana Pro with model id
+  `gemini-3-pro-image`; OpenAI remains selectable without automatic fallback.
 - Robokassa: order/amount/receipt/signature; no photo or prompt.
 - GitHub Actions: source deployment and encrypted backup artifacts.
 - nginx: static site and ResultURL reverse proxy only.

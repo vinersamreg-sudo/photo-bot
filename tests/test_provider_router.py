@@ -30,7 +30,7 @@ class ProviderRouterTests(TestCase):
         self.assertEqual((gemini.name, gemini.model), ("gemini", "gemini-3.1-flash-image"))
         self.assertEqual((nano.name, nano.model), ("nanobanana", "gemini-3-pro-image"))
 
-    def test_repository_default_selects_gemini_nano_banana_2(self) -> None:
+    def test_repository_default_selects_gemini_nano_banana_pro(self) -> None:
         settings = Settings("", "gpt-image-2", "test", Path.cwd())
 
         selected = select_image_provider(settings, gemini_client=object()).provider
@@ -38,7 +38,7 @@ class ProviderRouterTests(TestCase):
         self.assertIsInstance(selected, GeminiImageProvider)
         self.assertEqual(
             (selected.name, selected.model),
-            ("gemini", "gemini-3.1-flash-image"),
+            ("gemini", "gemini-3-pro-image"),
         )
 
     def test_missing_google_credentials_fail_before_provider_request(self) -> None:

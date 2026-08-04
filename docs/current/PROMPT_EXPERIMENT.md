@@ -32,7 +32,7 @@ The feature flag is:
 ```text
 IMAGE_DIRECT_PROMPT_ENABLED=true
 IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true
-IMAGE_FACE_PRESERVE_GUARD_ENABLED=false
+IMAGE_FACE_PRESERVE_GUARD_ENABLED=true
 ```
 
 `true` is the repository default. Set `IMAGE_DIRECT_PROMPT_ENABLED=false` to
@@ -53,13 +53,13 @@ Provider selection is independent:
 ```text
 IMAGE_PROVIDER=gemini
 OPENAI_IMAGE_MODEL=gpt-image-2
-GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
+GEMINI_IMAGE_MODEL=gemini-3-pro-image
 NANOBANANA_IMAGE_MODEL=gemini-3-pro-image
 ```
 
-The repository default is Gemini Nano Banana 2 (`gemini-3.1-flash-image`). Set
-`IMAGE_PROVIDER=openai` for the preserved OpenAI path, or
-`IMAGE_PROVIDER=nanobanana` for the preserved Gemini 3 Pro Image alias. These are
+The repository default is Gemini Nano Banana Pro (`gemini-3-pro-image`). Set
+`IMAGE_PROVIDER=openai` for the preserved OpenAI path, or use
+`IMAGE_PROVIDER=nanobanana` for the preserved Gemini Pro routing alias. These are
 configuration choices, not an automatic second request after a provider failure.
 
 ## A/B comparison

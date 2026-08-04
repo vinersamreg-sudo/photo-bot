@@ -28,11 +28,11 @@ class Settings:
     base_dir: Path
     image_provider: str = "gemini"
     gemini_api_key: str = ""
-    gemini_image_model: str = "gemini-3.1-flash-image"
+    gemini_image_model: str = "gemini-3-pro-image"
     nanobanana_image_model: str = "gemini-3-pro-image"
     image_direct_prompt_enabled: bool = True
     image_subject_preserve_guard_enabled: bool = True
-    image_face_preserve_guard_enabled: bool = False
+    image_face_preserve_guard_enabled: bool = True
     image_edit_quality: str = "high"
     image_edit_size: str = "auto"
     image_edit_input_fidelity: str = "auto"
@@ -503,8 +503,8 @@ def load_settings(
         image_provider=image_provider,
         gemini_api_key=values.get("GEMINI_API_KEY", "").strip(),
         gemini_image_model=(
-            values.get("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image").strip()
-            or "gemini-3.1-flash-image"
+            values.get("GEMINI_IMAGE_MODEL", "gemini-3-pro-image").strip()
+            or "gemini-3-pro-image"
         ),
         nanobanana_image_model=(
             values.get("NANOBANANA_IMAGE_MODEL", "gemini-3-pro-image").strip()
@@ -521,7 +521,7 @@ def load_settings(
             else _boolean(values, "IMAGE_FACE_PRESERVE_GUARD_ENABLED", True)
         ),
         image_face_preserve_guard_enabled=_boolean(
-            values, "IMAGE_FACE_PRESERVE_GUARD_ENABLED", False
+            values, "IMAGE_FACE_PRESERVE_GUARD_ENABLED", True
         ),
         image_edit_quality=image_edit_quality,
         image_edit_size=image_edit_size,

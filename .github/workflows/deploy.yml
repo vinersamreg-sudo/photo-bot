@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       activate_gemini:
-        description: Apply the approved Gemini Nano Banana 2 production flags
+        description: Apply the approved Gemini Nano Banana Pro production flags
         required: false
         type: boolean
         default: false
@@ -459,16 +459,16 @@ jobs:
             }
             set_env OPENAI_IMAGE_MODEL gpt-image-2
             ensure_env IMAGE_PROVIDER gemini
-            ensure_env GEMINI_IMAGE_MODEL gemini-3.1-flash-image
+            ensure_env GEMINI_IMAGE_MODEL gemini-3-pro-image
             ensure_env IMAGE_DIRECT_PROMPT_ENABLED true
             ensure_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true
-            ensure_env IMAGE_FACE_PRESERVE_GUARD_ENABLED false
+            ensure_env IMAGE_FACE_PRESERVE_GUARD_ENABLED true
             if [ "$ACTIVATE_GEMINI" = true ]; then
               set_env IMAGE_PROVIDER gemini
-              set_env GEMINI_IMAGE_MODEL gemini-3.1-flash-image
+              set_env GEMINI_IMAGE_MODEL gemini-3-pro-image
               set_env IMAGE_DIRECT_PROMPT_ENABLED true
               set_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true
-              set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED false
+              set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED true
             fi
             set_env IMAGE_EDIT_SIZE auto
             set_env OPENAI_CONVERSATION_MEMORY_ENABLED false
@@ -714,10 +714,10 @@ jobs:
           assert settings.openai_conversation_retention_enabled is False
           if os.environ.get("ACTIVATE_GEMINI", "").lower() == "true":
               assert settings.image_provider == "gemini"
-              assert settings.gemini_image_model == "gemini-3.1-flash-image"
+              assert settings.gemini_image_model == "gemini-3-pro-image"
               assert settings.image_direct_prompt_enabled is True
               assert settings.image_subject_preserve_guard_enabled is True
-              assert settings.image_face_preserve_guard_enabled is False
+              assert settings.image_face_preserve_guard_enabled is True
               assert settings.gemini_api_key
           assert os.environ.get("CONTENT_STUDIO_PUBLISHING_ENABLED", "").lower() == "false"
           stale_processing_orphans = 0
