@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import Mock, patch
 
 from PIL import Image, ImageChops
 
@@ -21,6 +22,8 @@ from app.domain import (
     InvalidInputError,
     PaymentRequiredError,
     PolicyRejectedError,
+    ProviderInvalidRequestError,
+    ProviderTimeoutError,
     ProviderUnavailableError,
 )
 from app.image_provider import FakeImageProvider
@@ -48,6 +51,16 @@ class BlockingProvider(FakeImageProvider):
     def edit(self, source_path: Path, prompt: str):
         self.entered.set()
         self.release.wait(timeout=5)
+        return super().edit(source_path, prompt)
+
+
+class RecordingProvider(FakeImageProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompts: list[str] = []
+
+    def edit(self, source_path: Path, prompt: str):
+        self.prompts.append(prompt)
         return super().edit(source_path, prompt)
 
 
@@ -173,6 +186,9 @@ class DemoServiceTests(TestCase):
     def test_technical_and_policy_failures_do_not_debit(self) -> None:
         for user, failure, expected_status in (
             ("technical", RuntimeError("network"), "failed_technical"),
+            ("unavailable", ProviderUnavailableError("network"), "failed_technical"),
+            ("timeout", ProviderTimeoutError("timeout"), "failed_technical"),
+            ("invalid", ProviderInvalidRequestError("invalid"), "failed_technical"),
             ("policy", PolicyRejectedError("blocked"), "rejected_policy"),
         ):
             service = self.service(provider=FakeImageProvider(fail=failure))
@@ -188,8 +204,13 @@ class DemoServiceTests(TestCase):
                     "SELECT status FROM generation_attempts WHERE session_id=?",
                     (session.session_id,),
                 ).fetchone()[0]
+                reservation = connection.execute(
+                    "SELECT status FROM generation_credit_reservations WHERE attempt_id=(SELECT id FROM generation_attempts WHERE session_id=?)",
+                    (session.session_id,),
+                ).fetchone()[0]
             self.assertEqual(stored, 0)
             self.assertEqual(status, expected_status)
+            self.assertEqual(reservation, "released")
 
     def test_delivery_failure_does_not_debit(self) -> None:
         service = self.service(delivery=lambda _path, _attempt: False)
@@ -250,9 +271,14 @@ class DemoServiceTests(TestCase):
 
     def test_budget_guard_stops_provider_without_stopping_the_service(self) -> None:
         for guarded_settings in (
-            replace(self.settings, openai_image_requests_enabled=False),
             replace(
                 self.settings,
+                image_provider="openai",
+                openai_image_requests_enabled=False,
+            ),
+            replace(
+                self.settings,
+                image_provider="openai",
                 openai_balance_usd=0.5,
                 openai_balance_critical_usd=1.0,
             ),
@@ -270,6 +296,159 @@ class DemoServiceTests(TestCase):
                     ).fetchone()[0],
                     0,
                 )
+
+    def test_direct_prompt_mode_bypasses_expansion_and_preserves_lineage(self) -> None:
+        provider = RecordingProvider()
+        settings = replace(self.settings, image_direct_prompt_enabled=True)
+        service = self.service(provider=provider, settings=settings)
+        session = service.start_session("max", "direct-prompt", self.source)
+
+        first_text = "сделай меня красивее"
+        second_text = "поменяй одежду"
+        with patch(
+            "app.demo_service.build_provider_prompt",
+            side_effect=AssertionError("technical prompt builder must be bypassed"),
+        ):
+            first = service.generate(session.session_id, first_text, "direct-1")
+            self.clock.advance(2)
+            with service.database.read() as connection:
+                first_version = connection.execute(
+                    "SELECT * FROM gallery_versions WHERE attempt_id=?",
+                    (first.attempt_id,),
+                ).fetchone()
+            second = service.generate(
+                session.session_id,
+                second_text,
+                "direct-2",
+                correction=True,
+                parent_version_id=first_version["id"],
+            )
+
+        self.assertEqual(len(provider.prompts), 2)
+        self.assertEqual(provider.prompts[0], first_text)
+        self.assertEqual(provider.prompts, [first_text, second_text])
+        self.assertEqual(second.remaining_generations, 0)
+        with service.database.read() as connection:
+            attempts = connection.execute(
+                """SELECT prompt,provider_prompt,prompt_builder_version
+                   FROM generation_attempts ORDER BY created_at,id"""
+            ).fetchall()
+            versions = connection.execute(
+                "SELECT * FROM gallery_versions ORDER BY version_number"
+            ).fetchall()
+            payment_rows = sum(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("payment_intents", "payment_orders", "unlock_entitlements")
+            )
+
+        self.assertEqual([row["provider_prompt"] for row in attempts], provider.prompts)
+        self.assertEqual(
+            [row["provider_prompt"] for row in attempts],
+            [row["prompt"] for row in attempts],
+        )
+        self.assertTrue(
+            all(row["prompt_builder_version"] == "direct-unicode-v3" for row in attempts)
+        )
+        self.assertEqual(len(versions), 2)
+        self.assertIsNone(versions[0]["parent_version_id"])
+        self.assertEqual(versions[1]["parent_version_id"], versions[0]["id"])
+        self.assertEqual(versions[1]["source_version_id"], versions[0]["id"])
+        self.assertEqual(versions[1]["source_path"], versions[0]["original_path"])
+        self.assertEqual(payment_rows, 0)
+
+    def test_direct_prompt_mode_bypasses_intent_processing_router(self) -> None:
+        provider = RecordingProvider()
+        router = Mock()
+        settings = replace(self.settings, image_direct_prompt_enabled=True)
+        service = DemoService(
+            settings,
+            Database(settings.database_path),
+            PrivateStorage(
+                settings.users_dir, settings.max_source_file_size_mb * 1024 * 1024
+            ),
+            WatermarkService(
+                settings.demo_watermark_text,
+                settings.demo_max_dimension,
+                settings.demo_output_format,
+                settings.demo_jpeg_quality,
+            ),
+            provider,
+            processing_router=router,
+            clock=self.clock,
+        )
+        session = service.start_session("max", "direct-router", self.source)
+
+        service.generate(session.session_id, "сделай меня красивее", "direct-router-1")
+
+        router.route.assert_not_called()
+        self.assertEqual(provider.prompts, ["сделай меня красивее"])
+
+    def test_default_prompt_mode_keeps_current_technical_builder(self) -> None:
+        provider = RecordingProvider()
+        settings = replace(self.settings, image_direct_prompt_enabled=False)
+        service = self.service(provider=provider, settings=settings)
+        session = service.start_session("max", "layered-prompt", self.source)
+        user_text = "замени фон"
+
+        result = service.generate(session.session_id, user_text, "layered-1")
+
+        self.assertEqual(len(provider.prompts), 1)
+        self.assertNotEqual(provider.prompts[0], user_text)
+        self.assertIn("PRIORITY ORDER", provider.prompts[0])
+        self.assertIn("PRESERVE", provider.prompts[0])
+        with service.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT provider_prompt,prompt_builder_version FROM generation_attempts WHERE id=?",
+                (result.attempt_id,),
+            ).fetchone()
+        self.assertEqual(attempt["provider_prompt"], provider.prompts[0])
+        self.assertEqual(
+            attempt["prompt_builder_version"], "technical-en-v5-target-completion"
+        )
+
+    def test_direct_prompt_mode_bypasses_builder_for_scenario_and_repeat(self) -> None:
+        provider = RecordingProvider()
+        settings = replace(self.settings, image_direct_prompt_enabled=True)
+        service = self.service(provider=provider, settings=settings)
+        session = service.start_session("max", "direct-scenario", self.source)
+
+        first = service.generate(
+            session.session_id,
+            "Применить выбранный сценарий",
+            "scenario-1",
+            scenario_id="resume",
+        )
+        self.clock.advance(2)
+        with service.database.read() as connection:
+            first_version_id = connection.execute(
+                "SELECT id FROM gallery_versions WHERE attempt_id=?", (first.attempt_id,)
+            ).fetchone()[0]
+        service.generate(
+            session.session_id,
+            "Другой вариант",
+            "scenario-2",
+            repeat=True,
+            parent_version_id=first_version_id,
+        )
+
+        self.assertEqual(len(provider.prompts), 2)
+        self.assertEqual(
+            provider.prompts,
+            ["Применить выбранный сценарий", "Другой вариант"],
+        )
+        self.assertTrue(all("PRIORITY ORDER" not in prompt for prompt in provider.prompts))
+        with service.database.read() as connection:
+            versions = connection.execute(
+                """SELECT prompt_builder_version,parent_version_id
+                   FROM gallery_versions ORDER BY version_number"""
+            ).fetchall()
+        self.assertTrue(
+            all(
+                row["prompt_builder_version"] == "direct-unicode-v3"
+                for row in versions
+            )
+        )
+        self.assertEqual(versions[1]["parent_version_id"], first_version_id)
 
     def test_watermark_preview_is_reduced_and_original_unchanged(self) -> None:
         service = self.service()

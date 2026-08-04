@@ -20,11 +20,16 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.openai_image_model, "test-image-model")
         self.assertEqual(settings.app_env, "test")
         self.assertEqual(settings.base_dir, PROJECT_ROOT)
-        self.assertEqual(settings.image_edit_quality, "medium")
+        self.assertEqual(settings.image_edit_quality, "high")
         self.assertEqual(settings.image_edit_size, "auto")
         self.assertEqual(settings.image_edit_input_fidelity, "auto")
         self.assertEqual(settings.image_edit_output_format, "png")
         self.assertEqual(settings.openai_max_retries, 2)
+        self.assertEqual(settings.image_provider, "gemini")
+        self.assertEqual(settings.gemini_image_model, "gemini-3.1-flash-image")
+        self.assertEqual(settings.nanobanana_image_model, "gemini-3-pro-image")
+        self.assertTrue(settings.image_direct_prompt_enabled)
+        self.assertFalse(settings.image_face_preserve_guard_enabled)
         self.assertFalse(settings.openai_conversation_memory_enabled)
         self.assertFalse(settings.openai_responses_image_enabled)
         self.assertFalse(settings.openai_conversation_retention_enabled)
@@ -61,6 +66,44 @@ class SettingsTests(TestCase):
                 }
             ).max_public_access_enabled
         )
+
+    def test_direct_prompt_is_default_and_legacy_layer_is_reversible(self) -> None:
+        self.assertTrue(
+            load_settings(environ={"APP_ENV": "test"}).image_direct_prompt_enabled
+        )
+        self.assertFalse(
+            load_settings(
+                environ={
+                    "APP_ENV": "test",
+                    "IMAGE_DIRECT_PROMPT_ENABLED": "false",
+                }
+            ).image_direct_prompt_enabled
+        )
+        self.assertFalse(
+            load_settings(
+                environ={
+                    "APP_ENV": "test",
+                    "OPENAI_DIRECT_PROMPT_ENABLED": "false",
+                }
+            ).image_direct_prompt_enabled
+        )
+
+    def test_image_provider_selection_and_google_models_are_validated(self) -> None:
+        settings = load_settings(
+            environ={
+                "APP_ENV": "test",
+                "IMAGE_PROVIDER": "nanobanana",
+                "GEMINI_API_KEY": "test-google-key",
+                "GEMINI_IMAGE_MODEL": "gemini-3.1-flash-image",
+                "NANOBANANA_IMAGE_MODEL": "gemini-3-pro-image",
+            }
+        )
+        self.assertEqual(settings.image_provider, "nanobanana")
+        self.assertEqual(settings.gemini_api_key, "test-google-key")
+        self.assertEqual(settings.gemini_image_model, "gemini-3.1-flash-image")
+        self.assertEqual(settings.nanobanana_image_model, "gemini-3-pro-image")
+        with self.assertRaisesRegex(ValueError, "IMAGE_PROVIDER"):
+            load_settings(environ={"APP_ENV": "test", "IMAGE_PROVIDER": "unknown"})
 
     def test_project_root_is_repository_root(self) -> None:
         expected = Path(__file__).resolve().parents[1]

@@ -43,7 +43,7 @@ def build_max_application(
         ca_bundle=settings.max_ca_bundle_path,
         media_host_suffixes=settings.max_media_host_suffixes,
     )
-    demo = build_demo_service(settings, provider_name="openai")
+    demo = build_demo_service(settings, provider_name=settings.image_provider)
     store = MaxConversationStore(database)
     payments = build_payment_service(settings, database)
     return MaxApplication(

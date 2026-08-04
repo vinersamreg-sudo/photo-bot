@@ -80,6 +80,21 @@ class DeployPolicyTests(TestCase):
         self.assertIn("python scripts/scan_secrets.py", self.workflow)
         self.assertIn("python scripts/check_asset_licenses.py", self.workflow)
 
+    def test_gemini_activation_is_explicit_secret_safe_and_audited(self) -> None:
+        self.assertIn("activate_gemini:", self.workflow)
+        self.assertIn("secrets.GEMINI_API_KEY", self.workflow)
+        self.assertIn("Configure Gemini credential", self.workflow)
+        self.assertIn("Require Gemini credential for activation", self.workflow)
+        self.assertIn("Capture pre-deploy production snapshot", self.workflow)
+        self.assertIn("pre-deploy-status-${{ github.run_id }}", self.workflow)
+        self.assertIn("ensure_env IMAGE_PROVIDER gemini", self.workflow)
+        self.assertIn("set_env IMAGE_PROVIDER gemini", self.workflow)
+        self.assertIn("set_env GEMINI_IMAGE_MODEL gemini-3.1-flash-image", self.workflow)
+        self.assertIn("set_env IMAGE_DIRECT_PROMPT_ENABLED true", self.workflow)
+        self.assertIn("set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED false", self.workflow)
+        self.assertIn("gemini_api_key_configured", self.workflow)
+        self.assertIn('printf \'%s\' "$GEMINI_API_KEY" |', self.workflow)
+
     def test_v1_provider_path_is_single_and_experiments_are_fail_closed(self) -> None:
         self.assertIn("set_env PROCESSING_MODE_ROUTER_ENABLED false", self.workflow)
         self.assertIn("set_env REAL_BACKGROUND_COMPOSITE_ENABLED false", self.workflow)
@@ -238,8 +253,12 @@ class DeployPolicyTests(TestCase):
         self.assertIn("enable_owner_handlers:", self.workflow)
         self.assertIn('MAX_OWNER_HANDLERS_ENABLED', self.workflow)
         self.assertIn('[ "$MAX_OWNER_HANDLERS_ENABLED" = true ]', self.workflow)
-        self.assertIn('"$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT"', self.workflow)
+        self.assertIn(
+            '"$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" "$ACTIVATE_GEMINI"',
+            self.workflow,
+        )
         self.assertIn('MAX_OWNER_HANDLERS_ENABLED="${2:-false}"', self.workflow)
+        self.assertIn('ACTIVATE_GEMINI="${4:-false}"', self.workflow)
         self.assertNotIn(
             "MAX_OWNER_HANDLERS_ENABLED: ${{ env.MAX_OWNER_HANDLERS_ENABLED }}",
             self.workflow,

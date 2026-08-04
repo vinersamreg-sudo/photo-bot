@@ -15,6 +15,11 @@ from uuid import uuid4
 from app.config import Settings
 from app.commerce import CommerceService
 from app.database import Database
+from app.direct_prompt import (
+    DIRECT_PROMPT_VERSION,
+    build_direct_edit_plan,
+    build_direct_prompt,
+)
 from app.domain import (
     AssetUnavailableError,
     ConcurrentGenerationError,
@@ -258,7 +263,8 @@ class DemoService:
         if not clean_prompt or len(clean_prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is empty or exceeds the configured limit")
         confirmed_balance_is_critical = bool(
-            self.settings.openai_balance_usd is not None
+            self.settings.image_provider == "openai"
+            and self.settings.openai_balance_usd is not None
             and self.settings.openai_balance_usd
             <= self.settings.openai_balance_critical_usd
         )
@@ -272,6 +278,7 @@ class DemoService:
         scenario = get_scenario(scenario_id)
         if scenario_id and scenario is None:
             raise InvalidInputError("Unknown or inactive scenario")
+        direct_prompt_active = self.settings.image_direct_prompt_enabled
         now = self.clock()
         attempt_id = uuid4().hex
         context_plan = ContextPlan("stateless", None, "context_service_unavailable")
@@ -338,11 +345,17 @@ class DemoService:
                 )
 
             if parent is None:
-                edit_plan = parse_edit_intent(
-                    clean_prompt,
-                    mode="scenario" if scenario else "initial_edit",
-                    scenario_id=scenario_id,
-                )
+                if direct_prompt_active:
+                    edit_plan = build_direct_edit_plan(
+                        clean_prompt,
+                        mode="scenario" if scenario else "initial_edit",
+                    )
+                else:
+                    edit_plan = parse_edit_intent(
+                        clean_prompt,
+                        mode="scenario" if scenario else "initial_edit",
+                        scenario_id=scenario_id,
+                    )
                 source_path = Path(session["source_file_path"])
                 source_version_id = None
             else:
@@ -356,25 +369,42 @@ class DemoService:
                     )
                 )
                 if correction:
-                    correction_plan = parse_edit_intent(
-                        clean_prompt,
-                        mode="correction",
-                        correction_target_version_id=parent["id"],
-                    )
-                    edit_plan = merge_edit_plans(parent_plan, correction_plan)
+                    if direct_prompt_active:
+                        edit_plan = build_direct_edit_plan(
+                            clean_prompt,
+                            mode="correction",
+                            parent=parent_plan,
+                            correction_target_version_id=parent["id"],
+                        )
+                    else:
+                        correction_plan = parse_edit_intent(
+                            clean_prompt,
+                            mode="correction",
+                            correction_target_version_id=parent["id"],
+                        )
+                        edit_plan = merge_edit_plans(parent_plan, correction_plan)
                     if not parent["original_path"]:
                         raise InvalidInputError("The selected parent original is unavailable")
                     source_path = Path(parent["original_path"])
                     source_version_id = parent["id"]
                 else:
-                    edit_plan = repeat_edit_plan(parent_plan)
+                    edit_plan = (
+                        build_direct_edit_plan(
+                            clean_prompt,
+                            mode="repeat",
+                            parent=parent_plan,
+                            correction_target_version_id=parent["id"],
+                        )
+                        if direct_prompt_active
+                        else repeat_edit_plan(parent_plan)
+                    )
                     source_path = Path(parent["source_path"])
                     source_version_id = parent["source_version_id"]
-            if edit_plan.unresolved_ambiguities:
+            if edit_plan.unresolved_ambiguities and not direct_prompt_active:
                 raise IntentAmbiguityError(edit_plan.unresolved_ambiguities)
             if not source_path.is_file():
                 raise InvalidInputError("The selected edit source file is unavailable")
-            if self.processing_router is None:
+            if self.processing_router is None or direct_prompt_active:
                 processing_plan = legacy_processing_plan(
                     self.provider.name, self.provider.model
                 )
@@ -397,7 +427,13 @@ class DemoService:
                 raise AssetUnavailableError(
                     "No approved real background is available; AI fallback requires explicit consent"
                 )
-            provider_prompt = build_provider_prompt(edit_plan, processing_plan)
+            prompt_builder_version = (
+                DIRECT_PROMPT_VERSION if direct_prompt_active else PROMPT_BUILDER_VERSION
+            )
+            if direct_prompt_active:
+                provider_prompt = build_direct_prompt(prompt)
+            else:
+                provider_prompt = build_provider_prompt(edit_plan, processing_plan)
             contextual_modes = {
                 ProcessingMode.AI_GENERATION,
                 ProcessingMode.LOCAL_AI_EDIT,
@@ -517,7 +553,7 @@ class DemoService:
                     edit_plan.to_json(),
                     provider_prompt,
                     source_version_id,
-                    PROMPT_BUILDER_VERSION,
+                    prompt_builder_version,
                     iso(now),
                     processing_plan.selected_mode.value,
                     processing_plan.mode_reason,
@@ -680,7 +716,7 @@ class DemoService:
                 "intent_category": edit_plan.primary_action,
                 "edit_mode": edit_plan.mode,
                 "parser_version": edit_plan.parser_version,
-                "prompt_builder_version": PROMPT_BUILDER_VERSION,
+                "prompt_builder_version": prompt_builder_version,
                 "selected_mode": processing_plan.selected_mode.value,
                 "processing_pipeline_version": processing_plan.processing_pipeline_version,
                 "asset_source_type": processing_plan.asset_source_type.value,

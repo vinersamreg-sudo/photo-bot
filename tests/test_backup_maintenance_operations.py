@@ -99,6 +99,7 @@ class BackupMaintenanceOperationsTests(TestCase):
             base = self.base(directory)
             settings = Settings(
                 "openai-secret", "gpt-image-2", "test", base,
+                image_provider="openai",
                 max_bot_token="max-secret",
                 max_transport_mode="polling",
                 max_owner_user_ids=("owner-private",),

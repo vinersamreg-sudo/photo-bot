@@ -208,6 +208,7 @@ class ProcessingModeTests(TestCase):
             app_env="test",
             base_dir=self.root,
             demo_min_request_interval_seconds=1,
+            image_direct_prompt_enabled=False,
         )
         storage = PrivateStorage(settings.users_dir, 10 * 1024 * 1024)
         executor = HybridProcessingExecutor(
@@ -281,7 +282,10 @@ class ProcessingModeTests(TestCase):
             provider_model=self.provider.model,
             real_background_enabled=True,
         )
-        settings = Settings("test", "fake", "test", self.root)
+        settings = Settings(
+            "test", "fake", "test", self.root,
+            image_direct_prompt_enabled=False,
+        )
         service = DemoService(
             settings,
             Database(settings.database_path),

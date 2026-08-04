@@ -30,8 +30,16 @@ PAYMENT_REFUNDS_ENABLED=false
 ROBOKASSA_MODE=production
 ROBOKASSA_PRODUCTION_APPROVED=true
 OPENAI_IMAGE_REQUESTS_ENABLED=true
+IMAGE_PROVIDER=gemini
+GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
+IMAGE_DIRECT_PROMPT_ENABLED=true
+IMAGE_FACE_PRESERVE_GUARD_ENABLED=false
 PILOT_USER_LIMIT=0
 ```
+
+`GEMINI_API_KEY` must be configured as a secret; operator output reports only
+whether it is present, never its value. OpenAI remains configured as a manual
+rollback provider and is not an automatic fallback.
 
 This is a documented baseline, not permission to rewrite `.env`. Always read and
 snapshot the actual current values before testing or deployment.
@@ -86,7 +94,8 @@ explicit payment incident decision.
 
 Temporary E2E workflows must snapshot and restore the exact environment. Protected
 state includes public access, observe-only, payments/provider/webhook/refunds,
-Robokassa mode/approval, pilot controls and OpenAI image request guard. A mismatch
-is a failed test and requires operator attention.
+Robokassa mode/approval, pilot controls, selected image provider/model, direct
+prompt flags and the image request guard. A mismatch is a failed test and requires
+operator attention.
 
 See [Deploy](DEPLOY.md) and [Operations](OPERATIONS.md).

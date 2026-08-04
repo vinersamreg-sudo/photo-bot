@@ -15,7 +15,7 @@ MAX user
   -> MAX Bot API polling
   -> app/max_application.py
   -> SQLite + private filesystem storage
-  -> OpenAI image edit
+  -> configured image-provider router (Gemini by repository default)
   -> original + server-side watermarked preview
   -> MAX delivery
 
@@ -30,8 +30,9 @@ Robokassa
 - Runtime/CLI: `app/main.py`.
 - Settings: `app/config.py`.
 - MAX: `app/max_application.py`, `app/max_transport.py`.
-- Editing: `app/edit_intent.py`, `app/prompt_builder.py`,
-  `app/openai_client.py`, `app/image_provider.py`.
+- Editing: `app/direct_prompt.py`, `app/provider_router.py`,
+  `app/gemini_image_provider.py`, `app/image_provider.py`; the preserved legacy
+  layer is `app/edit_intent.py` plus `app/prompt_builder.py`.
 - State: `app/database.py`, `app/storage.py`, `app/gallery.py`.
 - Commercial: `app/commerce.py`, `app/payments.py`, `app/robokassa.py`,
   `app/payment_webhook.py`.
@@ -85,6 +86,7 @@ Robokassa
 - [Sprint template](docs/current/SPRINT_TEMPLATE.md)
 - [Economics](docs/current/ECONOMICS.md)
 - [Security](docs/current/SECURITY.md)
+- [Prompt experiment](docs/current/PROMPT_EXPERIMENT.md)
 
 Use `python scripts/test_fast.py <profile>` during scoped work and
 `python scripts/test_release.py` once for release readiness.

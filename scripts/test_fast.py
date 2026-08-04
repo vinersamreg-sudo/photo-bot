@@ -31,6 +31,16 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "tests.test_image_provider",
         "tests.test_openai_client",
     ),
+    "providers": (
+        "tests.test_config",
+        "tests.test_direct_prompt",
+        "tests.test_image_provider",
+        "tests.test_gemini_image_provider",
+        "tests.test_provider_router",
+        "tests.test_image_service",
+        "tests.test_demo_service",
+        "tests.test_max_application",
+    ),
     "site": ("site/tests/test_site.py",),
     "storage": (
         "tests.test_demo_service",

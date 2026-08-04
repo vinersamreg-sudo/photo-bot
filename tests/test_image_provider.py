@@ -9,6 +9,7 @@ import httpx
 from PIL import Image
 from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError
 
+from app.config import load_settings
 from app.domain import (
     PolicyRejectedError,
     ProviderQuotaError,
@@ -74,10 +75,43 @@ class OpenAIImageProviderTests(TestCase):
             self.assertEqual(result.request_id, "req_test")
             self.assertEqual(result.usage["image_tokens"], 196)
             self.assertEqual(images.kwargs["model"], "gpt-image-2")
-            self.assertEqual(images.kwargs["quality"], "medium")
+            self.assertEqual(images.kwargs["quality"], "high")
             self.assertEqual(images.kwargs["size"], "1024x1024")
             self.assertEqual(images.kwargs["output_format"], "png")
             self.assertNotIn("input_fidelity", images.kwargs)
+
+    def test_direct_mode_uses_high_quality_and_unchanged_unicode_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            output = io.BytesIO()
+            Image.new("RGB", (64, 64), "white").save(output, format="PNG")
+            source.write_bytes(output.getvalue())
+            images = Images(base64.b64encode(output.getvalue()).decode("ascii"))
+            settings = load_settings(
+                environ={
+                    "APP_ENV": "test",
+                    "OPENAI_IMAGE_MODEL": "gpt-image-2",
+                    "IMAGE_DIRECT_PROMPT_ENABLED": "true",
+                }
+            )
+            provider = OpenAIImageProvider(
+                SimpleNamespace(images=images),
+                settings.openai_image_model,
+                quality=settings.image_edit_quality,
+                size=settings.image_edit_size,
+                input_fidelity=settings.image_edit_input_fidelity,
+                output_format=settings.image_edit_output_format,
+            )
+            prompt = "сделай меня красивее"
+
+            provider.edit(source, prompt)
+
+            self.assertTrue(settings.image_direct_prompt_enabled)
+            self.assertEqual(images.kwargs["prompt"], prompt)
+            self.assertEqual(images.kwargs["model"], "gpt-image-2")
+            self.assertEqual(images.kwargs["size"], "1024x1024")
+            self.assertEqual(images.kwargs["quality"], "high")
+            self.assertEqual(images.kwargs["output_format"], "png")
 
     def test_auto_size_preserves_source_orientation(self) -> None:
         cases = (
@@ -112,14 +146,14 @@ class OpenAIImageProviderTests(TestCase):
             provider.edit(source, "Preserve the composition.")
             self.assertEqual(images.kwargs["size"], "1024x1024")
 
-    def test_rejects_non_normalized_provider_prompt_before_api_call(self) -> None:
+    def test_rejects_empty_provider_prompt_before_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.png"
             Image.new("RGB", (32, 32), "white").save(source)
             images = Images("")
             provider = OpenAIImageProvider(SimpleNamespace(images=images), "gpt-image-2")
             with self.assertRaises(ValueError):
-                provider.edit(source, "Замени фон")
+                provider.edit(source, "   ")
             self.assertIsNone(images.kwargs)
 
     def test_input_fidelity_is_omitted_for_image_two_and_configurable_for_legacy(self) -> None:

@@ -24,6 +24,10 @@ FLAG_KEYS = (
     "ROBOKASSA_MODE",
     "ROBOKASSA_PRODUCTION_APPROVED",
     "OPENAI_IMAGE_REQUESTS_ENABLED",
+    "IMAGE_PROVIDER",
+    "GEMINI_IMAGE_MODEL",
+    "IMAGE_DIRECT_PROMPT_ENABLED",
+    "IMAGE_FACE_PRESERVE_GUARD_ENABLED",
     "PILOT_USER_LIMIT",
 )
 
@@ -40,6 +44,19 @@ def _read_env(path: Path) -> dict[str, str]:
         if key.strip() in FLAG_KEYS or key.strip() == "PAYMENT_RESULT_URL":
             values[key.strip()] = value.strip()
     return values
+
+
+def _secret_is_configured(path: Path, key: str) -> bool:
+    if not path.is_file():
+        return False
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name.strip() == key:
+            return bool(value.strip())
+    return False
 
 
 def _run(command: list[str], *, cwd: Path, timeout: int = 30) -> tuple[int, str]:
@@ -157,6 +174,10 @@ def main(argv: list[str] | None = None) -> int:
     ]
     for key in FLAG_KEYS:
         lines.append(f"{key}={env.get(key, 'missing')}")
+    lines.append(
+        "GEMINI_API_KEY_CONFIGURED="
+        + ("yes" if _secret_is_configured(root / ".env", "GEMINI_API_KEY") else "no")
+    )
     result_url = env.get("PAYMENT_RESULT_URL", "")
     lines.append(f"RESULT_URL_CONFIGURED={'yes' if result_url else 'no'}")
     lines.append(

@@ -137,6 +137,7 @@ def configure_logging(settings: Settings) -> None:
     redaction_filter = SecretRedactionFilter(
         [
             settings.openai_api_key,
+            settings.gemini_api_key,
             settings.max_bot_token,
             settings.robokassa_merchant_login,
             settings.robokassa_password1,
@@ -764,6 +765,9 @@ def run_ai_inspect(settings: Settings, attempt_id: str) -> int:
         "model": row["model"],
         "requested_quality": row["requested_quality"],
         "requested_size": row["requested_size"],
+        "prompt_builder_version": (
+            row["prompt_builder_version"] or view["prompt_builder_version"]
+        ),
         "uses_parent_image": bool(row["source_version_id"]),
         "status": row["status"],
     })
@@ -1253,7 +1257,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--prompt", required=True)
     demo.add_argument("--scenario")
     demo.add_argument("--event-id")
-    demo.add_argument("--provider", choices=("openai", "fake"), default="openai")
+    demo.add_argument(
+        "--provider",
+        choices=("openai", "gemini", "nanobanana", "fake"),
+        default=None,
+        help="override IMAGE_PROVIDER for this local command",
+    )
     inspect = subparsers.add_parser("ai-inspect")
     inspect.add_argument("--attempt-id", required=True)
     return parser

@@ -156,11 +156,15 @@ class ResponsesImageProviderTests(TestCase):
         self._provider(responses).edit_with_context(self.source, "Preserve identity.", self.context)
         self.assertIs(responses.kwargs["store"], True)
 
-    def test_07_non_ascii_prompt_is_rejected_before_network(self) -> None:
+    def test_07_unicode_prompt_is_passed_as_user_input_unchanged(self) -> None:
         responses = RawResponses(self.image_bytes)
-        with self.assertRaises(ValueError):
-            self._provider(responses).edit_with_context(self.source, "РЎРѕС…СЂР°РЅРё", self.context)
-        self.assertIsNone(responses.kwargs)
+        prompt = "сделай меня красивее"
+
+        self._provider(responses).edit_with_context(self.source, prompt, self.context)
+
+        self.assertEqual(
+            responses.kwargs["input"][0]["content"][0]["text"], prompt
+        )
 
     def test_08_missing_image_output_is_classified_for_fallback(self) -> None:
         with self.assertRaises(ProviderUnavailableError):

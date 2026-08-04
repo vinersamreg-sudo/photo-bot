@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -17,6 +18,7 @@ from app.domain import (
     DeliveryError,
     ImageTooLargeError,
     PolicyRejectedError,
+    ProviderInvalidRequestError,
     ProviderQuotaError,
     ProviderTimeoutError,
     ProviderUnavailableError,
@@ -113,6 +115,7 @@ class MaxApplicationTests(TestCase):
             "", "fake-image-edit-v1", "test", self.base,
             demo_min_request_interval_seconds=1,
             max_owner_user_ids=("u1",),
+            image_direct_prompt_enabled=False,
         )
         self.clock = Clock()
         self.database = Database(self.settings.database_path)
@@ -1086,10 +1089,18 @@ class MaxApplicationTests(TestCase):
             )
 
     def test_true_intent_conflict_is_resolved_without_an_extra_question(self) -> None:
+        direct_settings = replace(self.settings, image_direct_prompt_enabled=True)
+        self.settings = direct_settings
+        self.demo.settings = direct_settings
+        self.app.settings = direct_settings
         self.onboard_to_prompt()
-        self.app.handle(
-            self.event("message_created", text="Поменяй фон, но фон не меняй")
-        )
+        with patch(
+            "app.max_application.parse_edit_intent",
+            side_effect=AssertionError("legacy intent parser must be bypassed"),
+        ):
+            self.app.handle(
+                self.event("message_created", text="Поменяй фон, но фон не меняй")
+            )
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.store.get("u1").state, "result_ready")
         self.assertFalse(any("Оставить текущий фон" in row[1] for row in self.transport.messages))
@@ -1318,6 +1329,10 @@ class MaxApplicationTests(TestCase):
             (
                 PolicyRejectedError("technical"),
                 "Это изображение или запрос нельзя обработать. Попробуйте изменить описание.",
+            ),
+            (
+                ProviderInvalidRequestError("technical"),
+                "Не удалось выполнить обработку. Попробуйте переформулировать запрос проще.",
             ),
             (
                 DeliveryError("technical"),

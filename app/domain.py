@@ -66,6 +66,10 @@ class PolicyRejectedError(DemoError):
     pass
 
 
+class ProviderInvalidRequestError(DemoError):
+    pass
+
+
 class DeliveryError(DemoError):
     pass
 

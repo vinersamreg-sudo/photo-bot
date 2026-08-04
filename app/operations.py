@@ -89,11 +89,19 @@ def _systemd_active() -> bool:
         return False
 
 
+def _provider_configuration(settings: Settings) -> tuple[str, bool]:
+    if settings.image_provider == "openai":
+        return settings.openai_image_model, bool(settings.openai_api_key)
+    if settings.image_provider == "nanobanana":
+        return settings.nanobanana_image_model, bool(settings.gemini_api_key)
+    return settings.gemini_image_model, bool(settings.gemini_api_key)
+
+
 def _connectivity(settings: Settings, online: bool) -> tuple[bool | None, bool | None]:
     if not online:
         return None, None
     max_ok = False
-    openai_ok = False
+    provider_ok: bool | None = None
     try:
         from app.max_transport import MaxApiClient
 
@@ -111,14 +119,15 @@ def _connectivity(settings: Settings, online: bool) -> tuple[bool | None, bool |
             client.close()
     except Exception:
         max_ok = False
-    try:
-        check_openai_connection(
-            create_openai_client(settings), settings.openai_image_model
-        )
-        openai_ok = True
-    except Exception:
-        openai_ok = False
-    return max_ok, openai_ok
+    if settings.image_provider == "openai":
+        try:
+            check_openai_connection(
+                create_openai_client(settings), settings.openai_image_model
+            )
+            provider_ok = True
+        except Exception:
+            provider_ok = False
+    return max_ok, provider_ok
 
 
 def _site_moderation_status(online: bool) -> dict[str, Any]:
@@ -321,7 +330,8 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
     offsite = _read_json(settings.backup_dir_path / "offsite_status.json")
     cleanup = _read_json(settings.data_dir / "maintenance_last.json")
     usage = shutil.disk_usage(settings.base_dir)
-    max_connected, openai_connected = _connectivity(settings, online)
+    max_connected, provider_connected = _connectivity(settings, online)
+    provider_model, provider_configured = _provider_configuration(settings)
     site = _site_moderation_status(online)
     owner_e2e = _owner_e2e_status(settings, database)
     service_active = _systemd_active() if settings.app_env == "production" else True
@@ -329,6 +339,8 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
     poll_age = _age_hours(poll[0]) if poll else None
     cleanup_age = _age_hours(cleanup.get("completed_at")) if cleanup else None
     budget = openai_budget_status(settings)
+    if settings.image_provider != "openai":
+        budget["image_requests_enabled"] = settings.openai_image_requests_enabled
     restore_matches = bool(
         latest and restore and restore.get("restore_ok") is True
         and restore.get("backup_name") == latest.get("backup_name")
@@ -337,8 +349,7 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         latest and offsite and offsite.get("backup_name") == latest.get("backup_name")
     )
     runtime_ready = (
-        settings.openai_image_model == "gpt-image-2"
-        and bool(settings.openai_api_key)
+        provider_configured
         and settings.max_transport_mode == "polling"
         and bool(settings.max_bot_token)
         and bool(settings.max_owner_user_ids)
@@ -349,7 +360,7 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
         and usage.free >= settings.disk_min_free_mb * 1024 * 1024
         and service_active
         and (max_connected is not False)
-        and (openai_connected is not False)
+        and (provider_connected is not False)
         and poll_age is not None
         and poll_age * 3600 <= settings.max_poll_max_stale_seconds
     )
@@ -478,9 +489,10 @@ def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[st
             "service_active": service_active,
         },
         "provider": {
-            "model": settings.openai_image_model,
-            "configured": bool(settings.openai_api_key),
-            "connected": openai_connected,
+            "name": settings.image_provider,
+            "model": provider_model,
+            "configured": provider_configured,
+            "connected": provider_connected,
             **budget,
         },
         "payments": {

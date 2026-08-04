@@ -14,6 +14,7 @@ from uuid import uuid4
 from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
+from app.direct_prompt import build_direct_edit_plan
 from app.domain import (
     AssetUnavailableError,
     CooldownError,
@@ -27,6 +28,7 @@ from app.domain import (
     IntentAmbiguityError,
     PaymentRequiredError,
     PolicyRejectedError,
+    ProviderInvalidRequestError,
     ProviderQuotaError,
     ProviderTimeoutError,
     ProviderUnavailableError,
@@ -325,6 +327,12 @@ class MaxApplication:
             self._send_error(
                 event.user_id,
                 "Это изображение или запрос нельзя обработать. Попробуйте изменить описание.",
+            )
+            return
+        if isinstance(exc, ProviderInvalidRequestError):
+            self._send_error(
+                event.user_id,
+                "Не удалось выполнить обработку. Попробуйте переформулировать запрос проще.",
             )
             return
         if isinstance(exc, DeliveryError):
@@ -918,27 +926,43 @@ class MaxApplication:
         if not dialog.session_id or not self._session_is_usable(dialog.session_id):
             raise DemoExpiredError("The current source image is no longer available")
         mode = "correction" if dialog.state == "waiting_for_correction" else "initial"
-        preflight = parse_edit_intent(
-            prompt,
-            mode="correction" if mode == "correction" else (
-                "scenario" if dialog.selected_scenario_id else "initial_edit"
-            ),
-            scenario_id=dialog.selected_scenario_id,
-            correction_target_version_id=(
-                dialog.current_version_id if mode == "correction" else None
-            ),
+        edit_mode = "correction" if mode == "correction" else (
+            "scenario" if dialog.selected_scenario_id else "initial_edit"
         )
+        if self.settings.image_direct_prompt_enabled:
+            preflight = build_direct_edit_plan(
+                prompt,
+                mode=edit_mode,
+                correction_target_version_id=(
+                    dialog.current_version_id if mode == "correction" else None
+                ),
+            )
+        else:
+            preflight = parse_edit_intent(
+                prompt,
+                mode=edit_mode,
+                scenario_id=dialog.selected_scenario_id,
+                correction_target_version_id=(
+                    dialog.current_version_id if mode == "correction" else None
+                ),
+            )
         self._track(
             "prompt_submitted",
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
-            parser_fallback=preflight.primary_action == "custom",
+            parser_fallback=(
+                not self.settings.image_direct_prompt_enabled
+                and preflight.primary_action == "custom"
+            ),
         )
         updated = self.store.transition(
             event.user_id, "confirmation", event_key=event.event_key,
             pending_prompt=prompt, pending_action=mode,
         )
-        if preflight.unresolved_ambiguities:
+        if (
+            preflight.unresolved_ambiguities
+            and not self.settings.image_direct_prompt_enabled
+        ):
             self._show_intent_ambiguity(
                 event.user_id,
                 IntentAmbiguityError(preflight.unresolved_ambiguities),

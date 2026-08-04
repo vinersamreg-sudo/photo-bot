@@ -26,7 +26,13 @@ class Settings:
     openai_image_model: str
     app_env: str
     base_dir: Path
-    image_edit_quality: str = "medium"
+    image_provider: str = "gemini"
+    gemini_api_key: str = ""
+    gemini_image_model: str = "gemini-3.1-flash-image"
+    nanobanana_image_model: str = "gemini-3-pro-image"
+    image_direct_prompt_enabled: bool = True
+    image_face_preserve_guard_enabled: bool = False
+    image_edit_quality: str = "high"
     image_edit_size: str = "auto"
     image_edit_input_fidelity: str = "auto"
     image_edit_output_format: str = "png"
@@ -263,7 +269,7 @@ def load_settings(
     if output_format not in {"JPEG", "WEBP"}:
         raise ValueError("DEMO_OUTPUT_FORMAT must be JPEG or WEBP")
 
-    image_edit_quality = values.get("IMAGE_EDIT_QUALITY", "medium").strip().lower() or "medium"
+    image_edit_quality = values.get("IMAGE_EDIT_QUALITY", "high").strip().lower() or "high"
     if image_edit_quality not in {"low", "medium", "high", "auto"}:
         raise ValueError("IMAGE_EDIT_QUALITY must be low, medium, high or auto")
     image_edit_size = values.get("IMAGE_EDIT_SIZE", "auto").strip().lower() or "auto"
@@ -348,8 +354,16 @@ def load_settings(
             "OPENAI_BALANCE_CRITICAL_USD must not exceed OPENAI_BALANCE_WARNING_USD"
         )
     app_env = values.get("APP_ENV", "production").strip() or "production"
+    image_provider = values.get("IMAGE_PROVIDER", "gemini").strip().lower() or "gemini"
+    if image_provider not in {"openai", "gemini", "nanobanana"}:
+        raise ValueError("IMAGE_PROVIDER must be openai, gemini or nanobanana")
     image_model = values.get("OPENAI_IMAGE_MODEL", "").strip()
-    if app_env == "production" and image_model and image_model != "gpt-image-2":
+    if (
+        app_env == "production"
+        and image_provider == "openai"
+        and image_model
+        and image_model != "gpt-image-2"
+    ):
         raise ValueError("Ravuna v1 production requires OPENAI_IMAGE_MODEL=gpt-image-2")
     payment_provider = values.get("PAYMENT_PROVIDER", "disabled").strip().lower() or "disabled"
     if payment_provider not in {"disabled", "robokassa"}:
@@ -485,6 +499,24 @@ def load_settings(
         openai_image_model=image_model,
         app_env=app_env,
         base_dir=base_dir.resolve(),
+        image_provider=image_provider,
+        gemini_api_key=values.get("GEMINI_API_KEY", "").strip(),
+        gemini_image_model=(
+            values.get("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image").strip()
+            or "gemini-3.1-flash-image"
+        ),
+        nanobanana_image_model=(
+            values.get("NANOBANANA_IMAGE_MODEL", "gemini-3-pro-image").strip()
+            or "gemini-3-pro-image"
+        ),
+        image_direct_prompt_enabled=(
+            _boolean(values, "IMAGE_DIRECT_PROMPT_ENABLED", True)
+            if "IMAGE_DIRECT_PROMPT_ENABLED" in values
+            else _boolean(values, "OPENAI_DIRECT_PROMPT_ENABLED", True)
+        ),
+        image_face_preserve_guard_enabled=_boolean(
+            values, "IMAGE_FACE_PRESERVE_GUARD_ENABLED", False
+        ),
         image_edit_quality=image_edit_quality,
         image_edit_size=image_edit_size,
         image_edit_input_fidelity=image_edit_input_fidelity,

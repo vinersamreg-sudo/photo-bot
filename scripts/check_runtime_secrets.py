@@ -14,7 +14,11 @@ def main() -> int:
     )
     if any(
         secret and secret in text
-        for secret in (settings.openai_api_key, settings.max_bot_token)
+        for secret in (
+            settings.openai_api_key,
+            settings.gemini_api_key,
+            settings.max_bot_token,
+        )
     ):
         print("Potential configured secret value detected in app.log")
         return 1

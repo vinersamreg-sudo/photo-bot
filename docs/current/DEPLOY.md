@@ -35,6 +35,8 @@ Production secrets alone must not silently make a fresh server public.
 3. Run `python scripts/test_release.py` once.
 4. Commit one coherent change and push once.
 5. Wait for the existing workflow; do not start a duplicate run.
+   The one-time `activate_gemini=true` manual input applies the approved Gemini
+   flags; later deploys preserve an explicit environment rollback.
 6. Workflow requires idle production before stopping the service.
 7. Synchronize code while preserving mutable paths.
 8. Install/check dependencies and run migrations.

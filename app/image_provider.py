@@ -38,8 +38,8 @@ class ImageProvider(Protocol):
 
 
 def _validate_provider_prompt(prompt: str) -> None:
-    if not prompt.strip() or not prompt.isascii():
-        raise ValueError("Image providers accept normalized English ASCII prompts only")
+    if not prompt.strip():
+        raise ValueError("Image providers require a non-empty prompt")
 
 
 def _resolve_output_size(configured_size: str, source_path: Path) -> str:
@@ -77,7 +77,7 @@ class OpenAIImageProvider:
         self,
         client: Any,
         model: str,
-        quality: str = "medium",
+        quality: str = "high",
         size: str = "auto",
         input_fidelity: str = "auto",
         output_format: str = "png",

@@ -13,7 +13,8 @@ source of truth; use the repository and the current production snapshot.
   `photo-bot`; do not rename internal identifiers merely for branding.
 - The public product is “Пакет доступа Ravuna”: 49 ₽, two photo edits and one
   original without a watermark.
-- The primary image provider is OpenAI `gpt-image-2` through image editing.
+- The repository default image provider is Google Gemini Nano Banana 2 using
+  `gemini-3.1-flash-image`; OpenAI `gpt-image-2` remains a selectable option.
 - Robokassa confirms payment through the server-side ResultURL.
 - SQLite and private filesystem storage are the production persistence layer.
 
@@ -34,7 +35,9 @@ historical evidence or when a current document links to a specific record.
 - `app/main.py`: command-line entry point, health and operator commands.
 - `app/max_application.py`: MAX product flow and callback handling.
 - `app/max_transport.py`: MAX Bot API transport and polling.
-- `app/image_provider.py`: provider abstraction and fake/local test provider.
+- `app/provider_router.py`: configured image-provider selection.
+- `app/image_provider.py`: OpenAI adapter plus provider abstraction and test provider.
+- `app/gemini_image_provider.py`: Google Gemini image-edit adapter.
 - `app/openai_client.py`: OpenAI image edit integration.
 - `app/edit_intent.py`: deterministic intent extraction.
 - `app/prompt_builder.py`: technical prompt construction.
@@ -80,6 +83,10 @@ Production is a public, working commercial service. The approved normal state is
 - `ROBOKASSA_MODE=production`;
 - `ROBOKASSA_PRODUCTION_APPROVED=true`;
 - `OPENAI_IMAGE_REQUESTS_ENABLED=true`;
+- `IMAGE_PROVIDER=gemini`;
+- `GEMINI_IMAGE_MODEL=gemini-3.1-flash-image`;
+- `IMAGE_DIRECT_PROMPT_ENABLED=true`;
+- `IMAGE_FACE_PRESERVE_GUARD_ENABLED=false`;
 - `PILOT_USER_LIMIT=0`.
 
 Always confirm the actual snapshot before a test or release. If it differs, treat
@@ -181,7 +188,7 @@ Use only when the requirement cannot be proven below T4:
 
 - Robokassa real/sandbox lifecycle;
 - MAX transport and actual callbacks;
-- OpenAI image generation/editing;
+- external image generation/editing;
 - private storage/original delivery;
 - migrations and entitlement/ledger behavior.
 
@@ -226,7 +233,7 @@ without a separate migration decision. Profiles are the routing mechanism.
 
 - MAX callbacks/copy/state: `max` profile plus named conversation/application test.
 - Payment/Robokassa/ledger: `payments` profile.
-- Prompt/provider/OpenAI: `openai` profile.
+- Prompt/image providers: `providers` profile; OpenAI-only adapter work: `openai`.
 - Static pages/legal/SEO: `site` profile.
 - Gallery/storage/cleanup/original: `storage` profile.
 - Cross-module or release-sensitive changes: T2 or T3.
@@ -281,6 +288,85 @@ without a separate migration decision. Profiles are the routing mechanism.
 - Add future work to `BACKLOG.md`; do not turn current docs into journals.
 - Move superseded reports to `docs/archive/`; do not delete audit history.
 - Do not update documentation for a change that did not actually happen.
+
+## Правила поддержания контекста и документации
+
+### 1. Источник истины
+
+Источником актуального состояния проекта являются:
+
+- Git repository;
+- `AGENTS.md`;
+- документы из `docs/current/`.
+
+История чатов, старые переписки и старые отчёты не являются источником истины.
+
+Перед началом любой новой задачи агент обязан:
+
+1. прочитать `AGENTS.md`;
+2. определить тип задачи;
+3. прочитать только соответствующие документы из `docs/current/`;
+4. не читать `docs/archive/` без прямой необходимости.
+
+### 2. Правила обновления документации
+
+После завершения крупного спринта обновлять только необходимый минимум:
+
+- `AGENTS.md` — только если изменились правила работы, архитектурные принципы или
+  процесс разработки;
+- один профильный документ из `docs/current/` — если изменилось соответствующее
+  поведение системы;
+- `BACKLOG.md` — если появились новые задачи, технический долг или отложенные
+  решения.
+
+После каждого завершённого спринта агент должен проверить, требуется ли
+обновление `AGENTS.md`, профильного документа из `docs/current/` или
+`BACKLOG.md`. Если обновление не требуется, документацию не менять.
+
+Не создавать новые документы, если информация относится к существующему
+current-документу.
+
+### 3. Запрет на большие отчёты после каждой правки
+
+Не создавать длинные итоговые документы после каждой задачи.
+
+Обычный спринт должен завершаться:
+
+- коротким итоговым сообщением;
+- изменением только необходимых документов;
+- commit message.
+
+Подробные расследования, аудиты и исторические отчёты помещать только в
+`docs/archive/`, если они имеют долгосрочную ценность.
+
+### 4. Разделение текущего состояния и истории
+
+`docs/current/` содержит только актуальные правила и состояние проекта.
+
+`docs/archive/` содержит:
+
+- завершённые расследования;
+- старые решения;
+- исторические отчёты;
+- предыдущие состояния проекта.
+
+Не копировать историческую информацию обратно в current.
+
+### 5. Принцип минимального контекста
+
+При новой задаче агент должен использовать минимальный достаточный набор
+информации.
+
+Не читать:
+
+- весь `docs`;
+- весь Git history;
+- старые чаты;
+- архивные документы,
+
+если задача не требует этого напрямую.
+
+Цель: сохранить точность работы и снизить расход контекста.
 
 ## New-chat handoff
 

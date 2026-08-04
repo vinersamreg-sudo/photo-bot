@@ -49,6 +49,7 @@ class AiBrainIntegrationTests(TestCase):
         self.settings = Settings(
             "", "fake-image-edit-v1", "test", self.base,
             demo_min_request_interval_seconds=1,
+            image_direct_prompt_enabled=False,
         )
         self.clock = Clock()
         self.database = Database(self.settings.database_path)

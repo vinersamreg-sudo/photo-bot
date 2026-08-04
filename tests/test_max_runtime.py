@@ -1,13 +1,14 @@
 import tempfile
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
 from app.config import Settings
 from app.database import Database
 from app.max_conversation import MaxConversationStore
-from app.max_runtime import OBSERVE_ONLY_TEXT, run_polling
+from app.max_runtime import OBSERVE_ONLY_TEXT, build_max_application, run_polling
 from app.max_transport import MaxTransportError
 
 
@@ -64,6 +65,32 @@ class FakeObserveOnlyClient(FakePollingClient):
 
 
 class MaxRuntimeTests(TestCase):
+    def test_application_uses_configured_image_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base / name).mkdir()
+            settings = Settings(
+                "",
+                "gpt-image-2",
+                "test",
+                base,
+                max_owner_user_ids=("owner",),
+            )
+            client = FakePollingClient(threading.Event())
+            demo = SimpleNamespace(gallery=object())
+            with (
+                patch("app.max_runtime.build_demo_service", return_value=demo) as build,
+                patch("app.max_runtime.build_payment_service", return_value=object()),
+            ):
+                application, returned_client, _store = build_max_application(
+                    settings, client
+                )
+
+            build.assert_called_once_with(settings, provider_name="gemini")
+            self.assertIs(application.demo, demo)
+            self.assertIs(returned_client, client)
+
     def test_observe_only_polling_updates_health_without_user_handlers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
