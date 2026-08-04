@@ -340,7 +340,6 @@ jobs:
       - name: Configure closed-pilot allowlist
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          ACTIVATE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_gemini == true }}
           MAX_PILOT_USER_IDS: ${{ secrets.MAX_PILOT_USER_IDS }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
@@ -375,6 +374,7 @@ jobs:
       - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
+          ACTIVATE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_gemini == true }}
           MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
           PILOT_USER_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.pilot_user_limit || '0' }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}

@@ -81,6 +81,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn("python scripts/check_asset_licenses.py", self.workflow)
 
     def test_gemini_activation_is_explicit_secret_safe_and_audited(self) -> None:
+        install_block = self.workflow.split(
+            "- name: Install and verify production", 1
+        )[1]
         self.assertIn("activate_gemini:", self.workflow)
         self.assertIn("secrets.GEMINI_API_KEY", self.workflow)
         self.assertIn("Configure Gemini credential", self.workflow)
@@ -93,6 +96,11 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env IMAGE_DIRECT_PROMPT_ENABLED true", self.workflow)
         self.assertIn("set_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true", self.workflow)
         self.assertIn("set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED true", self.workflow)
+        self.assertIn(
+            "ACTIVATE_GEMINI: ${{ github.event_name == 'workflow_dispatch' "
+            "&& inputs.activate_gemini == true }}",
+            install_block,
+        )
         self.assertIn("subject_preserve_guard_enabled", self.workflow)
         self.assertIn("gemini_api_key_configured", self.workflow)
         self.assertIn('printf \'%s\' "$GEMINI_API_KEY" |', self.workflow)
