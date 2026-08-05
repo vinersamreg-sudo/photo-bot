@@ -158,11 +158,11 @@ def scenario_catalog(category_slug: str | None = None) -> View:
     if not buttons:
         return View(
             f"✨ {category_title}\n\nНовые идеи скоро появятся.",
-            (Button("← К категориям", "catalog:ideas"),),
+            (Button("← Назад", "catalog:ideas"),),
         )
     return View(
         f"✨ {category_title}\n\nВыберите идею.",
-        buttons + (Button("← К категориям", "catalog:ideas"),),
+        buttons + (Button("← Назад", "catalog:ideas"),),
     )
 
 
@@ -176,6 +176,7 @@ def studio_menu_contract() -> View:
             Button("Последние", "studio:recent"),
             Button("Коллекции", "studio:collections"),
             Button("🗑 Корзина", "studio:trash"),
+            Button("← Назад", "nav:back:main"),
         ),
     )
 
@@ -188,7 +189,7 @@ def result_actions(remaining: int) -> View:
                 Button("Получить оригинал", "result:unlock"),
                 Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
                 Button("История версий", "work:history"),
-                Button("Мои работы", "studio:works"),
+                Button("← Назад", "studio:works"),
             ),
         )
     return View(
@@ -198,7 +199,7 @@ def result_actions(remaining: int) -> View:
             Button("Исправить", "result:correct"),
             Button("Другой вариант", "result:repeat"),
             Button("История версий", "work:history"),
-            Button("Мои работы", "studio:works"),
+            Button("← Назад", "studio:works"),
         ),
     )
 
@@ -208,6 +209,7 @@ def paid_actions() -> tuple[Button, ...]:
         Button("📥 Скачать оригинал", "result:unlock"),
         Button("📷 Другая фотография", "new:source"),
         Button("📁 Мои работы", "studio:works"),
+        Button("← Назад", "nav:back:work"),
     )
 
 
@@ -215,6 +217,7 @@ def delivered_actions() -> tuple[Button, ...]:
     return (
         Button("📷 Обработать другую фотографию", "new:source"),
         Button("📁 Мои работы", "studio:works"),
+        Button("← Назад", "nav:back:work"),
     )
 
 
@@ -223,6 +226,7 @@ def retry_delivery_actions() -> tuple[Button, ...]:
         Button("🔁 Повторить скачивание", "result:unlock"),
         Button("📷 Другая фотография", "new:source"),
         Button("📁 Мои работы", "studio:works"),
+        Button("← Назад", "nav:back:work"),
     )
 
 
@@ -231,7 +235,7 @@ def delete_confirmation_view() -> View:
         "Переместить работу в корзину?",
         (
             Button("🗑 Удалить", "delete:confirm"),
-            Button("Отмена", "delete:cancel"),
+            Button("← Назад", "delete:cancel"),
         ),
     )
 
@@ -243,7 +247,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
             Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
             Button("История версий", "work:history"),
             Button("Ещё", "work:more"),
-            Button("📂 К работам", "studio:works"),
+            Button("← Назад", "nav:back:works"),
         )
     return (
         Button("⬇ Получить оригинал", "result:unlock"),
@@ -251,7 +255,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
         Button("🎲 Другой вариант", "result:repeat"),
         Button("История версий", "work:history"),
         Button("Ещё", "work:more"),
-        Button("📂 К работам", "studio:works"),
+        Button("← Назад", "nav:back:works"),
     )
 
 
@@ -262,7 +266,7 @@ def gallery_more_actions() -> View:
             Button("⭐ В избранное", "result:favorite"),
             Button("Сделать основной", "work:main"),
             Button("🗑 В корзину", "result:delete"),
-            Button("← К работе", "work:open"),
+            Button("← Назад", "nav:back:work"),
         ),
     )
 
@@ -272,7 +276,7 @@ def version_history_actions() -> tuple[Button, ...]:
         Button("← Предыдущая", "work:previous"),
         Button("Следующая →", "work:next"),
         Button("Сделать основной", "work:main"),
-        Button("← К работе", "work:open"),
+        Button("← Назад", "nav:back:work"),
     )
 
 

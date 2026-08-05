@@ -95,6 +95,27 @@ CORRECTION_REQUEST_TEXT = (
     "• изменить цвет одежды;\n"
     "• сохранить лицо без изменений."
 )
+PAYMENT_OFFER_TEXT = (
+    "Пакет Ravuna — 49 ₽\n\n"
+    "В пакет входит:\n"
+    "• 2 обработки фотографий\n"
+    "• оригинал этой фотографии без водяного знака\n\n"
+    "Пакет начислится сразу после оплаты."
+)
+PAYMENT_LINK_TEXT = (
+    "Ссылка на оплату готова.\n\n"
+    "После оплаты пакет начислится автоматически."
+)
+
+NAV_WORKS = "navigation:works"
+NAV_WORK = "navigation:work"
+NAV_HISTORY = "navigation:history"
+NAV_MORE = "navigation:more"
+NAV_SETTINGS = "navigation:settings"
+NAV_LEGAL_DETAIL = "navigation:legal-detail"
+NAV_IDEAS = "navigation:ideas"
+NAV_IDEA_CATEGORY = "navigation:idea-category"
+NAV_PAYMENT_LINK = "checkout:link"
 
 
 def _version_word(count: int) -> str:
@@ -207,7 +228,13 @@ class MaxApplication:
                 self._send_message(event.user_id, OWNER_ONLY_TEXT)
                 self.store.finish_event(event.event_key, True)
                 return True
-            self._deactivate_active_keyboards(event)
+            if self._deactivate_active_keyboards(event):
+                if event.callback_id:
+                    self.transport.answer_callback(
+                        event.callback_id, "Экран уже изменился"
+                    )
+                self.store.finish_event(event.event_key, True)
+                return True
             self._dispatch(event)
         except MaxTransportError:
             self.store.finish_event(event.event_key, False)
@@ -295,6 +322,11 @@ class MaxApplication:
                 (
                     Button("Продолжить с фото", "custom"),
                     Button("📂 Мои работы", "studio:works"),
+                    Button(
+                        "← Назад",
+                        "nav:back:work" if dialog and dialog.current_version_id
+                        else "nav:back:main",
+                    ),
                 ),
             )
             return
@@ -307,8 +339,9 @@ class MaxApplication:
                 "Бесплатные обработки закончились.",
                 (
                     Button("⬇ Получить оригинал", "result:unlock"),
-                    Button("Пакет доступа Ravuna — 49 ₽", "package:buy"),
+                    Button("Пакет Ravuna — 49 ₽", "package:offer"),
                     Button("📂 Мои работы", "studio:works"),
+                    Button("← Назад", "nav:back:work"),
                 ),
             )
             return
@@ -360,15 +393,24 @@ class MaxApplication:
             return
         if isinstance(exc, InvalidInputError) and dialog and dialog.state == "waiting_for_source":
             text = "Не удалось открыть изображение. Отправьте JPG, PNG или WEBP."
-            buttons: tuple[Button, ...] = ()
+            buttons: tuple[Button, ...] = (
+                Button("← Назад", "nav:back:main"),
+            )
         elif isinstance(exc, InvalidInputError) and dialog and dialog.state in {
             "waiting_for_prompt", "waiting_for_correction"
         }:
             text = "Не получилось прочитать запрос. Напишите короче."
-            buttons = ()
+            buttons = (
+                Button(
+                    "← Назад",
+                    "nav:back:work"
+                    if dialog.state == "waiting_for_correction"
+                    else "nav:back:main",
+                ),
+            )
         else:
             text = "Что-то пошло не так. Попробуйте ещё раз."
-            buttons = (Button("← В меню", "menu"),)
+            buttons = (Button("← Назад", "nav:back:main"),)
         self._send_error(event.user_id, text, buttons)
 
     def _send_error(
@@ -524,11 +566,33 @@ class MaxApplication:
         else:
             self.store.clear_keyboard(user_id, message_id)
 
-    def _deactivate_active_keyboards(self, event: MaxIncomingEvent) -> None:
-        """Remove every keyboard left by earlier dialog states."""
+    def _deactivate_active_keyboards(self, event: MaxIncomingEvent) -> bool:
+        """Deactivate the source keyboard and identify stale callbacks."""
 
         active = self.store.active_keyboards(event.user_id)
-        active_ids = {message_id for message_id, _ in active}
+        if event.event_type == "message_callback":
+            source = next(
+                (
+                    (message_id, message_text)
+                    for message_id, message_text in active
+                    if message_id == event.message_id
+                ),
+                None,
+            )
+            if source is None:
+                self._deactivate_callback_keyboard(event)
+                return True
+            message_id, message_text = source
+            try:
+                self.transport.edit_message(message_id, message_text, ())
+            except MaxTransportError:
+                LOGGER.info(
+                    "MAX callback keyboard could not be deactivated "
+                    "(message_id_present=true)"
+                )
+            else:
+                self.store.clear_keyboard(event.user_id, message_id)
+            return False
         for message_id, message_text in active:
             try:
                 self.transport.edit_message(message_id, message_text, ())
@@ -539,12 +603,7 @@ class MaxApplication:
                 )
             else:
                 self.store.clear_keyboard(event.user_id, message_id)
-        if (
-            event.event_type == "message_callback"
-            and event.message_id
-            and event.message_id not in active_ids
-        ):
-            self._deactivate_callback_keyboard(event)
+        return False
 
     def _deactivate_callback_keyboard(self, event: MaxIncomingEvent) -> None:
         """Make the keyboard that triggered a state transition single-use."""
@@ -584,12 +643,34 @@ class MaxApplication:
             status_message_id=None,
         )
 
+    def _mark_navigation(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, marker: str
+    ) -> MaxDialog:
+        return self.store.transition(
+            event.user_id,
+            dialog.state,
+            event_key=event.event_key,
+            force=True,
+            pending_prompt=None,
+            pending_action=marker,
+            status_message_id=None,
+        )
+
+    def _show_navigation_view(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, view: View, marker: str
+    ) -> None:
+        self._mark_navigation(event, dialog, marker)
+        self._send_view(event.user_id, view)
+
     def _callback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         action = event.callback_payload or ""
         if action in {"start:details", "legal:details"}:
-            self._send_view(event.user_id, legal_details_view())
+            self._show_navigation_view(
+                event, dialog, legal_details_view(), NAV_SETTINGS
+            )
             return
         if action == "legal:offer":
+            self._mark_navigation(event, dialog, NAV_LEGAL_DETAIL)
             self._send_message(
                 event.user_id,
                 "Условия использования\n\n"
@@ -599,6 +680,7 @@ class MaxApplication:
             )
             return
         if action == "legal:privacy":
+            self._mark_navigation(event, dialog, NAV_LEGAL_DETAIL)
             self._send_message(
                 event.user_id,
                 "Приватность\n\nФото используется для обработки и передаётся AI-провайдеру.",
@@ -627,14 +709,76 @@ class MaxApplication:
             self._show_main(event.user_id, dialog, event.event_key)
             return
         if action == "settings":
-            self._send_view(event.user_id, settings_view())
+            if dialog.pending_action != NAV_SETTINGS:
+                self._show_navigation_view(
+                    event, dialog, settings_view(), NAV_SETTINGS
+                )
             return
         if action == "catalog:ideas":
-            self._send_view(event.user_id, ideas_catalog())
+            if dialog.pending_action != NAV_IDEAS:
+                self._show_navigation_view(
+                    event, dialog, ideas_catalog(), NAV_IDEAS
+                )
             return
         if action.startswith("ideas:"):
-            self._send_view(
-                event.user_id, scenario_catalog(action.split(":", 1)[1])
+            self._show_navigation_view(
+                event,
+                dialog,
+                scenario_catalog(action.split(":", 1)[1]),
+                NAV_IDEA_CATEGORY,
+            )
+            return
+        if action == "nav:back:main":
+            if (
+                dialog.state == "waiting_for_source"
+                and dialog.pending_action is None
+                and dialog.current_gallery_item_id is None
+            ):
+                return
+            if dialog.pending_action in {
+                NAV_WORK,
+                NAV_HISTORY,
+                NAV_MORE,
+                NAV_PAYMENT_LINK,
+                "checkout",
+                "correction",
+            }:
+                return
+            self._show_main(event.user_id, dialog, event.event_key)
+            return
+        if action == "nav:back:works":
+            if dialog.pending_action == NAV_WORK:
+                self._show_works(event, dialog)
+            return
+        if action == "nav:back:work":
+            if (
+                dialog.pending_action != NAV_WORK
+                and dialog.current_gallery_item_id
+            ):
+                self._show_selected_work(event, dialog)
+            return
+        if action == "nav:back:prompt":
+            if dialog.state != "confirmation":
+                return
+            correction = dialog.pending_action == "correction"
+            target = "waiting_for_correction" if correction else "waiting_for_prompt"
+            self.store.transition(
+                event.user_id,
+                target,
+                event_key=event.event_key,
+                force=True,
+                pending_prompt=None,
+                pending_action="correction" if correction else "initial",
+            )
+            self._send_message(
+                event.user_id,
+                CORRECTION_REQUEST_TEXT if correction else PHOTO_ACCEPTED_TEXT,
+                (
+                    Button(
+                        "← Назад",
+                        "nav:back:work" if correction else "nav:back:main",
+                    ),
+                ),
             )
             return
         if action == "custom" or action.startswith("scenario:"):
@@ -674,7 +818,11 @@ class MaxApplication:
             self._send_selected_preview(
                 event.user_id, dialog, "Текущая версия"
             )
-            self._send_message(event.user_id, CORRECTION_REQUEST_TEXT)
+            self._send_message(
+                event.user_id,
+                CORRECTION_REQUEST_TEXT,
+                (Button("← Назад", "nav:back:work"),),
+            )
         elif action == "result:repeat":
             if not dialog.session_id or self._remaining(dialog.session_id) <= 0:
                 self._show_continuation_pack_offer(event, dialog)
@@ -686,7 +834,7 @@ class MaxApplication:
             )
             self._generate(event, dialog, correction=False, repeat=True)
         elif action == "result:favorite":
-            self._favorite(event.user_id, dialog)
+            self._favorite(event, dialog)
         elif action == "result:feedback:positive":
             self._record_feedback(event.user_id, dialog, "positive")
         elif action == "result:feedback:negative":
@@ -726,16 +874,17 @@ class MaxApplication:
         elif action == "work:history":
             self._show_version_history(event, dialog)
         elif action == "work:more":
+            self._mark_navigation(event, dialog, NAV_MORE)
             self._send_view(event.user_id, gallery_more_actions())
         elif action in {"work:previous", "work:next"}:
             self._navigate_version(event, dialog, -1 if action.endswith("previous") else 1)
         elif action == "work:main":
-            self._make_current_best(event.user_id, dialog)
+            self._make_current_best(event, dialog)
         elif action == "result:delete":
             self._send_view(event.user_id, delete_confirmation_view())
         elif action == "delete:cancel":
             if dialog.current_gallery_item_id:
-                self._open_work(event, dialog, dialog.current_gallery_item_id)
+                self._show_selected_work(event, dialog)
             else:
                 self._show_main(event.user_id, dialog, event.event_key)
         elif action == "delete:confirm":
@@ -791,9 +940,14 @@ class MaxApplication:
             self._send_message(
                 event.user_id,
                 "Пришлите фотографию 📷",
+                (Button("← Назад", "nav:back:main"),),
             )
         else:
-            self._send_message(event.user_id, PHOTO_REUSED_TEXT)
+            self._send_message(
+                event.user_id,
+                PHOTO_REUSED_TEXT,
+                (Button("← Назад", "nav:back:main"),),
+            )
 
     def _receive_source(
         self,
@@ -882,7 +1036,11 @@ class MaxApplication:
                     )
                 self._receive_prompt(prompt_event, updated)
             else:
-                self._send_message(event.user_id, PHOTO_ACCEPTED_TEXT)
+                self._send_message(
+                    event.user_id,
+                    PHOTO_ACCEPTED_TEXT,
+                    (Button("← Назад", "nav:back:main"),),
+                )
 
     def _session_is_usable(self, session_id: str) -> bool:
         with self.database.read() as connection:
@@ -919,7 +1077,18 @@ class MaxApplication:
     def _receive_prompt(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         prompt = (event.text or "").strip()
         if not prompt:
-            self._send_message(event.user_id, "Что изменить?")
+            self._send_message(
+                event.user_id,
+                "Что изменить?",
+                (
+                    Button(
+                        "← Назад",
+                        "nav:back:work"
+                        if dialog.state == "waiting_for_correction"
+                        else "nav:back:main",
+                    ),
+                ),
+            )
             return
         if len(prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is too long")
@@ -979,6 +1148,7 @@ class MaxApplication:
             (
                 Button("Да, только улучшить", "clarify:preserve-background"),
                 Button("Нет, заменить фон", "clarify:replace-background"),
+                Button("← Назад", "nav:back:prompt"),
             ),
         )
 
@@ -1089,7 +1259,7 @@ class MaxApplication:
             estimated_cost=attempt["estimated_cost"] if attempt else None,
         )
 
-    def _favorite(self, platform_user_id: str, dialog: MaxDialog) -> None:
+    def _favorite(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_version_id:
             raise InvalidInputError("No current version")
         self.gallery.set_version_favorite(dialog.user_id, dialog.current_version_id, True)
@@ -1098,7 +1268,7 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        self._send_message(platform_user_id, "Добавлено в избранное ⭐")
+        self._show_selected_work(event, self.store.get(event.user_id) or dialog)
 
     def _unlock_or_deliver(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_version_id:
@@ -1162,6 +1332,10 @@ class MaxApplication:
     ) -> None:
         """Show the selected result before checkout without creating an order."""
 
+        current = self.store.get(event.user_id) or dialog
+        if current.pending_action == "checkout":
+            return
+        dialog = current
         if not dialog.current_version_id and dialog.user_id:
             with self.database.read() as connection:
                 latest = connection.execute(
@@ -1178,7 +1352,7 @@ class MaxApplication:
                     current_gallery_item_id=latest["gallery_item_id"],
                     current_version_id=latest["id"],
                 )
-        if dialog.pending_action != "checkout" and dialog.current_version_id:
+        if dialog.current_version_id:
             self._send_selected_preview(
                 event.user_id, dialog, "Выбранная версия"
             )
@@ -1192,14 +1366,11 @@ class MaxApplication:
         )
         self._send_message(
             event.user_id,
-            "Пакет доступа Ravuna — 49 ₽\n\n"
-            "После оплаты начисляется:\n"
-            "• 2 обработки\n"
-            "• 1 оригинал\n\n"
-            "После оплаты вы сможете скачать оригинал этой фотографии "
-            "без водяного знака.\n\n"
-            "Пакет начисляется сразу после оплаты.",
-            (Button("Оплатить 49 ₽", "package:buy"),),
+            PAYMENT_OFFER_TEXT,
+            (
+                Button("Оплатить 49 ₽", "package:buy"),
+                Button("← Назад", "nav:back:work"),
+            ),
         )
 
     def _buy_continuation_pack(
@@ -1210,35 +1381,35 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        if not self.settings.payments_enabled:
-            self._send_message(
-                event.user_id,
-                "Пакет доступа Ravuna — 49 ₽\n\n"
-                "После оплаты начисляется:\n"
-                "• 2 обработки\n"
-                "• 1 оригинал\n\n"
-                "Пакет начисляется сразу после оплаты.\n\n"
-                "Оплата временно недоступна.",
-                (Button("📁 Мои работы", "studio:works"),),
-            )
-            return
-        if not dialog.user_id:
-            raise InvalidInputError("No Ravuna account is selected")
-        version_id = dialog.current_version_id
-        if not version_id:
-            with self.database.read() as connection:
-                latest = connection.execute(
-                    """SELECT v.id FROM gallery_versions v
-                       JOIN gallery_items i ON i.id=v.gallery_item_id
-                       WHERE i.user_id=? AND i.deleted=0 AND v.status='succeeded'
-                       ORDER BY v.created_at DESC,v.version_number DESC LIMIT 1""",
-                    (dialog.user_id,),
-                ).fetchone()
-            version_id = latest["id"] if latest else None
-        if not version_id:
-            raise InvalidInputError("A completed Ravuna version is required for checkout")
         with self._checkout_lock:
-            if self._paid_order_exists(dialog.user_id, version_id):
+            current = self.store.get(event.user_id) or dialog
+            if current.pending_action != "checkout":
+                return
+            if not self.settings.payments_enabled:
+                self._send_message(
+                    event.user_id,
+                    "Оплата временно недоступна.",
+                    (Button("← Назад", "nav:back:work"),),
+                )
+                return
+            if not current.user_id:
+                raise InvalidInputError("No Ravuna account is selected")
+            version_id = current.current_version_id
+            if not version_id:
+                with self.database.read() as connection:
+                    latest = connection.execute(
+                        """SELECT v.id FROM gallery_versions v
+                           JOIN gallery_items i ON i.id=v.gallery_item_id
+                           WHERE i.user_id=? AND i.deleted=0 AND v.status='succeeded'
+                           ORDER BY v.created_at DESC,v.version_number DESC LIMIT 1""",
+                        (current.user_id,),
+                    ).fetchone()
+                version_id = latest["id"] if latest else None
+            if not version_id:
+                raise InvalidInputError(
+                    "A completed Ravuna version is required for checkout"
+                )
+            if self._paid_order_exists(current.user_id, version_id):
                 current = self.store.update(
                     event.user_id,
                     current_version_id=version_id,
@@ -1247,36 +1418,39 @@ class MaxApplication:
                 return
             try:
                 order = self.payments.create_order(
-                    dialog.user_id, version_id, f"max:{event.event_key}"
+                    current.user_id, version_id, f"max:{event.event_key}"
                 )
             except PaymentUnavailable:
-                self._send_message(event.user_id, UNLOCK_PLACEHOLDER)
+                self._send_message(
+                    event.user_id,
+                    UNLOCK_PLACEHOLDER,
+                    (Button("← Назад", "nav:back:work"),),
+                )
                 return
             except PaymentError:
                 self._send_message(
-                    event.user_id, "Не удалось подготовить оплату. Попробуйте позже."
+                    event.user_id,
+                    "Не удалось подготовить оплату. Попробуйте позже.",
+                    (Button("← Назад", "nav:back:work"),),
                 )
                 return
             if self._payment_card_was_sent(order.id):
-                self._send_message(
-                    event.user_id,
-                    "Ссылка на оплату уже создана.",
-                )
+                self.store.update(event.user_id, pending_action=NAV_PAYMENT_LINK)
                 return
             payment_message_id = self._send_message(
                 event.user_id,
-                "Пакет доступа Ravuna — 49 ₽\n\n"
-                "После оплаты начисляется:\n"
-                "• 2 обработки\n"
-                "• 1 оригинал\n\n"
-                "Пакет начисляется сразу после оплаты.",
-                (Button("Оплатить 49 ₽", order.payment_url or "package:buy"),),
+                PAYMENT_LINK_TEXT,
+                (
+                    Button("Оплатить 49 ₽", order.payment_url or "package:buy"),
+                    Button("← Назад", "nav:back:work"),
+                ),
             )
             self._mark_payment_card_sent(
                 order.id,
                 order.payment_url or "",
                 payment_message_id,
             )
+            self.store.update(event.user_id, pending_action=NAV_PAYMENT_LINK)
 
     def _paid_order_exists(self, user_id: str, version_id: str) -> bool:
         with self.database.read() as connection:
@@ -1385,7 +1559,7 @@ class MaxApplication:
             row["platform_user_id"],
             "✅ Оплата прошла успешно\n\n"
             "Ваш оригинал готов к скачиванию.",
-            actions[:1],
+            (actions[0], actions[-1]),
         )
         self._send_message(
             row["platform_user_id"],
@@ -1461,11 +1635,20 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
+        self.store.transition(
+            event.user_id,
+            "gallery",
+            event_key=event.event_key,
+            force=True,
+            pending_prompt=None,
+            pending_action=NAV_WORKS,
+            status_message_id=None,
+        )
         if not dialog.user_id:
             self._send_message(
                 event.user_id,
                 "Здесь пока пусто.\n\nСоздайте первую фотографию.",
-                (Button("← В меню", "menu"),),
+                (Button("← Назад", "nav:back:main"),),
             )
             return
         with self.database.read() as connection:
@@ -1475,23 +1658,18 @@ class MaxApplication:
                    ORDER BY updated_at DESC LIMIT 5""",
                 (dialog.user_id,),
             ).fetchall()
-        self.store.transition(
-            event.user_id,
-            "gallery",
-            event_key=event.event_key,
-            force=True,
-            pending_prompt=None,
-            pending_action=None,
-            status_message_id=None,
-        )
         if not rows:
             self._send_message(
                 event.user_id,
                 "Здесь пока пусто.\n\nСоздайте первую фотографию.",
-                (Button("← В меню", "menu"),),
+                (Button("← Назад", "nav:back:main"),),
             )
             return
-        self._send_message(event.user_id, "📂 Мои работы\n\nВыберите работу.")
+        self._send_message(
+            event.user_id,
+            "📂 Мои работы\n\nВыберите работу.",
+            (Button("← Назад", "nav:back:main"),),
+        )
         fallback_buttons: list[Button] = []
         for row in rows:
             favorite = " ⭐" if row["favorite"] else ""
@@ -1521,8 +1699,12 @@ class MaxApplication:
             )
         if fallback_buttons:
             self._send_message(
-                event.user_id, "Работы без доступного превью.", tuple(fallback_buttons)
+                event.user_id,
+                "Работы без доступного превью.",
+                tuple(fallback_buttons)
+                + (Button("← Назад", "nav:back:main"),),
             )
+
     def _open_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, item_id: str
     ) -> None:
@@ -1537,10 +1719,43 @@ class MaxApplication:
             current_gallery_item_id=item.id,
             current_version_id=best.id if best else None,
             pending_prompt=None,
-            pending_action=None,
+            pending_action=NAV_WORK,
             status_message_id=None,
         )
         self._send_work(event.user_id, item.title, item.favorite, versions, best)
+
+    def _show_selected_work(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        if not dialog.user_id or not dialog.current_gallery_item_id:
+            self._show_works(event, dialog)
+            return
+        item, best = self.gallery.open_item(
+            dialog.user_id, dialog.current_gallery_item_id
+        )
+        versions = self.gallery.list_versions(dialog.user_id, item.id)
+        selected = next(
+            (
+                version
+                for version in versions
+                if version.id == dialog.current_version_id
+            ),
+            best or (versions[-1] if versions else None),
+        )
+        self.store.transition(
+            event.user_id,
+            "gallery",
+            event_key=event.event_key,
+            force=True,
+            current_gallery_item_id=item.id,
+            current_version_id=selected.id if selected else None,
+            pending_prompt=None,
+            pending_action=NAV_WORK,
+            status_message_id=None,
+        )
+        self._send_work(
+            event.user_id, item.title, item.favorite, versions, selected
+        )
 
     def _send_work(
         self,
@@ -1553,7 +1768,16 @@ class MaxApplication:
         history: bool = False,
     ) -> None:
         if current is None or current.preview_path is None:
-            self._send_message(platform_user_id, "Результат ещё не готов.")
+            self._send_message(
+                platform_user_id,
+                "Результат ещё не готов.",
+                (
+                    Button(
+                        "← Назад",
+                        "nav:back:work" if history else "nav:back:works",
+                    ),
+                ),
+            )
             return
         heading = "История версий" if history else title
         caption = f"{heading}{' ⭐' if favorite or current.favorite else ''}\nВерсия {current.version_number} из {len(versions)}"
@@ -1590,7 +1814,7 @@ class MaxApplication:
             event_key=event.event_key,
             force=True,
             pending_prompt=None,
-            pending_action=None,
+            pending_action=NAV_HISTORY,
             status_message_id=None,
         )
         self._send_work(
@@ -1611,12 +1835,18 @@ class MaxApplication:
             len(versions) - 1,
         )
         selected = versions[(current_index + direction) % len(versions)]
-        self.store.update(event.user_id, current_version_id=selected.id)
+        self.store.update(
+            event.user_id,
+            current_version_id=selected.id,
+            pending_action=NAV_HISTORY,
+        )
         self._send_work(
             event.user_id, item.title, item.favorite, versions, selected, history=True
         )
 
-    def _make_current_best(self, platform_user_id: str, dialog: MaxDialog) -> None:
+    def _make_current_best(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id or not dialog.current_version_id:
             raise InvalidInputError("No current gallery version")
         self.gallery.set_current_best(
@@ -1627,7 +1857,10 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        self._send_message(platform_user_id, "Выбрано как основное.")
+        if dialog.pending_action == NAV_HISTORY:
+            self._show_version_history(event, dialog)
+        else:
+            self._show_selected_work(event, dialog)
 
     def _delete_current(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id:
@@ -1649,7 +1882,7 @@ class MaxApplication:
             "Работа перемещена в корзину.",
             (
                 Button("Восстановить", "delete:restore"),
-                Button("← В меню", "menu"),
+                Button("← Назад", "studio:works"),
             ),
         )
 

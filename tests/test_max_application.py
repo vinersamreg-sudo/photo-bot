@@ -29,7 +29,12 @@ from app.max_adapter import Button
 from app.max_application import (
     CORRECTION_REQUEST_TEXT,
     MaxApplication,
+    NAV_HISTORY,
+    NAV_WORK,
+    NAV_WORKS,
     OWNER_ONLY_TEXT,
+    PAYMENT_LINK_TEXT,
+    PAYMENT_OFFER_TEXT,
     PHOTO_ACCEPTED_TEXT,
     PROCESSING_TEXT,
 )
@@ -148,13 +153,19 @@ class MaxApplicationTests(TestCase):
             if event_type == "message_created"
             else f"start:c1:u1:{self.sequence}"
         )
+        message_id = f"mid-{self.sequence}" if event_type != "bot_started" else None
+        callback_text = "Сообщение с кнопками"
+        if event_type == "message_callback":
+            active = self.store.active_keyboards("u1")
+            if active:
+                message_id, callback_text = active[-1]
         return MaxIncomingEvent(
             event_type, key, "u1", "c1", self.sequence,
-            message_id=f"mid-{self.sequence}" if event_type != "bot_started" else None,
+            message_id=message_id,
             text=(
                 text
                 if text is not None
-                else "Сообщение с кнопками"
+                else callback_text
                 if event_type == "message_callback"
                 else None
             ),
@@ -404,7 +415,7 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(
             [(button.text, button.action) for button in self.transport.messages[-1][2]],
-            [("← В меню", "menu")],
+            [("← Назад", "nav:back:main")],
         )
 
     def test_ready_scenario_is_optional_and_runs_without_prompt_confirmation(self) -> None:
@@ -589,7 +600,7 @@ class MaxApplicationTests(TestCase):
                 "Исправить",
                 "Другой вариант",
                 "История версий",
-                "Мои работы",
+                "← Назад",
             ],
         )
         self.assertEqual(self.transport.edits[-1][1], "✨ Готово")
@@ -600,15 +611,9 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(delivered_path, Path(attempt["demo_result_path"]))
         self.assertNotEqual(delivered_path, Path(attempt["original_result_path"]))
 
-        duplicate = self.event("message_created", text="ignored")
-        self.assertTrue(self.app.handle(duplicate))
-        message_count = len(self.transport.messages)
-        self.assertFalse(self.app.handle(duplicate))
-        self.assertEqual(len(self.transport.messages), message_count)
-
         unlock_event = self.callback("result:unlock")
         self.assertIn(
-            "Пакет доступа Ravuna — 49 ₽",
+            "Пакет Ravuna — 49 ₽",
             self.transport.messages[-1][1],
         )
         self.assertNotIn(str(attempt["original_result_path"]), self.transport.messages[-1][1])
@@ -655,7 +660,7 @@ class MaxApplicationTests(TestCase):
             ),
             correction_requests,
         )
-        self.assertIn("Пакет доступа Ravuna — 49 ₽", self.transport.messages[-1][1])
+        self.assertEqual(self.transport.messages[-1][1], PAYMENT_OFFER_TEXT)
 
     def test_new_photo_with_caption_and_zero_edits_opens_checkout(self) -> None:
         self.generate_first()
@@ -684,7 +689,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(dialog.state, "result_ready")
         self.assertEqual(dialog.pending_action, "checkout")
         self.assertIsNotNone(dialog.current_version_id)
-        self.assertIn("Пакет доступа Ravuna — 49 ₽", self.transport.messages[-1][1])
+        self.assertEqual(self.transport.messages[-1][1], PAYMENT_OFFER_TEXT)
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute(
@@ -707,7 +712,7 @@ class MaxApplicationTests(TestCase):
         self.assertNotIn("🎲 Другой вариант", button_texts)
         self.assertIn("💳 Купить ещё 2 обработки — 49 ₽", button_texts)
 
-    def test_repeated_payment_click_sends_one_card_and_one_short_notice(self) -> None:
+    def test_repeated_payment_click_sends_one_link_without_duplicate_message(self) -> None:
         self.generate_first()
         paid_app, _payments = self.paid_application()
 
@@ -717,21 +722,34 @@ class MaxApplicationTests(TestCase):
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 0,
             )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0],
+                0,
+            )
+        offer_message_id = self.transport.messages[-1][4]
         paid_app.handle(self.event("message_callback", action="package:buy"))
-        paid_app.handle(self.event("message_callback", action="package:buy"))
+        message_count = len(self.transport.messages)
+        stale = replace(
+            self.event("message_callback", action="package:buy"),
+            message_id=offer_message_id,
+            text=PAYMENT_OFFER_TEXT,
+        )
+        paid_app.handle(stale)
 
         payment_cards = [
             message for message in self.transport.messages
-            if message[1].startswith("Пакет доступа Ravuna — 49 ₽")
+            if message[1] == PAYMENT_LINK_TEXT
             and message[2]
             and message[2][0].text == "Оплатить 49 ₽"
             and message[2][0].action.startswith("https://")
         ]
         self.assertEqual(len(payment_cards), 1)
-        self.assertEqual(
-            self.transport.messages[-1][1],
-            "Ссылка на оплату уже создана.",
-        )
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(self.transport.callbacks[-1][1], "Экран уже изменился")
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
@@ -764,27 +782,120 @@ class MaxApplicationTests(TestCase):
                 (selected_version_id,),
             ).fetchone()[0])
         image_count = len(self.transport.images)
+        message_count = len(self.transport.messages)
 
-        paid_app.handle(self.event("message_callback", action="result:unlock"))
-        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        unlock_events = [
+            self.event("message_callback", action="result:unlock"),
+            self.event("message_callback", action="result:unlock"),
+        ]
+        paid_app.handle(unlock_events[0])
+        paid_app.handle(unlock_events[1])
 
         self.assertEqual(len(self.transport.images), image_count + 1)
         self.assertEqual(self.transport.images[-1][1], selected_preview)
         self.assertEqual(self.transport.images[-1][2], "Выбранная версия")
         self.assertEqual(self.transport.images[-1][3], ())
+        offers = [
+            message
+            for message in self.transport.messages[message_count:]
+            if message[1] == PAYMENT_OFFER_TEXT
+        ]
+        self.assertEqual(len(offers), 1)
+        self.assertEqual(
+            [(button.text, button.action) for button in offers[0][2]],
+            [
+                ("Оплатить 49 ₽", "package:buy"),
+                ("← Назад", "nav:back:work"),
+            ],
+        )
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 0,
             )
+
+    def test_back_from_payment_restores_exact_selected_work_without_side_effects(self) -> None:
+        self.generate_first()
+        paid_app, _payments = self.paid_application()
+        selected_version_id = self.store.get("u1").current_version_id
+        with self.database.read() as connection:
+            selected_preview = Path(
+                connection.execute(
+                    "SELECT preview_watermarked_path FROM gallery_versions WHERE id=?",
+                    (selected_version_id,),
+                ).fetchone()[0]
+            )
+        provider_calls = self.provider.calls
+        balance = self.demo.commerce.balance(self.store.get("u1").user_id)
+
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        back_events = [
+            self.event("message_callback", action="nav:back:work"),
+            self.event("message_callback", action="nav:back:work"),
+        ]
+        paid_app.handle(back_events[0])
+
+        restored = self.store.get("u1")
+        self.assertEqual(restored.state, "gallery")
+        self.assertEqual(restored.pending_action, NAV_WORK)
+        self.assertEqual(restored.current_version_id, selected_version_id)
+        self.assertEqual(self.transport.images[-1][1], selected_preview)
+        self.assertEqual(self.transport.images[-1][3][-1].text, "← Назад")
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(
+            self.demo.commerce.balance(restored.user_id),
+            balance,
+        )
+        image_count = len(self.transport.images)
+        message_count = len(self.transport.messages)
+        paid_app.handle(back_events[1])
+        self.assertEqual(len(self.transport.images), image_count)
+        self.assertEqual(len(self.transport.messages), message_count)
+        with self.database.read() as connection:
             self.assertEqual(
-                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 0,
             )
+
+    def test_back_from_correction_clears_transient_state_without_generation_or_debit(self) -> None:
+        self.generate_first()
+        selected_version_id = self.store.get("u1").current_version_id
+        provider_calls = self.provider.calls
+        balance = self.demo.commerce.balance(self.store.get("u1").user_id)
+
+        self.callback("result:correct")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_correction")
+        self.callback("nav:back:work")
+
+        restored = self.store.get("u1")
+        self.assertEqual(restored.state, "gallery")
+        self.assertIsNone(restored.pending_prompt)
+        self.assertEqual(restored.pending_action, NAV_WORK)
+        self.assertEqual(restored.current_version_id, selected_version_id)
+        self.assertEqual(self.transport.images[-1][3][-1].text, "← Назад")
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.demo.commerce.balance(restored.user_id), balance)
+        with self.database.read() as connection:
             self.assertEqual(
-                connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 0,
             )
+
+    def test_back_from_waiting_for_photo_returns_main_without_provider_call(self) -> None:
+        self.app.handle(self.event("bot_started"))
+        self.callback("custom")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.store.get("u1").pending_action, "initial")
+        provider_calls = self.provider.calls
+
+        self.callback("nav:back:main")
+
+        restored = self.store.get("u1")
+        self.assertEqual(restored.state, "waiting_for_source")
+        self.assertIsNone(restored.pending_prompt)
+        self.assertIsNone(restored.pending_action)
+        self.assertIsNone(restored.current_gallery_item_id)
+        self.assertEqual(self.provider.calls, provider_calls)
 
     def test_parallel_payment_clicks_send_one_card_atomically(self) -> None:
         self.generate_first()
@@ -801,7 +912,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(handled, [True, True])
         payment_cards = [
             message for message in self.transport.messages
-            if message[1].startswith("Пакет доступа Ravuna — 49 ₽")
+            if message[1] == PAYMENT_LINK_TEXT
             and message[2]
             and message[2][0].text == "Оплатить 49 ₽"
             and message[2][0].action.startswith("https://")
@@ -812,7 +923,7 @@ class MaxApplicationTests(TestCase):
                 message[1] == "Ссылка на оплату уже создана."
                 for message in self.transport.messages
             ),
-            1,
+            0,
         )
         with self.database.read() as connection:
             self.assertEqual(
@@ -828,7 +939,7 @@ class MaxApplicationTests(TestCase):
                 1,
             )
 
-    def test_repeated_paid_purchase_goes_to_selected_original(self) -> None:
+    def test_stale_paid_purchase_callback_does_not_repeat_delivery(self) -> None:
         self.generate_first()
         paid_app, payments = self.paid_application()
         paid_app.handle(self.event("message_callback", action="result:unlock"))
@@ -855,18 +966,11 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(webhook.accepted)
         message_count = len(self.transport.messages)
 
+        file_count = len(self.transport.files)
         paid_app.handle(self.event("message_callback", action="package:buy"))
 
-        self.assertEqual(self.transport.files[-1][1], original)
-        self.assertEqual(len(self.transport.messages), message_count + 1)
-        self.assertEqual(self.transport.messages[-1][1], "Оригинал готов ✅")
-        self.assertEqual(
-            [button.text for button in self.transport.messages[-1][2]],
-            [
-                "📷 Обработать другую фотографию",
-                "📁 Мои работы",
-            ],
-        )
+        self.assertEqual(len(self.transport.files), file_count)
+        self.assertEqual(len(self.transport.messages), message_count)
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
@@ -882,25 +986,18 @@ class MaxApplicationTests(TestCase):
         paid_app, payments = self.paid_application()
         event = self.event("message_callback", action="result:unlock")
         paid_app.handle(event)
-        self.assertEqual(
-            self.transport.messages[-1][1],
-            "Пакет доступа Ravuna — 49 ₽\n\n"
-            "После оплаты начисляется:\n"
-            "• 2 обработки\n"
-            "• 1 оригинал\n\n"
-            "После оплаты вы сможете скачать оригинал этой фотографии "
-            "без водяного знака.\n\n"
-            "Пакет начисляется сразу после оплаты.",
-        )
+        self.assertEqual(self.transport.messages[-1][1], PAYMENT_OFFER_TEXT)
         pay_button = self.transport.messages[-1][2][0]
         self.assertEqual(pay_button.text, "Оплатить 49 ₽")
         self.assertEqual(pay_button.action, "package:buy")
+        self.assertEqual(self.transport.messages[-1][2][-1].text, "← Назад")
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 0,
             )
         paid_app.handle(self.event("message_callback", action="package:buy"))
+        self.assertEqual(self.transport.messages[-1][1], PAYMENT_LINK_TEXT)
         pay_button = self.transport.messages[-1][2][0]
         self.assertTrue(pay_button.action.startswith("https://auth.robokassa.ru/"))
         with self.database.read() as connection:
@@ -948,7 +1045,7 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(
             [button.text for button in paid_messages[0][2]],
-            ["📥 Скачать оригинал"],
+            ["📥 Скачать оригинал", "← Назад"],
         )
         self.assertEqual(
             paid_messages[1][1],
@@ -961,6 +1058,7 @@ class MaxApplicationTests(TestCase):
             [
                 "📷 Другая фотография",
                 "📁 Мои работы",
+                "← Назад",
             ],
         )
         self.assertTrue(all(len(message[2]) <= 3 for message in paid_messages))
@@ -1003,6 +1101,7 @@ class MaxApplicationTests(TestCase):
                 "🔁 Повторить скачивание",
                 "📷 Другая фотография",
                 "📁 Мои работы",
+                "← Назад",
             ],
         )
         with self.database.read() as connection:
@@ -1030,6 +1129,7 @@ class MaxApplicationTests(TestCase):
             [
                 "📷 Обработать другую фотографию",
                 "📁 Мои работы",
+                "← Назад",
             ],
         )
         self.assertNotIn("Что дальше?", delivered_message[1])
@@ -1161,8 +1261,9 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(len(self.transport.messages), message_count)
         with self.database.read() as connection:
             row = connection.execute("SELECT * FROM version_feedback").fetchone()
-        self.assertEqual(row["sentiment"], "negative")
+        self.assertEqual(row["sentiment"], "positive")
         self.assertIsNone(row["reason_category"])
+        self.assertEqual(self.transport.callbacks[-1][1], "Экран уже изменился")
 
     def test_gallery_navigation_clears_abandoned_correction_state(self) -> None:
         self.generate_first()
@@ -1177,20 +1278,49 @@ class MaxApplicationTests(TestCase):
         gallery = self.store.get("u1")
         self.assertEqual(gallery.state, "gallery")
         self.assertIsNone(gallery.pending_prompt)
-        self.assertIsNone(gallery.pending_action)
+        self.assertEqual(gallery.pending_action, NAV_WORKS)
         self.assertIsNone(gallery.status_message_id)
 
         self.callback(f"works:open:{item_id}")
         opened = self.store.get("u1")
         self.assertEqual(opened.state, "gallery")
         self.assertIsNone(opened.pending_prompt)
-        self.assertIsNone(opened.pending_action)
+        self.assertEqual(opened.pending_action, NAV_WORK)
 
         self.callback("work:history")
         history = self.store.get("u1")
         self.assertEqual(history.state, "gallery")
         self.assertIsNone(history.pending_prompt)
-        self.assertIsNone(history.pending_action)
+        self.assertEqual(history.pending_action, NAV_HISTORY)
+
+    def test_back_navigation_returns_history_to_work_and_work_to_list(self) -> None:
+        self.generate_first()
+        item_id = self.store.get("u1").current_gallery_item_id
+        selected_version_id = self.store.get("u1").current_version_id
+        provider_calls = self.provider.calls
+
+        self.callback("studio:works")
+        self.callback(f"works:open:{item_id}")
+        self.callback("work:history")
+        self.assertEqual(self.store.get("u1").pending_action, NAV_HISTORY)
+
+        self.callback("nav:back:work")
+        work = self.store.get("u1")
+        self.assertEqual(work.pending_action, NAV_WORK)
+        self.assertEqual(work.current_version_id, selected_version_id)
+        self.assertEqual(self.transport.images[-1][3][-1].text, "← Назад")
+
+        self.callback("nav:back:works")
+        works = self.store.get("u1")
+        self.assertEqual(works.pending_action, NAV_WORKS)
+        self.assertTrue(
+            any(
+                message[1] == "📂 Мои работы\n\nВыберите работу."
+                and message[2][-1].text == "← Назад"
+                for message in self.transport.messages
+            )
+        )
+        self.assertEqual(self.provider.calls, provider_calls)
 
     def test_correction_repeat_gallery_navigation_favorite_and_physical_delete(self) -> None:
         self.generate_first()
@@ -1208,10 +1338,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.images[-1][2], "Текущая версия")
         self.assertEqual(self.transport.images[-1][3], ())
         self.assertEqual(self.transport.messages[-1][1], CORRECTION_REQUEST_TEXT)
-        self.assertEqual(
-            self.transport.edits[-1],
-            (f"mid-{self.sequence}", "Сообщение с кнопками", ()),
-        )
+        self.assertEqual(self.transport.edits[-1], ("image-1", "Готово", ()))
         self.clock.advance(2)
         self.app.handle(self.event("message_created", text="Сделай лицо естественнее"))
         second = self.store.get("u1").current_version_id

@@ -15,6 +15,7 @@ from app.max_adapter import (
     delivered_actions,
     gallery_item_actions,
     gallery_more_actions,
+    ideas_catalog,
     legal_details_view,
     legal_view,
     main_menu,
@@ -59,7 +60,14 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(len(settings_view().buttons), 5)
         self.assertEqual(
             [button.text for button in studio_menu_contract().buttons],
-            ["📂 Мои работы", "⭐ Избранное", "Последние", "Коллекции", "🗑 Корзина"],
+            [
+                "📂 Мои работы",
+                "⭐ Избранное",
+                "Последние",
+                "Коллекции",
+                "🗑 Корзина",
+                "← Назад",
+            ],
         )
         self.assertIn("Прикрепите фотографию через скрепку 📎", WELCOME_TEXT)
         self.assertIn("принимаете условия публичной оферты", WELCOME_TEXT)
@@ -73,7 +81,7 @@ class MaxAdapterTests(TestCase):
                 "Исправить",
                 "Другой вариант",
                 "История версий",
-                "Мои работы",
+                "← Назад",
             ],
         )
         self.assertEqual(
@@ -82,7 +90,7 @@ class MaxAdapterTests(TestCase):
                 "Получить оригинал",
                 "💳 Купить ещё 2 обработки — 49 ₽",
                 "История версий",
-                "Мои работы",
+                "← Назад",
             ],
         )
         self.assertEqual(
@@ -91,6 +99,7 @@ class MaxAdapterTests(TestCase):
                 "📥 Скачать оригинал",
                 "📷 Другая фотография",
                 "📁 Мои работы",
+                "← Назад",
             ],
         )
         self.assertEqual(
@@ -98,6 +107,7 @@ class MaxAdapterTests(TestCase):
             [
                 "📷 Обработать другую фотографию",
                 "📁 Мои работы",
+                "← Назад",
             ],
         )
         self.assertEqual(
@@ -106,6 +116,7 @@ class MaxAdapterTests(TestCase):
                 "🔁 Повторить скачивание",
                 "📷 Другая фотография",
                 "📁 Мои работы",
+                "← Назад",
             ],
         )
         self.assertEqual(len(gallery_item_actions()), 6)
@@ -116,13 +127,40 @@ class MaxAdapterTests(TestCase):
                 "💳 Купить ещё 2 обработки — 49 ₽",
                 "История версий",
                 "Ещё",
-                "📂 К работам",
+                "← Назад",
             ],
         )
         self.assertEqual(len(gallery_more_actions().buttons), 4)
         self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])
         self.assertNotIn("👎 Не то", [button.text for button in gallery_item_actions()])
         self.assertEqual(len(version_history_actions()), 4)
+
+    def test_every_nested_menu_ends_with_exact_back_button(self) -> None:
+        views = (
+            legal_view(),
+            settings_view(),
+            photoshoot_catalog(),
+            ideas_catalog(),
+            scenario_catalog(),
+            studio_menu_contract(),
+            result_actions(1),
+            result_actions(0),
+            delete_confirmation_view(),
+            gallery_more_actions(),
+        )
+        button_groups = (
+            *(view.buttons for view in views),
+            paid_actions(),
+            delivered_actions(),
+            retry_delivery_actions(),
+            gallery_item_actions(1),
+            gallery_item_actions(0),
+            version_history_actions(),
+        )
+        for buttons in button_groups:
+            self.assertTrue(buttons)
+            self.assertEqual(buttons[-1].text, "← Назад")
+        self.assertNotIn("← Назад", [button.text for button in main_menu().buttons])
 
     def test_user_screens_are_short_and_hide_internal_vocabulary(self) -> None:
         views = (

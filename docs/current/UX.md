@@ -8,8 +8,11 @@ The primary MAX flow is intentionally compact:
 2. User sends an image, preferably with the instruction in its caption.
 3. Ravuna produces one watermarked preview with direct actions.
 4. User corrects/repeats, opens works/history, or requests the original.
-5. If no original entitlement exists, Ravuna shows the compact 49 ₽ package.
-6. After ResultURL confirms payment, download is the primary action.
+5. If no original entitlement exists, Ravuna shows one compact 49 ₽ package
+   screen without creating a PaymentIntent.
+6. PaymentIntent and the Robokassa link are created/reused only after the user
+   presses “Оплатить 49 ₽”; the link screen does not repeat the package copy.
+7. After ResultURL confirms payment, download is the primary action.
 
 ## Start state
 
@@ -33,10 +36,13 @@ The primary MAX flow is intentionally compact:
 Use exactly the product language:
 
 ```text
-Пакет доступа Ravuna — 49 ₽
-После оплаты начисляется:
-• 2 обработки
-• 1 оригинал
+Пакет Ravuna — 49 ₽
+
+В пакет входит:
+• 2 обработки фотографий
+• оригинал этой фотографии без водяного знака
+
+Пакет начислится сразу после оплаты.
 ```
 
 Do not call the package “generations”. Browser return pages explain that only the
@@ -52,8 +58,14 @@ server ResultURL confirms payment.
 
 ## Buttons and stale state
 
-- A state transition invalidates old inline keyboards where MAX permits it.
-- Stale callbacks must return a visible “state changed / open current view” reply.
+- Every nested menu ends with “← Назад”; the initial upload screen may omit it.
+- Back restores the previous logical work/version/list screen, preserves the
+  selected preview and never starts processing, debits an edit or creates a
+  PaymentIntent.
+- Back from correction/photo input clears the corresponding transient state.
+- The keyboard that triggers a transition is deactivated where MAX permits it;
+  callbacks from older keyboards return a visible “state changed” reply without
+  removing the current keyboard.
 - Double taps on payment actions reuse an applicable pending intent/order rather
   than creating confusing parallel purchase prompts.
 - Observe-only mode always returns a temporary-unavailability message.
