@@ -108,7 +108,11 @@ class MaxTransportTests(TestCase):
             self.assertEqual(token, "media-token")
             mid = client.send_message(
                 "42", "result",
-                (Button("OK", "ok"), Button("Оплатить", "https://pay.example/order")),
+                (
+                    Button("OK", "ok"),
+                    Button("Оплатить", "https://pay.example/order"),
+                    Button("Копировать", "Текст Юникод", kind="clipboard"),
+                ),
                 image_token=token,
             )
             self.assertEqual(mid, "sent-1")
@@ -120,6 +124,8 @@ class MaxTransportTests(TestCase):
             self.assertEqual(keyboard[0][0]["type"], "callback")
             self.assertEqual(keyboard[1][0]["type"], "link")
             self.assertEqual(keyboard[1][0]["url"], "https://pay.example/order")
+            self.assertEqual(keyboard[2][0]["type"], "clipboard")
+            self.assertEqual(keyboard[2][0]["payload"], "Текст Юникод")
             downloaded = Path(directory) / "incoming.bin"
             client.download_image("https://iu.oneme.ru/input", downloaded, 1024)
             self.assertEqual(downloaded.read_bytes(), image_bytes)
@@ -179,6 +185,49 @@ class MaxTransportTests(TestCase):
         rows = body["attachments"][1]["payload"]["buttons"]
         self.assertEqual([button["text"] for button in rows[0]], ["1", "2"])
         self.assertEqual([button["text"] for button in rows[1]], ["Назад"])
+
+    def test_each_image_edit_uploads_and_uses_the_new_attachment_token(self) -> None:
+        requests = []
+        token_number = 0
+
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path == "/uploads":
+                return httpx.Response(200, json={"url": "https://iu.oneme.ru/upload"})
+            return httpx.Response(200, json={"success": True})
+
+        def media_handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal token_number
+            token_number += 1
+            return httpx.Response(200, json={"token": f"page-token-{token_number}"})
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(transport=httpx.MockTransport(media_handler)),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "page-1.jpg"
+            second = Path(directory) / "page-2.jpg"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            client.edit_image("bot-message", first, "1/2", ())
+            client.edit_image("bot-message", second, "2/2", ())
+
+        edits = [
+            json.loads(request.content)
+            for request in requests
+            if request.url.path == "/messages" and request.method == "PUT"
+        ]
+        self.assertEqual(len(edits), 2)
+        self.assertEqual(
+            [body["attachments"][0]["payload"]["token"] for body in edits],
+            ["page-token-1", "page-token-2"],
+        )
 
     def test_image_upload_accepts_the_documented_photo_token_map(self) -> None:
         sent_messages = []

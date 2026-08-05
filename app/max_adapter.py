@@ -36,6 +36,7 @@ class Button:
     text: str
     action: str
     row: int | None = None
+    kind: str = "auto"
 
 
 @dataclass(frozen=True)

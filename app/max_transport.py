@@ -280,11 +280,19 @@ class MaxApiClient:
             "payload": {
                 "buttons": [[(
                     {
+                        "type": "clipboard",
+                        "text": button.text,
+                        "payload": button.action,
+                    }
+                    if button.kind == "clipboard"
+                    else {
                         "type": "link",
                         "text": button.text,
                         "url": button.action,
                     }
-                    if button.action.startswith("https://")
+                    if button.kind == "link" or (
+                        button.kind == "auto" and button.action.startswith("https://")
+                    )
                     else {
                         "type": "callback",
                         "text": button.text,

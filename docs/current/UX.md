@@ -27,6 +27,9 @@ The primary MAX flow is intentionally compact:
 - If MAX cannot edit the active message, Ravuna sends exactly one replacement,
   adopts its id and then attempts to delete only the previous bot-owned message.
   User photos, prompts and messages are never deleted.
+- A new user photo, prompt, correction or source retires the previous bot screen.
+  Ravuna sends one new progress/status message below that user input and stores it
+  as the active message; the result or error then edits that new message in place.
 - A completed asynchronous edit updates the UI only while its processing
   revision is current. Otherwise the result remains available in «Моих работах»
   and a short service notification may be sent.
@@ -53,13 +56,20 @@ The primary MAX flow is intentionally compact:
 
 ## Works and versions
 
-- «Мои работы» is one contact sheet with up to six numbered watermarked previews
-  per page, newest first. Number buttons open the matching work in the same
-  message; 20 works produce four pages (6 + 6 + 6 + 2).
-- Version history uses the same six-item pagination. Opening a version preserves
-  the selected preview and Back returns first to history, then to the work.
-- Contact sheets read only the current page, use a neutral placeholder for a
-  missing preview and never read or expose the private original.
+- «Мои работы» contains only successfully completed works whose selected
+  succeeded version has an existing watermarked preview. Source-only,
+  processing, failed, rejected and missing-preview records are skipped before
+  page counts and callbacks are calculated.
+- A contact sheet has one to six real tiles and no placeholders. Its layout is
+  dynamic for 1–6 items, each tile has a contrasting number badge, and the
+  matching buttons are labelled “Открыть N”. A true clickable tile gallery would
+  require a separate MAX mini-app and is not simulated by the bot image.
+- Page identity includes user/chat, page, ordered item/version ids, preview
+  revision and layout. Every page switch uploads and explicitly replaces the
+  image attachment; 20 ready works produce four pages (6 + 6 + 6 + 2).
+- Version history applies the same readiness filter, dynamic layout and
+  attachment replacement. Opening a version preserves the selected preview and
+  Back returns to the same history/work context.
 
 ## Payment state
 
@@ -89,9 +99,11 @@ server ResultURL confirms payment.
 ## Referrals and attribution
 
 - Each user receives one random opaque 10–20 character referral code. Share
-  links use the configured `MAX_BOT_URL` and a `ref_<code>` start payload; the
-  MAX share deep link contains URL-encoded text only and never exposes original
-  media.
+  links use the configured `MAX_BOT_URL` and a `ref_<code>` start payload.
+- The share screen keeps the watermarked preview and provides two MAX
+  `clipboard` buttons: one copies the complete Unicode invitation and one copies
+  only the referral URL. It does not use the unstable `:share` browser flow,
+  expose original media or invite the owner to open their own referral link.
 - The first valid referrer is retained only for a previously unused account.
   Self-referrals, existing users and duplicate/concurrent rewards are rejected.
 - After the invitee's first successfully delivered preview, the inviter receives

@@ -9,7 +9,6 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Protocol, Sequence
-from urllib.parse import quote
 from uuid import uuid4
 
 from app.attribution import AttributionService, parse_start_payload
@@ -468,6 +467,11 @@ class MaxApplication:
     def _dispatch(self, event: MaxIncomingEvent) -> None:
         dialog = self.store.get_or_create(event.user_id, event.chat_id)
         text = (event.text or "").strip()
+        if (
+            self.settings.max_single_screen_ui_enabled
+            and event.event_type == "message_created"
+        ):
+            self.ui.begin_user_input(event.user_id, chat_id=event.chat_id)
         if event.event_type == "bot_started" or text.lower() == "/start":
             if event.image_url:
                 self._reset_dialog_to_main(event.user_id, event.event_key)
@@ -870,7 +874,7 @@ class MaxApplication:
             return
         if action == "nav:back:works":
             if dialog.pending_action == NAV_WORK:
-                self._show_works(event, dialog)
+                self._show_works(event, dialog, max(dialog.gallery_cursor, 1))
             return
         if action == "nav:back:work":
             if (
@@ -1011,7 +1015,13 @@ class MaxApplication:
                 raise InvalidInputError("No gallery work selected")
             self._open_work(event, dialog, dialog.current_gallery_item_id)
         elif action == "work:history":
-            self._show_version_history(event, dialog)
+            self._show_version_history(
+                event,
+                dialog,
+                max(dialog.gallery_cursor, 1)
+                if dialog.pending_action == NAV_HISTORY
+                else 1,
+            )
         elif action.startswith("versions:page:"):
             try:
                 page = int(action.rsplit(":", 1)[1])
@@ -1520,11 +1530,10 @@ class MaxApplication:
         referral_url = f"{self.settings.max_bot_url}{separator}start=ref_{code}"
         share_text = (
             "Я обработал фотографию в Ravuna прямо в MAX.\n\n"
-            "Можно менять фон и одежду, убирать лишних людей и предметы "
+            "Здесь можно менять фон и одежду, убирать лишних людей и предметы\n"
             "и создавать новые образы.\n\n"
             f"Попробуйте:\n{referral_url}"
         )
-        share_url = f"https://max.ru/:share?text={quote(share_text, safe='')}"
         self.attribution.record_event(
             event.user_id,
             "share_opened",
@@ -1539,11 +1548,25 @@ class MaxApplication:
         self._send_image(
             event.user_id,
             self._selected_preview_path(dialog),
-            "Ссылка готова.\n\nСкопируйте ссылку и отправьте другу.",
+            "📤 Поделиться Ravuna\n\n"
+            "Скопируйте приглашение и отправьте его другу в любом чате MAX.\n"
+            "После его первой успешной обработки вы получите бонус.\n\n"
+            "Чтобы отправить и фотографию, используйте стандартную функцию "
+            "«Переслать» у сообщения с результатом.",
             (
-                Button("📤 Отправить в MAX", share_url),
-                Button("Открыть ссылку", referral_url),
-                Button("← Назад", "nav:back:work"),
+                Button(
+                    "📋 Скопировать приглашение",
+                    share_text,
+                    0,
+                    "clipboard",
+                ),
+                Button(
+                    "📋 Скопировать только ссылку",
+                    referral_url,
+                    1,
+                    "clipboard",
+                ),
+                Button("← Назад", "nav:back:work", 2),
             ),
             screen="share",
             context={
@@ -2057,7 +2080,7 @@ class MaxApplication:
             return
         current = self.ui.current(event.user_id)
         sheet = self.work_gallery.contact_sheet(
-            f"works:{dialog.user_id}",
+            f"works:{dialog.user_id}:{event.chat_id or event.user_id}",
             gallery_page,
             (current.revision if current else 0) + 1,
         )
@@ -2077,7 +2100,11 @@ class MaxApplication:
     ) -> tuple[Button, ...]:
         item_prefix = "works:open" if kind == "works" else "versions:open"
         buttons = tuple(
-            Button(str(index), f"{item_prefix}:{entry.id}", (index - 1) // 3)
+            Button(
+                f"Открыть {index}",
+                f"{item_prefix}:{entry.id}",
+                (index - 1) // 3,
+            )
             for index, entry in enumerate(page.entries, 1)
         )
         navigation_row = 2
@@ -2105,7 +2132,11 @@ class MaxApplication:
         if not dialog.user_id:
             raise InvalidInputError("Gallery owner is missing")
         item, best = self.gallery.open_item(dialog.user_id, item_id)
-        versions = self.gallery.list_versions(dialog.user_id, item_id)
+        versions = self._ready_gallery_versions(
+            self.gallery.list_versions(dialog.user_id, item_id)
+        )
+        if best not in versions:
+            best = None
         if not best and versions:
             best = versions[-1]
         self.store.transition(
@@ -2127,7 +2158,9 @@ class MaxApplication:
         item, best = self.gallery.open_item(
             dialog.user_id, dialog.current_gallery_item_id
         )
-        versions = self.gallery.list_versions(dialog.user_id, item.id)
+        versions = self._ready_gallery_versions(
+            self.gallery.list_versions(dialog.user_id, item.id)
+        )
         selected = next(
             (
                 version
@@ -2214,13 +2247,32 @@ class MaxApplication:
         ):
             raise MaxTransportError("MAX gallery preview delivery failed")
 
+    @staticmethod
+    def _ready_gallery_versions(
+        versions: Sequence[GalleryVersion],
+    ) -> list[GalleryVersion]:
+        ready: list[GalleryVersion] = []
+        for version in versions:
+            preview = version.preview_path
+            if version.status != "succeeded" or preview is None:
+                continue
+            try:
+                if preview.is_symlink() or not preview.is_file():
+                    continue
+            except OSError:
+                continue
+            ready.append(version)
+        return ready
+
     def _show_version_history(
         self, event: MaxIncomingEvent, dialog: MaxDialog, page: int = 1
     ) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id:
             raise InvalidInputError("No gallery work selected")
         item, best = self.gallery.open_item(dialog.user_id, dialog.current_gallery_item_id)
-        versions = self.gallery.list_versions(dialog.user_id, item.id)
+        versions = self._ready_gallery_versions(
+            self.gallery.list_versions(dialog.user_id, item.id)
+        )
         current = next(
             (version for version in versions if version.id == dialog.current_version_id),
             best or (versions[-1] if versions else None),
@@ -2250,7 +2302,9 @@ class MaxApplication:
                 return
             active = self.ui.current(event.user_id)
             sheet = self.work_gallery.contact_sheet(
-                f"versions:{dialog.user_id}:{dialog.current_gallery_item_id}",
+                "versions:"
+                f"{dialog.user_id}:{event.chat_id or event.user_id}:"
+                f"{dialog.current_gallery_item_id}",
                 gallery_page,
                 (active.revision if active else 0) + 1,
             )
@@ -2278,7 +2332,9 @@ class MaxApplication:
         item, _best = self.gallery.open_item(
             dialog.user_id, dialog.current_gallery_item_id
         )
-        versions = self.gallery.list_versions(dialog.user_id, item.id)
+        versions = self._ready_gallery_versions(
+            self.gallery.list_versions(dialog.user_id, item.id)
+        )
         selected = next((version for version in versions if version.id == version_id), None)
         if selected is None:
             raise InvalidInputError("Gallery version is not available")
@@ -2303,7 +2359,9 @@ class MaxApplication:
         if not dialog.user_id or not dialog.current_gallery_item_id:
             raise InvalidInputError("No gallery work selected")
         item, _best = self.gallery.open_item(dialog.user_id, dialog.current_gallery_item_id)
-        versions = self.gallery.list_versions(dialog.user_id, item.id)
+        versions = self._ready_gallery_versions(
+            self.gallery.list_versions(dialog.user_id, item.id)
+        )
         if not versions:
             raise InvalidInputError("Work has no versions")
         current_index = next(

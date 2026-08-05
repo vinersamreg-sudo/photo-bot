@@ -130,6 +130,45 @@ class MaxUiShell:
             ).fetchone()
         return self._session(row) if row else None
 
+    def begin_user_input(
+        self, platform_user_id: str, *, chat_id: Optional[str] = None
+    ) -> RenderResult:
+        """Retire the old bot screen before rendering below a new user message."""
+
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM active_ui_sessions WHERE platform_user_id=?",
+                (platform_user_id,),
+            ).fetchone()
+            if row is None:
+                return RenderResult(False, None, 0)
+            previous_message_id = row["active_ui_message_id"]
+            revision = int(row["ui_revision"]) + 1
+            connection.execute(
+                """UPDATE active_ui_sessions
+                   SET chat_id=COALESCE(?,chat_id),active_ui_message_id=NULL,
+                       active_screen='user_input',active_screen_context='{}',
+                       ui_revision=?,updated_at=?
+                   WHERE platform_user_id=?""",
+                (chat_id, revision, _now(), platform_user_id),
+            )
+
+        if previous_message_id:
+            try:
+                self.transport.delete_message(previous_message_id)
+            except MaxTransportError:
+                try:
+                    self.transport.edit_message(
+                        previous_message_id,
+                        "Продолжение ниже ↓",
+                        (),
+                        notify=False,
+                    )
+                except MaxTransportError:
+                    pass
+            self.keyboards.clear_keyboard(platform_user_id, previous_message_id)
+        return RenderResult(True, None, revision)
+
     def callback_is_current(
         self, platform_user_id: str, message_id: Optional[str], revision: Optional[int]
     ) -> bool:
@@ -213,7 +252,20 @@ class MaxUiShell:
             previous_message_id = row["active_ui_message_id"]
 
         rendered_buttons = tuple(
-            Button(button.text, versioned_action(button.action, revision), button.row)
+            Button(
+                button.text,
+                (
+                    versioned_action(button.action, revision)
+                    if button.kind == "callback"
+                    or (
+                        button.kind == "auto"
+                        and not button.action.startswith("https://")
+                    )
+                    else button.action
+                ),
+                button.row,
+                button.kind,
+            )
             for button in buttons
         )
         message_id = previous_message_id

@@ -386,10 +386,14 @@ class MaxApplicationTests(TestCase):
         self.enable_single_screen()
         self.generate_first()
 
-        self.assertEqual(len(self.transport.messages), 1)
+        self.assertEqual(len(self.transport.messages), 2)
         self.assertEqual(len(self.transport.images), 0)
         self.assertEqual(len(self.transport.image_edits), 1)
         active = self.app.ui.current("u1")
+        self.assertEqual(self.transport.messages[-1][1], PROCESSING_TEXT)
+        self.assertEqual(self.transport.deletes, [self.transport.messages[0][4]])
+        self.assertNotIn("mid-2", self.transport.deletes)
+        self.assertEqual(self.transport.messages[-1][4], active.message_id)
         self.assertEqual(self.transport.image_edits[-1][0], active.message_id)
         self.assertEqual(self.transport.image_edits[-1][2], "Готово")
         self.assertEqual(
@@ -427,9 +431,13 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.provider.calls, provider_calls)
         self.assertEqual(self.transport.callbacks[-1][1], "Экран уже изменился")
 
-    def test_share_screen_keeps_watermarked_preview_and_builds_encoded_referral_link(self) -> None:
+    def test_share_screen_uses_clipboard_payloads_and_keeps_result_in_place(self) -> None:
         self.enable_single_screen()
         self.generate_first()
+        active_message = self.app.ui.current("u1").message_id
+        message_count = len(self.transport.messages)
+        provider_calls = self.provider.calls
+        balance = self.demo.commerce.balance(self.store.get("u1").user_id).available
         with self.database.read() as connection:
             preview = Path(
                 connection.execute(
@@ -441,9 +449,22 @@ class MaxApplicationTests(TestCase):
 
         edit = self.transport.image_edits[-1]
         self.assertEqual(edit[1], preview)
-        share_button = next(button for button in edit[3] if button.text.startswith("📤"))
-        self.assertTrue(share_button.action.startswith("https://max.ru/:share?text="))
-        self.assertIn("%D0%AF", share_button.action)
+        self.assertEqual(edit[0], active_message)
+        self.assertEqual(len(self.transport.messages), message_count)
+        clipboard = [button for button in edit[3] if button.kind == "clipboard"]
+        self.assertEqual(
+            [button.text for button in clipboard],
+            ["📋 Скопировать приглашение", "📋 Скопировать только ссылку"],
+        )
+        self.assertIn("Я обработал фотографию", clipboard[0].action)
+        self.assertIn("Попробуйте:\nhttps://max.ru/", clipboard[0].action)
+        self.assertTrue(clipboard[1].action.startswith("https://max.ru/"))
+        self.assertIn("?start=ref_", clipboard[1].action)
+        self.assertNotIn("/original", "\n".join(button.action for button in clipboard))
+        self.assertFalse(
+            any("https://max.ru/:share" in button.action for button in edit[3])
+        )
+        self.assertFalse(any(button.text == "Открыть ссылку" for button in edit[3]))
         with self.database.read() as connection:
             code = connection.execute("SELECT referral_code FROM referral_codes").fetchone()[0]
             self.assertLessEqual(len(f"ref_{code}"), 128)
@@ -453,6 +474,13 @@ class MaxApplicationTests(TestCase):
                 ).fetchone()[0],
                 1,
             )
+        self.callback("nav:back:work")
+        self.assertEqual(self.app.ui.current("u1").message_id, active_message)
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(
+            self.demo.commerce.balance(self.store.get("u1").user_id).available,
+            balance,
+        )
 
     def test_referral_rewards_two_edits_after_invitee_first_delivered_preview(self) -> None:
         self.enable_single_screen()
@@ -521,7 +549,9 @@ class MaxApplicationTests(TestCase):
         self.callback("studio:works")
 
         sheet_edit = self.transport.image_edits[-1]
-        number_button = next(button for button in sheet_edit[3] if button.text == "1")
+        number_button = next(
+            button for button in sheet_edit[3] if button.text == "Открыть 1"
+        )
         _revision, action = parse_versioned_action(number_button.action)
         expected_item = action.rsplit(":", 1)[1]
         self.callback(action)
@@ -530,7 +560,106 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(dialog.current_gallery_item_id, expected_item)
         self.assertEqual(dialog.pending_action, NAV_WORK)
         self.assertEqual(self.app.ui.current("u1").message_id, active_message)
-        self.assertEqual(len(self.transport.messages), 1)
+        self.assertEqual(len(self.transport.messages), 2)
+
+    def test_single_screen_correction_creates_new_progress_after_user_text(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        self.callback("result:correct")
+        old_active = self.app.ui.current("u1").message_id
+        messages_before = len(self.transport.messages)
+        self.clock.advance(2)
+
+        correction_event = self.event(
+            "message_created", text="Сделай лицо естественнее"
+        )
+        self.app.handle(correction_event)
+
+        active = self.app.ui.current("u1")
+        self.assertEqual(len(self.transport.messages), messages_before + 1)
+        self.assertEqual(self.transport.messages[-1][1], PROCESSING_TEXT)
+        self.assertEqual(self.transport.messages[-1][4], active.message_id)
+        self.assertNotEqual(active.message_id, old_active)
+        self.assertIn(old_active, self.transport.deletes)
+        self.assertNotIn(correction_event.message_id, self.transport.deletes)
+        self.assertEqual(self.transport.image_edits[-1][0], active.message_id)
+
+    def test_single_screen_gallery_page_switch_changes_sheet_and_mapping(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        dialog = self.store.get("u1")
+        now = self.clock().isoformat()
+        with self.database.read() as connection:
+            gallery_id = connection.execute(
+                "SELECT gallery_id FROM gallery_items WHERE user_id=? LIMIT 1",
+                (dialog.user_id,),
+            ).fetchone()[0]
+        with self.database.transaction() as connection:
+            for index in range(1, 20):
+                preview = self.base / f"gallery-page-preview-{index}.jpg"
+                Image.new("RGB", (80, 60), (index * 9 % 255, 70, 140)).save(preview)
+                work_id = f"gallery-page-work-{index:02d}"
+                version_id = f"gallery-page-version-{index:02d}"
+                connection.execute(
+                    """INSERT INTO gallery_items(
+                           id,gallery_id,user_id,title,created_at,updated_at,
+                           original_source_path,storage_root_path,cover_preview_path,
+                           generation_count,current_best_version_id,retention_until
+                       ) VALUES(?,?,?,?,?,?,?,?,?,1,?,?)""",
+                    (
+                        work_id, gallery_id, dialog.user_id, f"Работа {index}",
+                        now, f"{now}-{index:02d}", "private-source", "private-root",
+                        str(preview), version_id, now,
+                    ),
+                )
+                connection.execute(
+                    """INSERT INTO gallery_versions(
+                           id,gallery_item_id,version_number,source_path,prompt,
+                           effective_prompt,provider,model,preview_watermarked_path,
+                           original_path,created_at,status
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'succeeded')""",
+                    (
+                        version_id, work_id, 1, "private-source", "prompt", "prompt",
+                        "fake", "fake", str(preview), "private-original", now,
+                    ),
+                )
+
+        self.callback("studio:works")
+        first_edit = self.transport.image_edits[-1]
+        first_sheet = first_edit[1].read_bytes()
+        first_ids = {
+            parse_versioned_action(button.action)[1].rsplit(":", 1)[1]
+            for button in first_edit[3]
+            if button.text.startswith("Открыть ")
+        }
+        self.callback("works:page:2")
+        second_edit = self.transport.image_edits[-1]
+        second_ids = {
+            parse_versioned_action(button.action)[1].rsplit(":", 1)[1]
+            for button in second_edit[3]
+            if button.text.startswith("Открыть ")
+        }
+
+        self.assertNotEqual(first_edit[1], second_edit[1])
+        self.assertNotEqual(first_sheet, second_edit[1].read_bytes())
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        open_second = next(
+            parse_versioned_action(button.action)[1]
+            for button in second_edit[3]
+            if button.text == "Открыть 1"
+        )
+        expected = open_second.rsplit(":", 1)[1]
+        self.callback(open_second)
+        self.assertEqual(self.store.get("u1").current_gallery_item_id, expected)
+        self.callback("nav:back:works")
+        self.assertIn("Страница 2 из 4", self.transport.image_edits[-1][2])
+        self.callback("works:page:4")
+        last_buttons = [
+            button.text
+            for button in self.transport.image_edits[-1][3]
+            if button.text.startswith("Открыть ")
+        ]
+        self.assertEqual(last_buttons, ["Открыть 1", "Открыть 2"])
 
     def test_start_direct_upload_details_and_implicit_consent(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))

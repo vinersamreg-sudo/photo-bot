@@ -116,3 +116,36 @@ class MaxUiShellTests(TestCase):
         self.assertEqual(
             len(self.transport.image_edits) + len(self.transport.edits), calls_before
         )
+
+    def test_user_input_retires_old_screen_and_next_render_sends_below_it(self) -> None:
+        menu = self.shell.render(
+            "u1",
+            text="Главное меню",
+            buttons=(Button("Открыть", "works"),),
+            screen="main",
+        )
+
+        retired = self.shell.begin_user_input("u1", chat_id="chat-1")
+        progress = self.shell.render("u1", text="Обрабатываю", screen="processing")
+
+        self.assertTrue(retired.applied)
+        self.assertEqual(self.transport.deletes, [menu.message_id])
+        self.assertEqual(len(self.transport.sends), 2)
+        self.assertEqual(len(self.transport.edits), 0)
+        self.assertNotEqual(progress.message_id, menu.message_id)
+        self.assertEqual(self.shell.current("u1").message_id, progress.message_id)
+        self.assertGreater(progress.revision, menu.revision)
+
+    def test_clipboard_payload_is_not_versioned(self) -> None:
+        payload = "Приглашение Юникод\nhttps://max.ru/bot?start=ref_opaque"
+
+        self.shell.render(
+            "u1",
+            text="Поделиться",
+            buttons=(Button("Копировать", payload, kind="clipboard"),),
+            screen="share",
+        )
+
+        button = self.transport.sends[-1][2][0]
+        self.assertEqual(button.kind, "clipboard")
+        self.assertEqual(button.action, payload)
