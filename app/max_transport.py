@@ -54,6 +54,7 @@ class MaxIncomingEvent:
     image_url: Optional[str] = None
     callback_id: Optional[str] = None
     callback_payload: Optional[str] = None
+    start_payload: Optional[str] = None
 
 
 def _string_id(value: Any) -> Optional[str]:
@@ -77,6 +78,11 @@ def parse_update(update: dict[str, Any]) -> Optional[MaxIncomingEvent]:
             user_id,
             chat_id,
             timestamp,
+            start_payload=(
+                str(update.get("payload"))
+                if update.get("payload") is not None
+                else None
+            ),
         )
 
     message = update.get("message") or {}
@@ -263,6 +269,12 @@ class MaxApiClient:
     def _keyboard(buttons: Sequence[Button]) -> list[dict[str, Any]]:
         if not buttons:
             return []
+        rows: list[list[Button]] = []
+        for button in buttons:
+            if button.row is None or not rows or rows[-1][0].row != button.row:
+                rows.append([button])
+            else:
+                rows[-1].append(button)
         return [{
             "type": "inline_keyboard",
             "payload": {
@@ -278,7 +290,7 @@ class MaxApiClient:
                         "text": button.text,
                         "payload": button.action,
                     }
-                )] for button in buttons]
+                ) for button in row] for row in rows]
             },
         }]
 
@@ -322,13 +334,53 @@ class MaxApiClient:
         return str(message_id)
 
     def edit_message(
-        self, message_id: str, text: str, buttons: Sequence[Button] = ()
+        self,
+        message_id: str,
+        text: str,
+        buttons: Sequence[Button] = (),
+        *,
+        notify: bool = False,
     ) -> None:
         body: dict[str, Any] = {
             "text": text,
             "attachments": self._keyboard(buttons),
+            "notify": notify,
         }
-        self._request("PUT", "/messages", params={"message_id": message_id}, json=body)
+        result = self._request(
+            "PUT", "/messages", params={"message_id": message_id}, json=body
+        )
+        if result.get("success") is False:
+            raise MaxTransportError("MAX did not edit the message", stage="message_edit")
+
+    def edit_image(
+        self,
+        message_id: str,
+        image: Path,
+        caption: str,
+        buttons: Sequence[Button],
+        *,
+        notify: bool = False,
+    ) -> None:
+        token = self.upload_image(image)
+        body: dict[str, Any] = {
+            "text": caption,
+            "attachments": [
+                {"type": "image", "payload": {"token": token}},
+                *self._keyboard(buttons),
+            ],
+            "notify": notify,
+        }
+        result = self._request(
+            "PUT",
+            "/messages",
+            stage="image_message_edit",
+            params={"message_id": message_id},
+            json=body,
+        )
+        if result.get("success") is False:
+            raise MaxTransportError(
+                "MAX did not edit the image message", stage="image_message_edit"
+            )
 
     def answer_callback(self, callback_id: str, notification: str) -> None:
         self._request(
@@ -469,11 +521,13 @@ class MaxApiClient:
         image: Path,
         caption: str,
         buttons: Sequence[Button],
+        *,
+        notify: bool = True,
     ) -> Optional[str]:
         try:
             token = self.upload_image(image)
             return self.send_message(
-                platform_user_id, caption, buttons, image_token=token
+                platform_user_id, caption, buttons, image_token=token, notify=notify
             )
         except MaxTransportError as exc:
             LOGGER.warning(

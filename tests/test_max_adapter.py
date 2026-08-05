@@ -78,6 +78,7 @@ class MaxAdapterTests(TestCase):
             [button.text for button in result_actions(4).buttons],
             [
                 "Получить оригинал",
+                "📤 Поделиться результатом",
                 "Исправить",
                 "Другой вариант",
                 "История версий",
@@ -88,6 +89,7 @@ class MaxAdapterTests(TestCase):
             [button.text for button in result_actions(0).buttons],
             [
                 "Получить оригинал",
+                "📤 Поделиться результатом",
                 "💳 Купить ещё 2 обработки — 49 ₽",
                 "История версий",
                 "← Назад",
@@ -119,11 +121,12 @@ class MaxAdapterTests(TestCase):
                 "← Назад",
             ],
         )
-        self.assertEqual(len(gallery_item_actions()), 6)
+        self.assertEqual(len(gallery_item_actions()), 7)
         self.assertEqual(
             [button.text for button in gallery_item_actions(0)],
             [
                 "⬇ Получить оригинал",
+                "📤 Поделиться результатом",
                 "💳 Купить ещё 2 обработки — 49 ₽",
                 "История версий",
                 "Ещё",

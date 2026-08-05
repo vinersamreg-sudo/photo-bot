@@ -44,6 +44,7 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.paid_retention_days, 180)
         self.assertEqual(settings.trash_retention_days, 30)
         self.assertEqual(settings.max_bot_token, "")
+        self.assertEqual(settings.max_bot_url, "https://max.ru/se13572368_bot")
         self.assertEqual(settings.max_api_base_url, "https://platform-api2.max.ru")
         self.assertTrue(settings.max_ca_bundle_path.is_file())
         self.assertEqual(settings.max_transport_mode, "disabled")
@@ -52,6 +53,7 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.max_poll_max_stale_seconds, 90)
         self.assertTrue(settings.max_poll_observe_only)
         self.assertFalse(settings.max_public_access_enabled)
+        self.assertTrue(settings.max_single_screen_ui_enabled)
         self.assertEqual(settings.max_owner_user_ids, ("owner-1", "owner-2"))
         self.assertFalse(settings.payment_webhook_listener_enabled)
 

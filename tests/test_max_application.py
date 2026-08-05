@@ -40,6 +40,7 @@ from app.max_application import (
 )
 from app.max_conversation import MaxConversationStore
 from app.max_transport import MaxIncomingEvent, MaxTransportError
+from app.max_ui_shell import parse_versioned_action
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
 from app.payments import build_payment_service
@@ -63,6 +64,8 @@ class FakeMaxTransport:
         self.images = []
         self.files = []
         self.edits = []
+        self.image_edits = []
+        self.deletes = []
         self.callbacks = []
         self.image_delivery = True
         self.file_delivery = True
@@ -80,11 +83,22 @@ class FakeMaxTransport:
         self.messages.append((user_id, text, tuple(buttons), kwargs, message_id))
         return message_id
 
-    def edit_message(self, message_id, text, buttons=()):
+    def edit_message(self, message_id, text, buttons=(), **_kwargs):
         if self.fail_next_edit:
             self.fail_next_edit = False
             raise MaxTransportError("fake edit failure")
         self.edits.append((message_id, text, tuple(buttons)))
+
+    def edit_image(self, message_id, image, caption, buttons, **_kwargs):
+        if self.fail_next_edit:
+            self.fail_next_edit = False
+            raise MaxTransportError("fake edit failure")
+        self.image_edits.append(
+            (message_id, Path(image), caption, tuple(buttons))
+        )
+
+    def delete_message(self, message_id):
+        self.deletes.append(message_id)
 
     def answer_callback(self, callback_id, notification):
         self.callbacks.append((callback_id, notification))
@@ -94,7 +108,7 @@ class FakeMaxTransport:
         shutil.copyfile(self.source, destination)
         return destination
 
-    def send_image(self, user_id, image, caption, buttons):
+    def send_image(self, user_id, image, caption, buttons, **_kwargs):
         self.images.append((user_id, Path(image), caption, tuple(buttons)))
         if not self.image_delivery:
             return None
@@ -121,6 +135,7 @@ class MaxApplicationTests(TestCase):
             demo_min_request_interval_seconds=1,
             max_owner_user_ids=("u1",),
             image_direct_prompt_enabled=False,
+            max_single_screen_ui_enabled=False,
         )
         self.clock = Clock()
         self.database = Database(self.settings.database_path)
@@ -343,6 +358,179 @@ class MaxApplicationTests(TestCase):
             ),
             payments,
         )
+
+    def enable_single_screen(self) -> None:
+        self.settings = replace(
+            self.settings,
+            max_single_screen_ui_enabled=True,
+        )
+        self.app.settings = self.settings
+
+    def test_single_screen_callback_edits_current_message_without_provider_call(self) -> None:
+        self.enable_single_screen()
+        self.app.handle(self.event("bot_started"))
+        active = self.app.ui.current("u1")
+        message_count = len(self.transport.messages)
+        provider_calls = self.provider.calls
+
+        self.callback("studio:works")
+
+        updated = self.app.ui.current("u1")
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(updated.message_id, active.message_id)
+        self.assertGreater(updated.revision, active.revision)
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertIn("Здесь пока пусто", self.transport.edits[-1][1])
+
+    def test_single_screen_processing_becomes_preview_in_same_message(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+
+        self.assertEqual(len(self.transport.messages), 1)
+        self.assertEqual(len(self.transport.images), 0)
+        self.assertEqual(len(self.transport.image_edits), 1)
+        active = self.app.ui.current("u1")
+        self.assertEqual(self.transport.image_edits[-1][0], active.message_id)
+        self.assertEqual(self.transport.image_edits[-1][2], "Готово")
+        self.assertEqual(
+            self.demo.commerce.balance(self.store.get("u1").user_id).available,
+            1,
+        )
+
+    def test_single_screen_edit_fallback_sends_once_and_deletes_old_bot_message(self) -> None:
+        self.enable_single_screen()
+        self.app.handle(self.event("bot_started"))
+        previous = self.app.ui.current("u1").message_id
+        self.transport.fail_next_edit = True
+
+        self.callback("studio:works")
+
+        self.assertEqual(len(self.transport.messages), 2)
+        self.assertEqual(self.transport.deletes, [previous])
+
+    def test_single_screen_stale_callback_has_no_side_effects(self) -> None:
+        self.enable_single_screen()
+        self.app.handle(self.event("bot_started"))
+        self.callback("studio:works")
+        message_count = len(self.transport.messages)
+        edit_count = len(self.transport.edits)
+        provider_calls = self.provider.calls
+        stale = replace(
+            self.event("message_callback", action="custom"),
+            message_id="obsolete-bot-message",
+        )
+
+        self.app.handle(stale)
+
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(len(self.transport.edits), edit_count)
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.transport.callbacks[-1][1], "Экран уже изменился")
+
+    def test_share_screen_keeps_watermarked_preview_and_builds_encoded_referral_link(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        with self.database.read() as connection:
+            preview = Path(
+                connection.execute(
+                    "SELECT demo_result_path FROM generation_attempts"
+                ).fetchone()[0]
+            )
+
+        self.callback("result:share")
+
+        edit = self.transport.image_edits[-1]
+        self.assertEqual(edit[1], preview)
+        share_button = next(button for button in edit[3] if button.text.startswith("📤"))
+        self.assertTrue(share_button.action.startswith("https://max.ru/:share?text="))
+        self.assertIn("%D0%AF", share_button.action)
+        with self.database.read() as connection:
+            code = connection.execute("SELECT referral_code FROM referral_codes").fetchone()[0]
+            self.assertLessEqual(len(f"ref_{code}"), 128)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM attribution_events WHERE event_type='share_opened'"
+                ).fetchone()[0],
+                1,
+            )
+
+    def test_referral_rewards_two_edits_after_invitee_first_delivered_preview(self) -> None:
+        self.enable_single_screen()
+        self.app.settings = replace(
+            self.settings,
+            max_public_access_enabled=True,
+        )
+        self.generate_first()
+        inviter_dialog = self.store.get("u1")
+        inviter_active_message = self.app.ui.current("u1").message_id
+        code = self.app.referrals.get_or_create_code(inviter_dialog.user_id)
+        balance_before = self.demo.commerce.balance(inviter_dialog.user_id).available
+        entitlements_before = self.demo.commerce.entitlement_balance(
+            inviter_dialog.user_id
+        ).available
+
+        self.app.handle(
+            MaxIncomingEvent(
+                "bot_started",
+                "start:c2:u2:1",
+                "u2",
+                "c2",
+                1,
+                start_payload=f"ref_{code}",
+            )
+        )
+        self.app.handle(
+            MaxIncomingEvent(
+                "message_created",
+                "message:u2-photo",
+                "u2",
+                "c2",
+                2,
+                message_id="u2-photo",
+                text="Улучшить фон",
+                image_url="https://iu.oneme.ru/u2-source",
+            )
+        )
+
+        self.assertEqual(
+            self.demo.commerce.balance(inviter_dialog.user_id).available,
+            balance_before + 2,
+        )
+        self.assertEqual(
+            self.demo.commerce.entitlement_balance(inviter_dialog.user_id).available,
+            entitlements_before,
+        )
+        self.assertEqual(self.app.ui.current("u1").message_id, inviter_active_message)
+        self.assertTrue(
+            any(
+                message[0] == "u1" and "начислено 2 бонусные обработки" in message[1]
+                for message in self.transport.messages
+            )
+        )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM bonus_credit_transactions").fetchone()[0],
+                1,
+            )
+
+    def test_single_screen_gallery_number_opens_correct_work_in_place(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        active_message = self.app.ui.current("u1").message_id
+
+        self.callback("studio:works")
+
+        sheet_edit = self.transport.image_edits[-1]
+        number_button = next(button for button in sheet_edit[3] if button.text == "1")
+        _revision, action = parse_versioned_action(number_button.action)
+        expected_item = action.rsplit(":", 1)[1]
+        self.callback(action)
+
+        dialog = self.store.get("u1")
+        self.assertEqual(dialog.current_gallery_item_id, expected_item)
+        self.assertEqual(dialog.pending_action, NAV_WORK)
+        self.assertEqual(self.app.ui.current("u1").message_id, active_message)
+        self.assertEqual(len(self.transport.messages), 1)
 
     def test_start_direct_upload_details_and_implicit_consent(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
@@ -597,6 +785,7 @@ class MaxApplicationTests(TestCase):
             [button.text for button in self.transport.images[-1][3]],
             [
                 "Получить оригинал",
+                "📤 Поделиться результатом",
                 "Исправить",
                 "Другой вариант",
                 "История версий",

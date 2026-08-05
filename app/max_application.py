@@ -9,9 +9,12 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Protocol, Sequence
+from urllib.parse import quote
 from uuid import uuid4
 
+from app.attribution import AttributionService, parse_start_payload
 from app.config import Settings
+from app.commerce import CommerceService
 from app.database import Database
 from app.demo_service import DemoService
 from app.direct_prompt import build_direct_edit_plan
@@ -59,8 +62,11 @@ from app.max_adapter import (
     version_history_actions,
 )
 from app.max_conversation import MaxConversationStore, MaxDialog
+from app.max_ui_shell import MaxUiShell, parse_versioned_action
 from app.max_transport import MaxIncomingEvent, MaxTransportError
+from app.referrals import ReferralService
 from app.telemetry import TelemetryRecorder
+from app.work_gallery import GalleryPage, WorkGallery
 from app.payments import (
     PaymentError,
     PaymentService,
@@ -116,6 +122,7 @@ NAV_LEGAL_DETAIL = "navigation:legal-detail"
 NAV_IDEAS = "navigation:ideas"
 NAV_IDEA_CATEGORY = "navigation:idea-category"
 NAV_PAYMENT_LINK = "checkout:link"
+NAV_SHARE = "navigation:share"
 
 
 def _version_word(count: int) -> str:
@@ -131,14 +138,19 @@ class LiveMaxTransport(Protocol):
         self, user_id: str, text: str, buttons: Sequence[Button] = (), **kwargs
     ) -> str: ...
     def edit_message(
-        self, message_id: str, text: str, buttons: Sequence[Button] = ()
+        self, message_id: str, text: str, buttons: Sequence[Button] = (), **kwargs
     ) -> None: ...
     def answer_callback(self, callback_id: str, notification: str) -> None: ...
     def download_image(self, url: str, destination: Path, max_bytes: int) -> Path: ...
     def send_image(
         self, platform_user_id: str, image: Path, caption: str,
-        buttons: Sequence[Button],
+        buttons: Sequence[Button], **kwargs,
     ) -> Optional[str]: ...
+    def edit_image(
+        self, message_id: str, image: Path, caption: str,
+        buttons: Sequence[Button], **kwargs,
+    ) -> None: ...
+    def delete_message(self, message_id: str) -> None: ...
     def send_file(
         self, platform_user_id: str, file_path: Path, caption: str,
         buttons: Sequence[Button],
@@ -166,6 +178,11 @@ class MaxApplication:
         self.gallery: GalleryService = demo_service.gallery
         self.telemetry = TelemetryRecorder(database)
         self.payments = payment_service or build_payment_service(settings, database)
+        self.ui = MaxUiShell(database, transport, self.store)
+        self.work_gallery = WorkGallery(database, settings.temp_dir)
+        self.attribution = AttributionService(database)
+        commerce = getattr(demo_service, "commerce", None) or CommerceService(database)
+        self.referrals = ReferralService(database, commerce)
         self._checkout_lock = threading.RLock()
 
     def _track(self, event_type: str, **values: object) -> None:
@@ -189,7 +206,11 @@ class MaxApplication:
         for row in rows:
             text = "Обработка прервалась. Попытка не списана — попробуйте ещё раз."
             try:
-                if row["status_message_id"]:
+                if self.settings.max_single_screen_ui_enabled:
+                    self._send_message(
+                        row["platform_user_id"], text, screen="processing_interrupted"
+                    )
+                elif row["status_message_id"]:
                     try:
                         self.transport.edit_message(row["status_message_id"], text)
                     except MaxTransportError:
@@ -419,8 +440,21 @@ class MaxApplication:
         """Finish a processing status in place; send one fallback if editing fails."""
 
         dialog = self.store.get(user_id)
+        if self.settings.max_single_screen_ui_enabled and not buttons:
+            buttons = (
+                Button(
+                    "← Назад",
+                    "nav:back:work"
+                    if dialog and dialog.current_version_id
+                    else "nav:back:main",
+                ),
+            )
         status_id = dialog.status_message_id if dialog else None
         if status_id:
+            if self.settings.max_single_screen_ui_enabled:
+                self._send_message(user_id, text, buttons, screen="error")
+                self.store.update(user_id, status_message_id=None)
+                return
             try:
                 self._edit_message(user_id, status_id, text, buttons)
             except MaxTransportError:
@@ -445,11 +479,14 @@ class MaxApplication:
             return
         if event.event_type == "message_callback":
             if event.callback_id:
+                _revision, current_action = parse_versioned_action(
+                    event.callback_payload or ""
+                )
                 notifications = {
                     "prompt:edit": "Напишите изменение",
                     "result:correct": "Напишите изменение",
                 }
-                notification = notifications.get(event.callback_payload, "Готово")
+                notification = notifications.get(current_action, "Готово")
                 self.transport.answer_callback(event.callback_id, notification)
             self._callback(event, dialog)
             return
@@ -488,6 +525,30 @@ class MaxApplication:
             self._show_main(event.user_id, dialog, event.event_key)
 
     def _start(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        relationship_id = None
+        referral_code = None
+        parsed = parse_start_payload(event.start_payload)
+        if parsed.referral_code:
+            relationship_id = self.referrals.register_start(
+                event.user_id, parsed.referral_code
+            )
+            referral_code = parsed.referral_code if relationship_id else None
+        inviter_id = self.referrals.inviter_for_relationship(relationship_id)
+        effective_payload = event.start_payload
+        if parsed.referral_code and not relationship_id:
+            effective_payload = None
+        self.attribution.record_start(
+            event.user_id,
+            f"ref_{referral_code}" if referral_code else effective_payload,
+            event_key=f"attribution:{event.event_key}",
+            first_referrer_user_id=inviter_id,
+        )
+        if relationship_id:
+            self.attribution.record_event(
+                event.user_id,
+                "referral_started",
+                idempotency_key=f"referral-start:{relationship_id}",
+            )
         self._track("start", session_id=dialog.session_id)
         self._show_main(event.user_id, dialog, event.event_key)
 
@@ -497,6 +558,21 @@ class MaxApplication:
     def _send_message(
         self, user_id: str, text: str, buttons: Sequence[Button] = (), **kwargs
     ) -> str:
+        if self.settings.max_single_screen_ui_enabled:
+            dialog = self.store.get(user_id)
+            result = self.ui.render(
+                user_id,
+                text=text,
+                buttons=buttons,
+                screen=str(kwargs.pop("screen", self._screen_name(dialog))),
+                context=kwargs.pop("context", self._screen_context(dialog)),
+                chat_id=dialog.chat_id if dialog else None,
+                expected_revision=kwargs.pop("expected_revision", None),
+                notify=bool(kwargs.pop("notify", False)),
+            )
+            if not result.applied or not result.message_id:
+                raise MaxTransportError("MAX UI screen was superseded")
+            return result.message_id
         message_id = self.transport.send_message(user_id, text, buttons, **kwargs)
         if buttons:
             self.store.register_keyboard(user_id, message_id, text)
@@ -508,11 +584,45 @@ class MaxApplication:
         image: Path,
         caption: str,
         buttons: Sequence[Button],
+        *,
+        screen: Optional[str] = None,
+        context: Optional[dict[str, object]] = None,
+        expected_revision: Optional[int] = None,
     ) -> Optional[str]:
+        if self.settings.max_single_screen_ui_enabled:
+            dialog = self.store.get(user_id)
+            result = self.ui.render(
+                user_id,
+                text=caption,
+                buttons=buttons,
+                screen=screen or self._screen_name(dialog),
+                context=context or self._screen_context(dialog),
+                chat_id=dialog.chat_id if dialog else None,
+                image=image,
+                expected_revision=expected_revision,
+                notify=False,
+            )
+            return result.message_id if result.applied else None
         message_id = self.transport.send_image(user_id, image, caption, buttons)
         if message_id and buttons:
             self.store.register_keyboard(user_id, message_id, caption)
         return message_id
+
+    @staticmethod
+    def _screen_name(dialog: Optional[MaxDialog]) -> str:
+        if dialog is None:
+            return "unknown"
+        return dialog.pending_action or dialog.state
+
+    @staticmethod
+    def _screen_context(dialog: Optional[MaxDialog]) -> dict[str, object]:
+        if dialog is None:
+            return {}
+        return {
+            "gallery_item_id": dialog.current_gallery_item_id,
+            "version_id": dialog.current_version_id,
+            "cursor": dialog.gallery_cursor,
+        }
 
     def _send_file(
         self,
@@ -534,6 +644,13 @@ class MaxApplication:
     ) -> str:
         """Send the exact selected version without silently switching lineage."""
 
+        preview = self._selected_preview_path(dialog)
+        message_id = self._send_image(platform_user_id, preview, caption, ())
+        if not message_id:
+            raise MaxTransportError("MAX selected preview delivery failed")
+        return message_id
+
+    def _selected_preview_path(self, dialog: MaxDialog) -> Path:
         if not dialog.user_id or not dialog.current_version_id:
             raise InvalidInputError("No gallery version selected")
         with self.database.read() as connection:
@@ -548,10 +665,7 @@ class MaxApplication:
         preview = Path(row["preview_path"]) if row and row["preview_path"] else None
         if preview is None or not preview.is_file():
             raise AssetUnavailableError("Selected preview is not available")
-        message_id = self._send_image(platform_user_id, preview, caption, ())
-        if not message_id:
-            raise MaxTransportError("MAX selected preview delivery failed")
-        return message_id
+        return preview
 
     def _edit_message(
         self,
@@ -568,6 +682,14 @@ class MaxApplication:
 
     def _deactivate_active_keyboards(self, event: MaxIncomingEvent) -> bool:
         """Deactivate the source keyboard and identify stale callbacks."""
+
+        if self.settings.max_single_screen_ui_enabled:
+            if event.event_type != "message_callback":
+                return False
+            revision, _action = parse_versioned_action(event.callback_payload or "")
+            return not self.ui.callback_is_current(
+                event.user_id, event.message_id, revision
+            )
 
         active = self.store.active_keyboards(event.user_id)
         if event.event_type == "message_callback":
@@ -663,7 +785,7 @@ class MaxApplication:
         self._send_view(event.user_id, view)
 
     def _callback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
-        action = event.callback_payload or ""
+        _revision, action = parse_versioned_action(event.callback_payload or "")
         if action in {"start:details", "legal:details"}:
             self._show_navigation_view(
                 event, dialog, legal_details_view(), NAV_SETTINGS
@@ -798,6 +920,8 @@ class MaxApplication:
                 gallery_item_id=dialog.current_gallery_item_id,
             )
             self._unlock_or_deliver(event, dialog)
+        elif action == "result:share":
+            self._show_share(event, dialog)
         elif action == "package:buy":
             self._buy_continuation_pack(event, dialog)
         elif action == "package:offer":
@@ -815,14 +939,23 @@ class MaxApplication:
                 event.user_id, "waiting_for_correction", event_key=event.event_key,
                 pending_prompt=None, pending_action="correction",
             )
-            self._send_selected_preview(
-                event.user_id, dialog, "Текущая версия"
-            )
-            self._send_message(
-                event.user_id,
-                CORRECTION_REQUEST_TEXT,
-                (Button("← Назад", "nav:back:work"),),
-            )
+            if self.settings.max_single_screen_ui_enabled:
+                self._send_image(
+                    event.user_id,
+                    self._selected_preview_path(dialog),
+                    CORRECTION_REQUEST_TEXT,
+                    (Button("← Назад", "nav:back:work"),),
+                    screen="waiting_for_correction",
+                )
+            else:
+                self._send_selected_preview(
+                    event.user_id, dialog, "Текущая версия"
+                )
+                self._send_message(
+                    event.user_id,
+                    CORRECTION_REQUEST_TEXT,
+                    (Button("← Назад", "nav:back:work"),),
+                )
         elif action == "result:repeat":
             if not dialog.session_id or self._remaining(dialog.session_id) <= 0:
                 self._show_continuation_pack_offer(event, dialog)
@@ -865,6 +998,12 @@ class MaxApplication:
             )
         elif action == "studio:works":
             self._show_works(event, dialog)
+        elif action.startswith("works:page:"):
+            try:
+                page = int(action.rsplit(":", 1)[1])
+            except ValueError:
+                return
+            self._show_works(event, dialog, page)
         elif action.startswith("works:open:"):
             self._open_work(event, dialog, action.rsplit(":", 1)[1])
         elif action == "work:open":
@@ -873,6 +1012,16 @@ class MaxApplication:
             self._open_work(event, dialog, dialog.current_gallery_item_id)
         elif action == "work:history":
             self._show_version_history(event, dialog)
+        elif action.startswith("versions:page:"):
+            try:
+                page = int(action.rsplit(":", 1)[1])
+            except ValueError:
+                return
+            self._show_version_history(
+                event, dialog, page
+            )
+        elif action.startswith("versions:open:"):
+            self._open_version(event, dialog, action.rsplit(":", 1)[1])
         elif action == "work:more":
             self._mark_navigation(event, dialog, NAV_MORE)
             self._send_view(event.user_id, gallery_more_actions())
@@ -985,6 +1134,14 @@ class MaxApplication:
             "photo_uploaded",
             session_id=session.session_id,
             gallery_item_id=item_id,
+        )
+        self.attribution.link_user(event.user_id, session.user_id)
+        self.referrals.link_user(event.user_id, session.user_id)
+        self.attribution.record_event(
+            event.user_id,
+            "photo_uploaded",
+            idempotency_key=f"photo:{event.event_key}",
+            user_id=session.user_id,
         )
         # An image sent from the exhausted result screen starts a fresh work.
         # It must not inherit and auto-run the scenario that produced the last
@@ -1192,7 +1349,11 @@ class MaxApplication:
             self._show_continuation_pack_offer(event, dialog)
             return
         remaining_after = available - 1
-        status_id = self._send_message(event.user_id, PROCESSING_TEXT)
+        status_id = self._send_message(
+            event.user_id, PROCESSING_TEXT, screen="processing"
+        )
+        processing_ui = self.ui.current(event.user_id)
+        processing_revision = processing_ui.revision if processing_ui else None
         self.store.transition(
             event.user_id, "processing", event_key=event.event_key,
             status_message_id=status_id,
@@ -1202,12 +1363,48 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
+        preview_delivered = False
 
         def deliver(preview: Path, _attempt_id: str) -> bool:
+            nonlocal preview_delivered
             caption = result_actions(remaining_after).text
-            return bool(self._send_image(
-                event.user_id, preview, caption, result_actions(remaining_after).buttons
-            ))
+            if self.settings.max_single_screen_ui_enabled:
+                rendered = self.ui.render(
+                    event.user_id,
+                    text=caption,
+                    buttons=result_actions(remaining_after).buttons,
+                    screen="result_ready",
+                    context={
+                        "gallery_item_id": dialog.current_gallery_item_id,
+                        "version_id": dialog.current_version_id,
+                    },
+                    chat_id=event.chat_id,
+                    image=preview,
+                    expected_revision=processing_revision,
+                    notify=False,
+                )
+                if not rendered.applied:
+                    try:
+                        self.transport.send_message(
+                            event.user_id,
+                            "Обработка завершена. Результат доступен в «Моих работах».",
+                            (),
+                            notify=False,
+                        )
+                    except MaxTransportError:
+                        pass
+                else:
+                    preview_delivered = True
+                return True
+            preview_delivered = bool(
+                self._send_image(
+                    event.user_id,
+                    preview,
+                    caption,
+                    result_actions(remaining_after).buttons,
+                )
+            )
+            return preview_delivered
 
         try:
             result = self.adapter.generate(
@@ -1246,10 +1443,55 @@ class MaxApplication:
             current_version_id=version["id"], status_message_id=None,
             pending_prompt=None, pending_action=None,
         )
-        try:
-            self.transport.edit_message(status_id, "✨ Готово")
-        except MaxTransportError:
-            LOGGER.info("MAX status message could not be edited after successful delivery")
+        if self.settings.max_single_screen_ui_enabled:
+            active_result = self.ui.current(event.user_id)
+            if active_result and active_result.screen == "result_ready":
+                self.ui.update_context(
+                    event.user_id,
+                    {
+                        "gallery_item_id": version["gallery_item_id"],
+                        "version_id": version["id"],
+                    },
+                    expected_revision=active_result.revision,
+                )
+        if not self.settings.max_single_screen_ui_enabled:
+            try:
+                self.transport.edit_message(status_id, "✨ Готово")
+            except MaxTransportError:
+                LOGGER.info("MAX status message could not be edited after successful delivery")
+        with self.database.read() as connection:
+            successful_count = int(
+                connection.execute(
+                    """SELECT COUNT(*) FROM generation_attempts
+                       WHERE user_id=? AND status='succeeded'""",
+                    (dialog.user_id,),
+                ).fetchone()[0]
+            )
+        if successful_count == 1 and dialog.user_id:
+            self.attribution.record_event(
+                event.user_id,
+                "first_generation_success",
+                idempotency_key=f"first-success:{result.attempt_id}",
+                user_id=dialog.user_id,
+            )
+        if successful_count == 1 and dialog.user_id and preview_delivered:
+            reward = self.referrals.reward_first_success(dialog.user_id)
+            if reward:
+                self.attribution.record_event(
+                    event.user_id,
+                    "referral_rewarded",
+                    idempotency_key=f"referral-reward-event:{reward.relationship_id}",
+                    user_id=dialog.user_id,
+                )
+                try:
+                    self.transport.send_message(
+                        reward.inviter_platform_user_id,
+                        "🎁 Друг воспользовался вашей ссылкой.\n"
+                        "Вам начислено 2 бонусные обработки.",
+                        (),
+                    )
+                except MaxTransportError:
+                    LOGGER.info("Referral reward notification was not delivered")
         self._track(
             "result_delivered",
             session_id=dialog.session_id,
@@ -1269,6 +1511,46 @@ class MaxApplication:
             gallery_item_id=dialog.current_gallery_item_id,
         )
         self._show_selected_work(event, self.store.get(event.user_id) or dialog)
+
+    def _show_share(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No result is selected for sharing")
+        code = self.referrals.get_or_create_code(dialog.user_id)
+        separator = "&" if "?" in self.settings.max_bot_url else "?"
+        referral_url = f"{self.settings.max_bot_url}{separator}start=ref_{code}"
+        share_text = (
+            "Я обработал фотографию в Ravuna прямо в MAX.\n\n"
+            "Можно менять фон и одежду, убирать лишних людей и предметы "
+            "и создавать новые образы.\n\n"
+            f"Попробуйте:\n{referral_url}"
+        )
+        share_url = f"https://max.ru/:share?text={quote(share_text, safe='')}"
+        self.attribution.record_event(
+            event.user_id,
+            "share_opened",
+            idempotency_key=f"share:{event.event_key}",
+            user_id=dialog.user_id,
+        )
+        self.store.update(
+            event.user_id,
+            pending_prompt=None,
+            pending_action=NAV_SHARE,
+        )
+        self._send_image(
+            event.user_id,
+            self._selected_preview_path(dialog),
+            "Ссылка готова.\n\nСкопируйте ссылку и отправьте другу.",
+            (
+                Button("📤 Отправить в MAX", share_url),
+                Button("Открыть ссылку", referral_url),
+                Button("← Назад", "nav:back:work"),
+            ),
+            screen="share",
+            context={
+                "gallery_item_id": dialog.current_gallery_item_id,
+                "version_id": dialog.current_version_id,
+            },
+        )
 
     def _unlock_or_deliver(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_version_id:
@@ -1352,7 +1634,7 @@ class MaxApplication:
                     current_gallery_item_id=latest["gallery_item_id"],
                     current_version_id=latest["id"],
                 )
-        if dialog.current_version_id:
+        if dialog.current_version_id and not self.settings.max_single_screen_ui_enabled:
             self._send_selected_preview(
                 event.user_id, dialog, "Выбранная версия"
             )
@@ -1364,13 +1646,29 @@ class MaxApplication:
             pending_prompt=None,
             pending_action="checkout",
         )
-        self._send_message(
+        offer_buttons = (
+            Button("Оплатить 49 ₽", "package:buy"),
+            Button("← Назад", "nav:back:work"),
+        )
+        if self.settings.max_single_screen_ui_enabled and dialog.current_version_id:
+            self._send_image(
+                event.user_id,
+                self._selected_preview_path(dialog),
+                PAYMENT_OFFER_TEXT,
+                offer_buttons,
+                screen="payment_offer",
+            )
+        else:
+            self._send_message(
+                event.user_id,
+                PAYMENT_OFFER_TEXT,
+                offer_buttons,
+            )
+        self.attribution.record_event(
             event.user_id,
-            PAYMENT_OFFER_TEXT,
-            (
-                Button("Оплатить 49 ₽", "package:buy"),
-                Button("← Назад", "nav:back:work"),
-            ),
+            "payment_offer_opened",
+            idempotency_key=f"payment-offer:{event.event_key}",
+            user_id=dialog.user_id,
         )
 
     def _buy_continuation_pack(
@@ -1434,6 +1732,12 @@ class MaxApplication:
                     (Button("← Назад", "nav:back:work"),),
                 )
                 return
+            self.attribution.record_event(
+                event.user_id,
+                "payment_started",
+                idempotency_key=f"payment-start:{order.id}",
+                user_id=current.user_id,
+            )
             if self._payment_card_was_sent(order.id):
                 self.store.update(event.user_id, pending_action=NAV_PAYMENT_LINK)
                 return
@@ -1544,7 +1848,8 @@ class MaxApplication:
             ).fetchone()
         if row is None:
             raise PaymentError("Payment order was not found")
-        self._deactivate_payment_card(order_id)
+        if not self.settings.max_single_screen_ui_enabled:
+            self._deactivate_payment_card(order_id)
         self.store.get_or_create(row["platform_user_id"], None)
         self.store.update(
             row["platform_user_id"],
@@ -1555,18 +1860,36 @@ class MaxApplication:
         balance = self.demo.commerce.balance(row["user_id"])
         entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
         actions = paid_actions()
-        self._send_message(
+        if self.settings.max_single_screen_ui_enabled:
+            self._send_message(
+                row["platform_user_id"],
+                "✅ Оплата прошла успешно\n\n"
+                "Ваш оригинал готов к скачиванию.\n\n"
+                "Осталось:\n"
+                f"• обработок — {balance.available};\n"
+                f"• оригиналов — {entitlements.available}.",
+                actions,
+                screen="payment_success",
+            )
+        else:
+            self._send_message(
+                row["platform_user_id"],
+                "✅ Оплата прошла успешно\n\n"
+                "Ваш оригинал готов к скачиванию.",
+                (actions[0], actions[-1]),
+            )
+            self._send_message(
+                row["platform_user_id"],
+                "Осталось:\n"
+                f"• обработок — {balance.available};\n"
+                f"• оригиналов — {entitlements.available}.",
+                actions[1:],
+            )
+        self.attribution.record_event(
             row["platform_user_id"],
-            "✅ Оплата прошла успешно\n\n"
-            "Ваш оригинал готов к скачиванию.",
-            (actions[0], actions[-1]),
-        )
-        self._send_message(
-            row["platform_user_id"],
-            "Осталось:\n"
-            f"• обработок — {balance.available};\n"
-            f"• оригиналов — {entitlements.available}.",
-            actions[1:],
+            "payment_success",
+            idempotency_key=f"payment-success:{order_id}",
+            user_id=row["user_id"],
         )
         return True
 
@@ -1629,7 +1952,9 @@ class MaxApplication:
                 LOGGER.warning("Paid original delivery and fallback message both failed")
         return delivered
 
-    def _show_works(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+    def _show_works(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, page: int = 1
+    ) -> None:
         self._track(
             "gallery_opened",
             session_id=dialog.session_id,
@@ -1642,8 +1967,12 @@ class MaxApplication:
             force=True,
             pending_prompt=None,
             pending_action=NAV_WORKS,
+            gallery_cursor=max(page, 1),
             status_message_id=None,
         )
+        if self.settings.max_single_screen_ui_enabled:
+            self._show_works_page(event, dialog, page)
+            return
         if not dialog.user_id:
             self._send_message(
                 event.user_id,
@@ -1704,6 +2033,71 @@ class MaxApplication:
                 tuple(fallback_buttons)
                 + (Button("← Назад", "nav:back:main"),),
             )
+
+    def _show_works_page(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, page: int
+    ) -> None:
+        if not dialog.user_id:
+            self._send_message(
+                event.user_id,
+                "Здесь пока пусто.\n\nСоздайте первую фотографию.",
+                (Button("← Назад", "nav:back:main"),),
+                screen="works_empty",
+            )
+            return
+        gallery_page = self.work_gallery.works(dialog.user_id, page)
+        self.store.update(event.user_id, gallery_cursor=gallery_page.page)
+        if not gallery_page.entries:
+            self._send_message(
+                event.user_id,
+                "Здесь пока пусто.\n\nСоздайте первую фотографию.",
+                (Button("← Назад", "nav:back:main"),),
+                screen="works_empty",
+            )
+            return
+        current = self.ui.current(event.user_id)
+        sheet = self.work_gallery.contact_sheet(
+            f"works:{dialog.user_id}",
+            gallery_page,
+            (current.revision if current else 0) + 1,
+        )
+        buttons = self._gallery_page_buttons(gallery_page, "works")
+        self._send_image(
+            event.user_id,
+            sheet,
+            f"📂 Мои работы\n\nСтраница {gallery_page.page} из {gallery_page.pages}",
+            buttons,
+            screen="works_gallery",
+            context={"page": gallery_page.page},
+        )
+
+    @staticmethod
+    def _gallery_page_buttons(
+        page: GalleryPage, kind: str
+    ) -> tuple[Button, ...]:
+        item_prefix = "works:open" if kind == "works" else "versions:open"
+        buttons = tuple(
+            Button(str(index), f"{item_prefix}:{entry.id}", (index - 1) // 3)
+            for index, entry in enumerate(page.entries, 1)
+        )
+        navigation_row = 2
+        previous_page = max(1, page.page - 1)
+        next_page = min(page.pages, page.page + 1)
+        navigation = (
+            Button("◀", f"{kind}:page:{previous_page}", navigation_row),
+            Button(
+                f"{page.page}/{page.pages}",
+                f"{kind}:page:{page.page}",
+                navigation_row,
+            ),
+            Button("▶", f"{kind}:page:{next_page}", navigation_row),
+        )
+        back = Button(
+            "← Назад",
+            "nav:back:main" if kind == "works" else "nav:back:work",
+            3,
+        )
+        return buttons + navigation + (back,)
 
     def _open_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, item_id: str
@@ -1766,6 +2160,7 @@ class MaxApplication:
         current: Optional[GalleryVersion],
         *,
         history: bool = False,
+        version_detail: bool = False,
     ) -> None:
         if current is None or current.preview_path is None:
             self._send_message(
@@ -1780,25 +2175,47 @@ class MaxApplication:
             )
             return
         heading = "История версий" if history else title
-        caption = f"{heading}{' ⭐' if favorite or current.favorite else ''}\nВерсия {current.version_number} из {len(versions)}"
+        with self.database.read() as connection:
+            metadata = connection.execute(
+                "SELECT created_at,status FROM gallery_versions WHERE id=?",
+                (current.id,),
+            ).fetchone()
+        try:
+            created = datetime.fromisoformat(metadata["created_at"]).strftime("%d.%m.%Y")
+        except (TypeError, ValueError):
+            created = ""
+        status = "Готово" if metadata and metadata["status"] == "succeeded" else "В работе"
+        caption = (
+            f"{heading}{' ⭐' if favorite or current.favorite else ''}\n"
+            f"Версия {current.version_number} из {len(versions)}"
+            f"{f' · {created}' if created else ''} · {status}"
+        )
         dialog = self.store.get(platform_user_id)
         remaining = (
             self.demo.commerce.balance(dialog.user_id).available
             if dialog and dialog.user_id
             else 0
         )
-        buttons = (
-            version_history_actions()
-            if history
-            else gallery_item_actions(remaining)
-        )
+        if version_detail:
+            buttons = (
+                Button("← Предыдущая", "work:previous"),
+                Button("Следующая →", "work:next"),
+                Button("Сделать основной", "work:main"),
+                Button("← Назад", "work:history"),
+            )
+        else:
+            buttons = (
+                version_history_actions()
+                if history
+                else gallery_item_actions(remaining)
+            )
         if not self._send_image(
             platform_user_id, current.preview_path, caption, buttons
         ):
             raise MaxTransportError("MAX gallery preview delivery failed")
 
     def _show_version_history(
-        self, event: MaxIncomingEvent, dialog: MaxDialog
+        self, event: MaxIncomingEvent, dialog: MaxDialog, page: int = 1
     ) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id:
             raise InvalidInputError("No gallery work selected")
@@ -1815,10 +2232,69 @@ class MaxApplication:
             force=True,
             pending_prompt=None,
             pending_action=NAV_HISTORY,
+            gallery_cursor=max(page, 1),
             status_message_id=None,
         )
+        if self.settings.max_single_screen_ui_enabled:
+            gallery_page = self.work_gallery.versions(
+                dialog.user_id, dialog.current_gallery_item_id, page
+            )
+            self.store.update(event.user_id, gallery_cursor=gallery_page.page)
+            if not gallery_page.entries:
+                self._send_message(
+                    event.user_id,
+                    "У этой работы пока нет готовых версий.",
+                    (Button("← Назад", "nav:back:work"),),
+                    screen="version_history_empty",
+                )
+                return
+            active = self.ui.current(event.user_id)
+            sheet = self.work_gallery.contact_sheet(
+                f"versions:{dialog.user_id}:{dialog.current_gallery_item_id}",
+                gallery_page,
+                (active.revision if active else 0) + 1,
+            )
+            self._send_image(
+                event.user_id,
+                sheet,
+                f"История версий\n\nСтраница {gallery_page.page} из {gallery_page.pages}",
+                self._gallery_page_buttons(gallery_page, "versions"),
+                screen="version_history",
+                context={
+                    "gallery_item_id": dialog.current_gallery_item_id,
+                    "page": gallery_page.page,
+                },
+            )
+            return
         self._send_work(
             event.user_id, item.title, item.favorite, versions, current, history=True
+        )
+
+    def _open_version(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, version_id: str
+    ) -> None:
+        if not dialog.user_id or not dialog.current_gallery_item_id:
+            raise InvalidInputError("No gallery work selected")
+        item, _best = self.gallery.open_item(
+            dialog.user_id, dialog.current_gallery_item_id
+        )
+        versions = self.gallery.list_versions(dialog.user_id, item.id)
+        selected = next((version for version in versions if version.id == version_id), None)
+        if selected is None:
+            raise InvalidInputError("Gallery version is not available")
+        self.store.update(
+            event.user_id,
+            current_version_id=selected.id,
+            pending_action=NAV_HISTORY,
+        )
+        self._send_work(
+            event.user_id,
+            item.title,
+            item.favorite,
+            versions,
+            selected,
+            history=True,
+            version_detail=True,
         )
 
     def _navigate_version(

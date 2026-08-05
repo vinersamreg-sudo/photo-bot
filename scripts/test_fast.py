@@ -19,6 +19,10 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "tests.test_max_conversation",
         "tests.test_max_runtime",
         "tests.test_max_transport",
+        "tests.test_max_application",
+        "tests.test_max_ui_shell",
+        "tests.test_work_gallery",
+        "tests.test_referrals",
     ),
     "payments": (
         "tests.test_commerce",

@@ -19,6 +19,7 @@ from typing import Iterable, List
 from uuid import uuid4
 
 from app.config import Settings, load_settings
+from app.attribution import AttributionService
 from app.commerce import CommerceService, PRODUCT_CODE
 from app.openai_client import (
     OpenAICheckError,
@@ -802,6 +803,16 @@ def run_status_report(
     return 0
 
 
+def run_growth_status(
+    settings: Settings, days: int, output_format: str = "json"
+) -> int:
+    if days < 1 or days > 366:
+        raise ValueError("Growth report period must be between 1 and 366 days")
+    report = AttributionService(Database(settings.database_path)).report(days)
+    _print_operator(report, output_format)
+    return 0
+
+
 def _refund_values(args: argparse.Namespace) -> tuple[int, str]:
     amount = Decimal(args.amount_rub).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if amount <= 0:
@@ -1181,6 +1192,9 @@ def build_parser() -> argparse.ArgumentParser:
     health_report_parser = subparsers.add_parser("health-report")
     health_report_parser.add_argument("--online", action="store_true")
     add_format(health_report_parser)
+    growth_status_parser = subparsers.add_parser("growth-status")
+    growth_status_parser.add_argument("--days", type=int, default=30)
+    add_format(growth_status_parser)
     for command in ("credit-status", "credit-history", "entitlement-status", "entitlement-history"):
         report_parser = subparsers.add_parser(command)
         report_parser.add_argument("--platform-user-id", required=True)
@@ -1296,6 +1310,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_backup_mark_offsite(settings, args.backup, args.provider)
     if args.command == "launch-status":
         return print_launch_status(settings, strict=args.strict)
+    if args.command == "growth-status":
+        return run_growth_status(settings, args.days, args.format)
     if args.command in {
         "pilot-status", "pilot-report", "payment-status", "robokassa-health",
         "storage-status", "backup-status", "cleanup-status", "cost-status",

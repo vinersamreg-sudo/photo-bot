@@ -14,6 +14,23 @@ The primary MAX flow is intentionally compact:
    presses “Оплатить 49 ₽”; the link screen does not repeat the package copy.
 7. After ResultURL confirms payment, download is the primary action.
 
+## Single-screen shell
+
+- With `MAX_SINGLE_SCREEN_UI_ENABLED=true`, each MAX dialog has one bot-owned
+  active UI message. Menu callbacks replace its text, media and keyboard with
+  `notify=false`; they do not append a new menu message.
+- The active message id, logical screen, compact JSON context and monotonically
+  increasing UI revision are stored in `active_ui_sessions`.
+- Callback payloads carry the revision. A callback from an older message or
+  revision receives a short state-changed notification and has no product side
+  effects.
+- If MAX cannot edit the active message, Ravuna sends exactly one replacement,
+  adopts its id and then attempts to delete only the previous bot-owned message.
+  User photos, prompts and messages are never deleted.
+- A completed asynchronous edit updates the UI only while its processing
+  revision is current. Otherwise the result remains available in «Моих работах»
+  and a short service notification may be sent.
+
 ## Start state
 
 - Ask for a photo and the desired change.
@@ -30,6 +47,19 @@ The primary MAX flow is intentionally compact:
 - “Исправить” must explain in one response what to type, with short examples.
 - When no edits remain, do not invite correction; offer the existing package.
 - Every callback must produce visible feedback or a clear unavailable message.
+- The processing screen becomes the watermarked result in the same active
+  message. The result and selected-work screens include
+  “📤 Поделиться результатом”.
+
+## Works and versions
+
+- «Мои работы» is one contact sheet with up to six numbered watermarked previews
+  per page, newest first. Number buttons open the matching work in the same
+  message; 20 works produce four pages (6 + 6 + 6 + 2).
+- Version history uses the same six-item pagination. Opening a version preserves
+  the selected preview and Back returns first to history, then to the work.
+- Contact sheets read only the current page, use a neutral placeholder for a
+  missing preview and never read or expose the private original.
 
 ## Payment state
 
@@ -55,6 +85,24 @@ server ResultURL confirms payment.
 - Do not force a return through “Мои работы” to obtain the paid original.
 - Repeated download of an already unlocked version remains understandable and
   does not create a second charge.
+
+## Referrals and attribution
+
+- Each user receives one random opaque 10–20 character referral code. Share
+  links use the configured `MAX_BOT_URL` and a `ref_<code>` start payload; the
+  MAX share deep link contains URL-encoded text only and never exposes original
+  media.
+- The first valid referrer is retained only for a previously unused account.
+  Self-referrals, existing users and duplicate/concurrent rewards are rejected.
+- After the invitee's first successfully delivered preview, the inviter receives
+  exactly two bonus edits. The additive bonus ledger does not alter paid grants
+  and does not create an original entitlement.
+- Allowlisted start sources are MAX channel, site, VK, OK, partner and campaign
+  payloads. First-touch attribution is immutable; analytics stores event/source
+  metadata but no prompts or images.
+- The private operator command `python -m app.main growth-status --days 30
+  --format human` reports starts, first edits, payments, conversion, shares and
+  referral rewards without personal data.
 
 ## Buttons and stale state
 

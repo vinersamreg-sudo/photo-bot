@@ -174,6 +174,7 @@ jobs:
               "IMAGE_DIRECT_PROMPT_ENABLED",
               "IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED",
               "IMAGE_FACE_PRESERVE_GUARD_ENABLED",
+              "MAX_SINGLE_SCREEN_UI_ENABLED",
           )
           values = {}
           for line in Path("/opt/photo-bot/.env").read_text(encoding="utf-8").splitlines():
@@ -230,13 +231,36 @@ jobs:
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" '
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
             if systemctl cat photo-bot.service >/dev/null 2>&1; then
               sudo -n systemctl stop photo-bot.service
             fi
             if [ -f /opt/photo-bot/data/photo-bot.pid ]; then
               /opt/photo-bot/scripts/stop_bot.sh
-            fi'
+            fi
+            if [ -f /opt/photo-bot/data/photo_bot.sqlite3 ]; then
+              install -m 700 -d /opt/photo-bot/data/backups
+              BACKUP_FILE="/opt/photo-bot/data/backups/pre-migration-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
+              /opt/photo-bot/venv/bin/python - "$BACKUP_FILE" <<'PY'
+          import sqlite3
+          import sys
+
+          source = sqlite3.connect("/opt/photo-bot/data/photo_bot.sqlite3")
+          backup = sqlite3.connect(sys.argv[1])
+          try:
+              source.backup(backup)
+              result = backup.execute("PRAGMA quick_check").fetchone()
+              if not result or result[0] != "ok":
+                  raise SystemExit("pre-migration SQLite backup failed quick_check")
+          finally:
+              backup.close()
+              source.close()
+          print("sqlite_backup=created")
+          PY
+              chmod 600 "$BACKUP_FILE"
+            fi
+          REMOTE
           rsync -az --delete \
             --exclude='.git/' \
             --exclude='.env' \
@@ -444,6 +468,7 @@ jobs:
             ensure_env TRASH_RETENTION_DAYS 30
             ensure_env MAX_BOT_TOKEN ''
             ensure_env MAX_PUBLIC_ACCESS_ENABLED false
+            ensure_env MAX_SINGLE_SCREEN_UI_ENABLED true
             ensure_env MAX_OWNER_USER_IDS ''
             ensure_env MAX_PILOT_USER_IDS ''
             ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
@@ -649,6 +674,9 @@ jobs:
               migration_v9 = bool(connection.execute(
                   "SELECT 1 FROM schema_migrations WHERE version=9"
               ).fetchone())
+              migration_v10 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=10"
+              ).fetchone())
               credit_accounts = connection.execute(
                   "SELECT COUNT(*) FROM user_credit_accounts"
               ).fetchone()[0]
@@ -680,6 +708,7 @@ jobs:
           assert migration_v7
           assert migration_v8
           assert migration_v9
+          assert migration_v10
           assert credit_accounts == users
           assert negative_credit_accounts == 0
           assert settings.payment_webhook_listener_enabled is True
@@ -712,6 +741,7 @@ jobs:
           assert settings.openai_conversation_memory_enabled is False
           assert settings.openai_responses_image_enabled is False
           assert settings.openai_conversation_retention_enabled is False
+          assert settings.max_single_screen_ui_enabled is True
           if os.environ.get("ACTIVATE_GEMINI", "").lower() == "true":
               assert settings.image_provider == "gemini"
               assert settings.gemini_image_model == "gemini-3-pro-image"
@@ -754,6 +784,7 @@ jobs:
               "direct_prompt_enabled": settings.image_direct_prompt_enabled,
               "subject_preserve_guard_enabled": settings.image_subject_preserve_guard_enabled,
               "face_preserve_guard_enabled": settings.image_face_preserve_guard_enabled,
+              "single_screen_ui_enabled": settings.max_single_screen_ui_enabled,
               "gemini_api_key_configured": bool(settings.gemini_api_key),
               "quality": settings.image_edit_quality,
               "size": settings.image_edit_size,
@@ -780,6 +811,7 @@ jobs:
               "migration_v7": migration_v7,
               "migration_v8": migration_v8,
               "migration_v9": migration_v9,
+              "migration_v10": migration_v10,
               "credit_accounts": credit_accounts,
               "negative_credit_accounts": negative_credit_accounts,
               "payment_orders_total": payment_orders_total,

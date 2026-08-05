@@ -103,6 +103,7 @@ class Settings:
     paid_retention_days: int = 180
     trash_retention_days: int = 30
     max_bot_token: str = ""
+    max_bot_url: str = "https://max.ru/se13572368_bot"
     max_api_base_url: str = "https://platform-api2.max.ru"
     max_ca_bundle: str = "ops/certs/russian_trusted_root_ca_pem.crt"
     max_transport_mode: str = "disabled"
@@ -112,6 +113,7 @@ class Settings:
     max_poll_max_stale_seconds: int = 90
     max_poll_observe_only: bool = True
     max_public_access_enabled: bool = False
+    max_single_screen_ui_enabled: bool = True
     max_owner_user_ids: tuple[str, ...] = ()
     max_pilot_user_ids: tuple[str, ...] = ()
     pilot_user_limit: int = 0
@@ -627,6 +629,10 @@ def load_settings(
         paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),
         trash_retention_days=_positive_int(values, "TRASH_RETENTION_DAYS", 30),
         max_bot_token=values.get("MAX_BOT_TOKEN", "").strip(),
+        max_bot_url=(
+            values.get("MAX_BOT_URL", "https://max.ru/se13572368_bot").strip()
+            or "https://max.ru/se13572368_bot"
+        ),
         max_api_base_url=values.get(
             "MAX_API_BASE_URL", "https://platform-api2.max.ru"
         ).strip().rstrip("/"),
@@ -641,6 +647,9 @@ def load_settings(
         max_poll_observe_only=_boolean(values, "MAX_POLL_OBSERVE_ONLY", True),
         max_public_access_enabled=_boolean(
             values, "MAX_PUBLIC_ACCESS_ENABLED", False
+        ),
+        max_single_screen_ui_enabled=_boolean(
+            values, "MAX_SINGLE_SCREEN_UI_ENABLED", True
         ),
         max_owner_user_ids=owner_user_ids,
         max_pilot_user_ids=pilot_user_ids,

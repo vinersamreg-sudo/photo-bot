@@ -35,6 +35,7 @@ LEGAL_TEXT = (
 class Button:
     text: str
     action: str
+    row: int | None = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,7 @@ def result_actions(remaining: int) -> View:
             "Готово",
             (
                 Button("Получить оригинал", "result:unlock"),
+                Button("📤 Поделиться результатом", "result:share"),
                 Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
                 Button("История версий", "work:history"),
                 Button("← Назад", "studio:works"),
@@ -196,6 +198,7 @@ def result_actions(remaining: int) -> View:
         "Готово",
         (
             Button("Получить оригинал", "result:unlock"),
+            Button("📤 Поделиться результатом", "result:share"),
             Button("Исправить", "result:correct"),
             Button("Другой вариант", "result:repeat"),
             Button("История версий", "work:history"),
@@ -244,6 +247,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
     if remaining <= 0:
         return (
             Button("⬇ Получить оригинал", "result:unlock"),
+            Button("📤 Поделиться результатом", "result:share"),
             Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
             Button("История версий", "work:history"),
             Button("Ещё", "work:more"),
@@ -251,6 +255,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
         )
     return (
         Button("⬇ Получить оригинал", "result:unlock"),
+        Button("📤 Поделиться результатом", "result:share"),
         Button("✏️ Исправить", "result:correct"),
         Button("🎲 Другой вариант", "result:repeat"),
         Button("История версий", "work:history"),

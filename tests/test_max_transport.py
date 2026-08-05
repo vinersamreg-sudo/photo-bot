@@ -53,8 +53,10 @@ class MaxTransportTests(TestCase):
         started = parse_update({
             "update_type": "bot_started", "timestamp": 12,
             "chat_id": 77, "user": {"user_id": 42},
+            "payload": "src_site",
         })
         self.assertEqual(started.event_key, "start:77:42:12")
+        self.assertEqual(started.start_payload, "src_site")
 
     def test_official_api_headers_updates_messages_and_media(self) -> None:
         api_requests = []
@@ -131,6 +133,52 @@ class MaxTransportTests(TestCase):
         client.delete_message("sent-1")
         self.assertTrue(api_requests)
         self.assertTrue(media_requests)
+
+    def test_edit_image_replaces_media_and_groups_number_buttons(self) -> None:
+        requests = []
+
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path == "/uploads":
+                return httpx.Response(200, json={"url": "https://iu.oneme.ru/upload"})
+            return httpx.Response(200, json={"success": True})
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(200, json={"token": "photo-token"})
+                )
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sheet.jpg"
+            image.write_bytes(b"image")
+            client.edit_image(
+                "bot-message",
+                image,
+                "Страница",
+                (
+                    Button("1", "open:1", 0),
+                    Button("2", "open:2", 0),
+                    Button("Назад", "back", 1),
+                ),
+            )
+        request = next(
+            request for request in requests
+            if request.url.path == "/messages" and request.method == "PUT"
+        )
+        body = json.loads(request.content)
+        self.assertFalse(body["notify"])
+        self.assertEqual(body["attachments"][0]["type"], "image")
+        rows = body["attachments"][1]["payload"]["buttons"]
+        self.assertEqual([button["text"] for button in rows[0]], ["1", "2"])
+        self.assertEqual([button["text"] for button in rows[1]], ["Назад"])
 
     def test_image_upload_accepts_the_documented_photo_token_map(self) -> None:
         sent_messages = []

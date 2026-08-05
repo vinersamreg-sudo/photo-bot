@@ -648,6 +648,82 @@ CREATE TABLE IF NOT EXISTS commerce_admin_audit (
 """
 
 
+GROWTH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS active_ui_sessions (
+    platform_user_id TEXT PRIMARY KEY,
+    chat_id TEXT,
+    active_ui_message_id TEXT,
+    active_screen TEXT NOT NULL DEFAULT 'none',
+    active_screen_context TEXT NOT NULL DEFAULT '{}',
+    ui_revision INTEGER NOT NULL DEFAULT 0 CHECK(ui_revision >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS referral_codes (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    referral_code TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS referral_relationships (
+    id TEXT PRIMARY KEY,
+    referral_code TEXT NOT NULL REFERENCES referral_codes(referral_code),
+    inviter_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    invitee_platform_user_id TEXT NOT NULL UNIQUE,
+    invitee_user_id TEXT UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','rewarded','disqualified')),
+    started_at TEXT NOT NULL,
+    rewarded_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(inviter_user_id <> COALESCE(invitee_user_id, ''))
+);
+CREATE INDEX IF NOT EXISTS idx_referral_relationships_inviter
+ON referral_relationships(inviter_user_id,status,created_at);
+CREATE TABLE IF NOT EXISTS bonus_credit_transactions (
+    id TEXT PRIMARY KEY,
+    relationship_id TEXT NOT NULL UNIQUE
+        REFERENCES referral_relationships(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    quantity INTEGER NOT NULL CHECK(quantity=2),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attribution_profiles (
+    platform_user_id TEXT PRIMARY KEY,
+    user_id TEXT UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+    first_source TEXT NOT NULL,
+    first_campaign TEXT,
+    first_referrer_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    first_started_at TEXT NOT NULL,
+    last_source TEXT NOT NULL,
+    last_campaign TEXT,
+    last_started_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attribution_profiles_first_source
+ON attribution_profiles(first_source,first_started_at);
+CREATE TABLE IF NOT EXISTS attribution_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_user_id TEXT NOT NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL CHECK(event_type IN (
+        'bot_started','photo_uploaded','first_generation_success',
+        'payment_offer_opened','payment_started','payment_success',
+        'share_opened','referral_started','referral_rewarded'
+    )),
+    source TEXT,
+    campaign TEXT,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attribution_events_type_time
+ON attribution_events(event_type,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attribution_events_source_time
+ON attribution_events(source,created_at DESC);
+"""
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -781,6 +857,7 @@ class Database:
             connection.executescript(PAYMENT_SCHEMA)
             connection.executescript(PROVIDER_CONTEXT_SCHEMA)
             connection.executescript(COMMERCE_SCHEMA)
+            connection.executescript(GROWTH_SCHEMA)
             account_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(user_credit_accounts)")
             }
@@ -946,6 +1023,17 @@ class Database:
                 connection.execute(
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(9,?,?)",
                     ("continuation_pack_credit_and_entitlement_ledgers", now),
+                )
+            growth_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=10"
+            ).fetchone()
+            if growth_migration is None:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(10,?,?)",
+                    (
+                        "single_screen_ui_referrals_and_attribution",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
                 )
         finally:
             connection.close()
