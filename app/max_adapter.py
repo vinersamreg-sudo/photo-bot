@@ -13,15 +13,19 @@ from app.scenarios import SCENARIOS
 
 
 WELCOME_TEXT = (
+    "Что хотите сделать с фотографией?\n\n"
+    "Загрузите фотографию и сразу напишите, что нужно сделать.\n\n"
+    "Примеры:\n"
+    "• убрать фон\n"
+    "• поменять одежду\n"
+    "• улучшить качество\n"
+    "• заменить лицо\n"
+    "• сделать фото на памятник"
+)
+
+UPLOAD_INSTRUCTION_TEXT = (
     "Прикрепите фотографию через скрепку 📎 и в подписи напишите, "
-    "что хотите изменить.\n\n"
-    "Например:\n"
-    "• заменить фон;\n"
-    "• убрать человека;\n"
-    "• поменять одежду;\n"
-    "• улучшить фотографию.\n\n"
-    "Отправляя фотографию, вы принимаете условия публичной оферты "
-    "и даёте согласие на обработку персональных данных."
+    "что хотите изменить."
 )
 
 LEGAL_TEXT = (
@@ -57,8 +61,16 @@ class MaxTransport(Protocol):
 
 def upload_view() -> View:
     return View(
+        UPLOAD_INSTRUCTION_TEXT,
+        (Button("← Назад", "nav:back:main"),),
+    )
+
+
+def main_menu() -> View:
+    return View(
         WELCOME_TEXT,
         (
+            Button("📷 Загрузить фотографию", "upload:ready"),
             Button("📁 Мои работы", "studio:works"),
             Button(
                 "Публичная оферта",
@@ -70,12 +82,6 @@ def upload_view() -> View:
             ),
         ),
     )
-
-
-def main_menu() -> View:
-    """Compatibility alias for older callers; this is no longer a menu."""
-
-    return upload_view()
 
 
 def legal_view() -> View:

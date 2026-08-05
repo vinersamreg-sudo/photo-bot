@@ -51,6 +51,7 @@ from app.max_adapter import (
     ideas_catalog,
     legal_details_view,
     legal_view,
+    main_menu,
     paid_actions,
     photoshoot_catalog,
     result_actions,
@@ -274,7 +275,7 @@ class MaxApplication:
             raise
         except DemoExpiredError:
             LOGGER.info("MAX demo session expired (event_type=%s)", event.event_type)
-            self._reset_dialog_to_main(event.user_id, event.event_key)
+            self._reset_dialog_to_upload(event.user_id, event.event_key)
             self._send_message(
                 event.user_id,
                 "Сессия завершилась.\n\nОтправьте фотографию снова.",
@@ -467,12 +468,17 @@ class MaxApplication:
     def _dispatch(self, event: MaxIncomingEvent) -> None:
         dialog = self.store.get_or_create(event.user_id, event.chat_id)
         text = (event.text or "").strip()
+        is_start = (
+            event.event_type == "bot_started"
+            or text.casefold() in {"/start", "старт"}
+        )
         if (
             self.settings.max_single_screen_ui_enabled
             and event.event_type == "message_created"
+            and not is_start
         ):
             self.ui.begin_user_input(event.user_id, chat_id=event.chat_id)
-        if event.event_type == "bot_started" or text.lower() == "/start":
+        if is_start:
             if event.image_url:
                 self._reset_dialog_to_main(event.user_id, event.event_key)
                 self._receive_source(
@@ -754,15 +760,32 @@ class MaxApplication:
 
     def _show_main(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
         self._reset_dialog_to_main(user_id, event_key)
-        self._send_view(user_id, upload_view())
+        self._send_view(user_id, main_menu())
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
+        self.store.transition(
+            user_id, "main_menu", event_key=event_key, force=True,
+            selected_scenario_id=None,
+            session_id=None,
+            pending_prompt=None,
+            pending_action=None,
+            current_gallery_item_id=None,
+            current_version_id=None,
+            gallery_cursor=0,
+            status_message_id=None,
+        )
+
+    def _show_upload(self, user_id: str, event_key: str) -> None:
+        self._reset_dialog_to_upload(user_id, event_key)
+        self._send_view(user_id, upload_view())
+
+    def _reset_dialog_to_upload(self, user_id: str, event_key: str) -> None:
         self.store.transition(
             user_id, "waiting_for_source", event_key=event_key, force=True,
             selected_scenario_id=None,
             session_id=None,
             pending_prompt=None,
-            pending_action=None,
+            pending_action="initial",
             current_gallery_item_id=None,
             current_version_id=None,
             gallery_cursor=0,
@@ -831,8 +854,8 @@ class MaxApplication:
         if action == "menu":
             self._show_main(event.user_id, dialog, event.event_key)
             return
-        if action == "new:source":
-            self._show_main(event.user_id, dialog, event.event_key)
+        if action in {"upload:ready", "new:source"}:
+            self._show_upload(event.user_id, event.event_key)
             return
         if action == "settings":
             if dialog.pending_action != NAV_SETTINGS:
@@ -855,12 +878,6 @@ class MaxApplication:
             )
             return
         if action == "nav:back:main":
-            if (
-                dialog.state == "waiting_for_source"
-                and dialog.pending_action is None
-                and dialog.current_gallery_item_id is None
-            ):
-                return
             if dialog.pending_action in {
                 NAV_WORK,
                 NAV_HISTORY,

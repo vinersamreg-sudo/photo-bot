@@ -298,16 +298,25 @@ class MaxApplicationTests(TestCase):
 
     def onboard_to_prompt(self) -> None:
         self.app.handle(self.event("bot_started"))
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.store.get("u1").state, "main_menu")
         menu = self.transport.messages[-1]
-        self.assertIn("Прикрепите фотографию через скрепку 📎", menu[1])
+        self.assertIn("Что хотите сделать с фотографией?", menu[1])
         self.assertEqual(
             [button.text for button in menu[2]],
             [
+                "📷 Загрузить фотографию",
                 "📁 Мои работы",
                 "Публичная оферта",
                 "Обработка персональных данных",
             ],
+        )
+        self.callback("upload:ready")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        upload = self.transport.messages[-1]
+        self.assertIn("Прикрепите фотографию через скрепку 📎", upload[1])
+        self.assertEqual(
+            [(button.text, button.action) for button in upload[2]],
+            [("← Назад", "nav:back:main")],
         )
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/source")
@@ -381,6 +390,27 @@ class MaxApplicationTests(TestCase):
         self.assertGreater(updated.revision, active.revision)
         self.assertEqual(self.provider.calls, provider_calls)
         self.assertIn("Здесь пока пусто", self.transport.edits[-1][1])
+
+    def test_single_screen_repeat_start_reuses_complete_active_menu(self) -> None:
+        self.enable_single_screen()
+        self.app.handle(self.event("bot_started"))
+        active = self.app.ui.current("u1")
+        message_count = len(self.transport.messages)
+
+        self.app.handle(self.event("message_created", text="/start"))
+        self.app.handle(self.event("message_created", text="Старт"))
+
+        current = self.app.ui.current("u1")
+        self.assertEqual(self.store.get("u1").state, "main_menu")
+        self.assertEqual(current.message_id, active.message_id)
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(self.transport.edits[-1][0], active.message_id)
+        self.assertIn("Что хотите сделать с фотографией?", self.transport.edits[-1][1])
+        self.assertIn(
+            "📁 Мои работы",
+            [button.text for button in self.transport.edits[-1][2]],
+        )
+        self.assertEqual(self.provider.calls, 0)
 
     def test_single_screen_processing_becomes_preview_in_same_message(self) -> None:
         self.enable_single_screen()
@@ -663,13 +693,15 @@ class MaxApplicationTests(TestCase):
 
     def test_start_direct_upload_details_and_implicit_consent(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.store.get("u1").state, "main_menu")
         start_message = self.transport.messages[-1]
-        self.assertIn("Прикрепите фотографию через скрепку 📎", start_message[1])
+        self.assertIn("Что хотите сделать с фотографией?", start_message[1])
+        self.assertIn("Примеры:", start_message[1])
         self.assertNotIn("Фото принято", start_message[1])
         self.assertEqual(
             [(button.text, button.action) for button in start_message[2]],
             [
+                ("📷 Загрузить фотографию", "upload:ready"),
                 ("📁 Мои работы", "studio:works"),
                 (
                     "Публичная оферта",
@@ -681,11 +713,23 @@ class MaxApplicationTests(TestCase):
                 ),
             ],
         )
-        self.assertFalse(
+        self.assertTrue(
             any(button.action == "upload:ready" for button in start_message[2])
         )
         self.assertFalse(
             any(button.action == "legal:accept_all" for button in start_message[2])
+        )
+        self.assertEqual(self.provider.calls, 0)
+
+        self.callback("upload:ready")
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertIn(
+            "Прикрепите фотографию через скрепку 📎",
+            self.transport.messages[-1][1],
+        )
+        self.assertEqual(
+            [(button.text, button.action) for button in self.transport.messages[-1][2]],
+            [("← Назад", "nav:back:main")],
         )
 
         invalid = self.base / "invalid.bin"
@@ -723,9 +767,12 @@ class MaxApplicationTests(TestCase):
 
     def test_start_works_button_opens_clear_empty_history(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
+        provider_calls = self.provider.calls
 
         self.callback("studio:works")
 
+        self.assertEqual(self.store.get("u1").state, "gallery")
+        self.assertEqual(self.provider.calls, provider_calls)
         self.assertEqual(
             self.transport.messages[-1][1],
             "Здесь пока пусто.\n\nСоздайте первую фотографию.",
@@ -778,6 +825,7 @@ class MaxApplicationTests(TestCase):
 
     def test_prompt_before_photo_is_saved_and_runs_when_photo_arrives(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
+        self.callback("upload:ready")
         self.app.handle(
             self.event("message_created", text="Замени фон на однотонный")
         )
@@ -807,13 +855,13 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(len(self.transport.messages), message_count + 1)
         restarted = self.store.get("u1")
-        self.assertEqual(restarted.state, "waiting_for_source")
+        self.assertEqual(restarted.state, "main_menu")
         self.assertIsNone(restarted.session_id)
         self.assertIsNone(restarted.current_gallery_item_id)
         self.assertIsNone(restarted.current_version_id)
         self.assertEqual(self.provider.calls, 0)
         self.assertIn(
-            "Прикрепите фотографию через скрепку 📎",
+            "Что хотите сделать с фотографией?",
             self.transport.messages[-1][1],
         )
         self.assertFalse(any(message[1] == PROCESSING_TEXT for message in self.transport.messages))
@@ -827,6 +875,8 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("message_created", text="/start"))
         source.unlink()
         self.app.handle(self.event("message_created", text="/start"))
+        self.assertEqual(self.store.get("u1").state, "main_menu")
+        self.callback("upload:ready")
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         self.assertIn("Прикрепите фотографию через скрепку 📎", self.transport.messages[-1][1])
         self.assertEqual(self.provider.calls, 0)
@@ -855,7 +905,7 @@ class MaxApplicationTests(TestCase):
 
     def test_image_outside_waiting_for_source_is_saved_and_not_silently_ignored(self) -> None:
         self.app.handle(self.event("bot_started"))
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.store.get("u1").state, "main_menu")
 
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/preloaded")
@@ -987,6 +1037,8 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.demo.commerce.balance(self.store.get("u1").user_id).available, 0)
 
         self.app.handle(self.event("message_created", text="/start"))
+        self.assertEqual(self.store.get("u1").state, "main_menu")
+        self.callback("upload:ready")
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         provider_calls = self.provider.calls
         with self.database.read() as connection:
@@ -1201,7 +1253,7 @@ class MaxApplicationTests(TestCase):
 
     def test_back_from_waiting_for_photo_returns_main_without_provider_call(self) -> None:
         self.app.handle(self.event("bot_started"))
-        self.callback("custom")
+        self.callback("upload:ready")
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         self.assertEqual(self.store.get("u1").pending_action, "initial")
         provider_calls = self.provider.calls
@@ -1209,11 +1261,20 @@ class MaxApplicationTests(TestCase):
         self.callback("nav:back:main")
 
         restored = self.store.get("u1")
-        self.assertEqual(restored.state, "waiting_for_source")
+        self.assertEqual(restored.state, "main_menu")
         self.assertIsNone(restored.pending_prompt)
         self.assertIsNone(restored.pending_action)
         self.assertIsNone(restored.current_gallery_item_id)
         self.assertEqual(self.provider.calls, provider_calls)
+        self.assertIn(
+            "Что хотите сделать с фотографией?",
+            self.transport.messages[-1][1],
+        )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                0,
+            )
 
     def test_parallel_payment_clicks_send_one_card_atomically(self) -> None:
         self.generate_first()

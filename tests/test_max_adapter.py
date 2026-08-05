@@ -26,6 +26,7 @@ from app.max_adapter import (
     scenario_catalog,
     settings_view,
     studio_menu_contract,
+    upload_view,
     version_history_actions,
 )
 from app.scenarios import SCENARIO_CATEGORIES
@@ -46,6 +47,7 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(
             [button.text for button in menu.buttons],
             [
+                "📷 Загрузить фотографию",
                 "📁 Мои работы",
                 "Публичная оферта",
                 "Обработка персональных данных",
@@ -69,9 +71,15 @@ class MaxAdapterTests(TestCase):
                 "← Назад",
             ],
         )
-        self.assertIn("Прикрепите фотографию через скрепку 📎", WELCOME_TEXT)
-        self.assertIn("принимаете условия публичной оферты", WELCOME_TEXT)
-        self.assertIn("согласие на обработку персональных данных", WELCOME_TEXT)
+        self.assertIn("Что хотите сделать с фотографией?", WELCOME_TEXT)
+        self.assertIn("• поменять одежду", WELCOME_TEXT)
+        self.assertIn("• улучшить качество", WELCOME_TEXT)
+        upload = upload_view()
+        self.assertIn("Прикрепите фотографию через скрепку 📎", upload.text)
+        self.assertEqual(
+            [(button.text, button.action) for button in upload.buttons],
+            [("← Назад", "nav:back:main")],
+        )
         self.assertEqual(result_actions(4).text, "Готово")
         self.assertEqual(result_actions(0).text, "Готово")
         self.assertEqual(

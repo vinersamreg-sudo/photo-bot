@@ -4,8 +4,11 @@
 
 The primary MAX flow is intentionally compact:
 
-1. `/start` shows one photo+instruction request.
-2. User sends an image, preferably with the instruction in its caption.
+1. `/start` shows the complete main menu with examples, a photo-processing
+   action, «Мои работы» and legal links.
+2. Only after the user chooses photo processing does Ravuna show the upload
+   instruction and enter the photo-waiting state. The user then sends an image,
+   preferably with the instruction in its caption.
 3. Ravuna produces one watermarked preview with direct actions.
 4. User corrects/repeats, opens works/history, or requests the original.
 5. If no original entitlement exists, Ravuna shows one compact 49 ₽ package
@@ -36,7 +39,12 @@ The primary MAX flow is intentionally compact:
 
 ## Start state
 
-- Ask for a photo and the desired change.
+- Show the complete welcome text and main-menu keyboard; `/start` and
+  `bot_started` do not enter the photo-waiting state.
+- The explicit photo-processing action replaces the active screen with the
+  upload instruction, enters the photo-waiting state and provides “← Назад”.
+- “← Назад” clears the transient upload state and restores the complete main
+  menu in place without calling an image provider.
 - Caption and photo in one message are supported.
 - Do not add a separate “Фото принято” screen when the caption is sufficient.
 - Invalid or unsupported media receives a concrete recovery instruction.
@@ -118,7 +126,8 @@ server ResultURL confirms payment.
 
 ## Buttons and stale state
 
-- Every nested menu ends with “← Назад”; the initial upload screen may omit it.
+- Every nested menu, including the upload instruction, ends with “← Назад”;
+  only the main menu may omit it.
 - Back restores the previous logical work/version/list screen, preserves the
   selected preview and never starts processing, debits an edit or creates a
   PaymentIntent.
