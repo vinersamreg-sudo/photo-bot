@@ -33,6 +33,7 @@ from app.max_application import (
     NAV_WORK,
     NAV_WORKS,
     OWNER_ONLY_TEXT,
+    PENDING_EDIT_PAYMENT_TEXT,
     PAYMENT_LINK_TEXT,
     PAYMENT_OFFER_TEXT,
     PHOTO_ACCEPTED_TEXT,
@@ -1030,18 +1031,29 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(self.transport.messages[-1][1], PAYMENT_OFFER_TEXT)
 
-    def test_new_photo_with_caption_and_zero_edits_opens_checkout(self) -> None:
+    def test_zero_balance_checkout_targets_new_pending_photo_not_old_work(self) -> None:
+        self.enable_single_screen()
+        self.app, payments = self.paid_application()
         self.generate_first()
         self.clock.advance(2)
         self.callback("result:repeat")
-        self.assertEqual(self.demo.commerce.balance(self.store.get("u1").user_id).available, 0)
+        old_dialog = self.store.get("u1")
+        old_item_id = old_dialog.current_gallery_item_id
+        user_id = old_dialog.user_id
+        self.assertEqual(self.demo.commerce.balance(user_id).available, 0)
 
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "main_menu")
         self.callback("upload:ready")
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        new_source = self.base / "new-source.png"
+        Image.new("RGB", (320, 240), "#b42318").save(new_source)
+        self.transport.source = new_source
         provider_calls = self.provider.calls
         with self.database.read() as connection:
+            attempts_before = connection.execute(
+                "SELECT COUNT(*) FROM generation_attempts"
+            ).fetchone()[0]
             error_events_before = connection.execute(
                 "SELECT COUNT(*) FROM product_events WHERE event_type='error'"
             ).fetchone()[0]
@@ -1058,14 +1070,116 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.provider.calls, provider_calls)
         self.assertEqual(dialog.state, "result_ready")
         self.assertEqual(dialog.pending_action, "checkout")
-        self.assertIsNotNone(dialog.current_version_id)
-        self.assertEqual(self.transport.messages[-1][1], PAYMENT_OFFER_TEXT)
+        self.assertIsNone(dialog.current_version_id)
+        self.assertIsNotNone(dialog.pending_request_id)
+        self.assertNotEqual(dialog.current_gallery_item_id, old_item_id)
+        pending_cards = [
+            (entry[1], entry[2])
+            for entry in [*self.transport.images, *self.transport.image_edits]
+            if entry[2] == PENDING_EDIT_PAYMENT_TEXT
+        ]
+        self.assertEqual(len(pending_cards), 1)
+        with Image.open(pending_cards[0][0]) as displayed:
+            self.assertEqual(displayed.convert("RGB").getpixel((0, 0)), (180, 35, 24))
+        self.assertIn("У вас закончились обработки.", PENDING_EDIT_PAYMENT_TEXT)
+        visible_work_ids = {
+            entry.id for entry in self.app.work_gallery.works(user_id, 1).entries
+        }
+        self.assertIn(old_item_id, visible_work_ids)
+        self.assertNotIn(dialog.current_gallery_item_id, visible_work_ids)
         with self.database.read() as connection:
+            pending = connection.execute(
+                "SELECT * FROM pending_edit_requests WHERE id=?",
+                (dialog.pending_request_id,),
+            ).fetchone()
+            self.assertEqual(pending["gallery_item_id"], dialog.current_gallery_item_id)
+            self.assertEqual(pending["prompt"], "Поменять одежду. Улучшить фон.")
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM generation_attempts").fetchone()[0],
+                attempts_before,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM gallery_versions WHERE gallery_item_id=?",
+                    (dialog.current_gallery_item_id,),
+                ).fetchone()[0],
+                0,
+            )
             self.assertEqual(
                 connection.execute(
                     "SELECT COUNT(*) FROM product_events WHERE event_type='error'"
                 ).fetchone()[0],
                 error_events_before,
+            )
+        self.assertEqual(self.demo.commerce.balance(user_id).available, 0)
+
+        self.callback("package:buy")
+        self.callback("package:buy")
+        with self.database.read() as connection:
+            intent = connection.execute("SELECT * FROM payment_intents").fetchone()
+            order = connection.execute("SELECT * FROM payment_orders").fetchone()
+            self.assertIsNotNone(intent)
+            self.assertEqual(intent["pending_request_id"], dialog.pending_request_id)
+            self.assertIsNone(intent["version_id"])
+            self.assertIsNone(intent["attempt_id"])
+            self.assertEqual(order["pending_request_id"], dialog.pending_request_id)
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                1,
+            )
+
+        amount = "49.00"
+        signature = hashlib.sha256(
+            (
+                f"{amount}:{order['provider_invoice_id']}:two:"
+                f"Shp_order={order['public_token']}"
+            ).encode()
+        ).hexdigest()
+        webhook = payments.process_webhook(
+            {
+                "OutSum": amount,
+                "InvId": str(order["provider_invoice_id"]),
+                "Shp_order": order["public_token"],
+                "SignatureValue": signature,
+            },
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        self.assertTrue(webhook.accepted)
+        self.assertTrue(self.app.notify_continuation_pack_paid(order["id"]))
+        paid_dialog = self.store.get("u1")
+        self.assertEqual(paid_dialog.pending_action, "pending_paid")
+        self.assertEqual(paid_dialog.current_gallery_item_id, dialog.current_gallery_item_id)
+        self.assertEqual(self.provider.calls, provider_calls)
+
+        self.clock.advance(2)
+        process_event = self.event("message_callback", action="pending:process")
+        process_event = replace(
+            process_event,
+            message_id=self.app.ui.current("u1").message_id,
+        )
+        self.assertTrue(self.app.handle(process_event))
+        completed = self.store.get("u1")
+        self.assertEqual(self.provider.calls, provider_calls + 1)
+        self.assertEqual(self.demo.commerce.balance(user_id).available, 1)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT status FROM pending_edit_requests WHERE id=?",
+                    (dialog.pending_request_id,),
+                ).fetchone()[0],
+                "completed",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT gallery_item_id FROM gallery_versions WHERE id=?",
+                    (completed.current_version_id,),
+                ).fetchone()[0],
+                dialog.current_gallery_item_id,
             )
 
     def test_gallery_with_zero_edits_does_not_offer_correction_or_repeat(self) -> None:

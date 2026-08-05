@@ -101,7 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_attempts_user_started ON generation_attempts(user
 CREATE INDEX IF NOT EXISTS idx_attempts_status ON generation_attempts(status);
 CREATE TABLE IF NOT EXISTS payment_intents (
     id TEXT PRIMARY KEY,
-    attempt_id TEXT NOT NULL REFERENCES generation_attempts(id),
+    attempt_id TEXT REFERENCES generation_attempts(id),
+    pending_request_id TEXT,
     idempotency_key TEXT NOT NULL UNIQUE,
     amount_rub INTEGER NOT NULL,
     status TEXT NOT NULL,
@@ -282,6 +283,7 @@ CREATE TABLE IF NOT EXISTS max_dialogs (
     session_id TEXT REFERENCES demo_sessions(id) ON DELETE SET NULL,
     pending_prompt TEXT,
     pending_action TEXT,
+    pending_request_id TEXT,
     current_gallery_item_id TEXT REFERENCES gallery_items(id) ON DELETE SET NULL,
     current_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
     gallery_cursor INTEGER NOT NULL DEFAULT 0,
@@ -386,7 +388,8 @@ CREATE TABLE IF NOT EXISTS payment_orders (
     paid_at TEXT,
     delivered_at TEXT,
     refunded_amount_minor INTEGER NOT NULL DEFAULT 0,
-    failure_code TEXT
+    failure_code TEXT,
+    pending_request_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_payment_orders_status_time
 ON payment_orders(status, updated_at DESC);
@@ -494,6 +497,24 @@ CREATE TABLE IF NOT EXISTS refund_audit (
     actor_type TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+"""
+
+PENDING_EDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_edit_requests (
+    id TEXT PRIMARY KEY,
+    platform_user_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    session_id TEXT NOT NULL REFERENCES demo_sessions(id),
+    gallery_item_id TEXT NOT NULL REFERENCES gallery_items(id),
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payment_order_id TEXT REFERENCES payment_orders(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pending_edit_user_status
+ON pending_edit_requests(user_id,status,updated_at DESC);
 """
 
 PROVIDER_CONTEXT_SCHEMA = """
@@ -855,6 +876,7 @@ class Database:
             connection.executescript(MAX_SCHEMA)
             connection.executescript(TELEMETRY_SCHEMA)
             connection.executescript(PAYMENT_SCHEMA)
+            connection.executescript(PENDING_EDIT_SCHEMA)
             connection.executescript(PROVIDER_CONTEXT_SCHEMA)
             connection.executescript(COMMERCE_SCHEMA)
             connection.executescript(GROWTH_SCHEMA)
@@ -877,12 +899,14 @@ class Database:
                 ("updated_at", "TEXT"),
                 ("expires_at", "TEXT"),
                 ("product_code", "TEXT NOT NULL DEFAULT 'legacy_original_unlock'"),
+                ("pending_request_id", "TEXT"),
             ):
                 if name not in payment_columns:
                     connection.execute(
                         f"ALTER TABLE payment_intents ADD COLUMN {name} {declaration}"
                     )
             self._allow_repeat_payment_intents(connection)
+            self._allow_pending_payment_intents(connection)
             gallery_version_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(gallery_versions)")
             }
@@ -904,6 +928,7 @@ class Database:
                 ("product_code", "TEXT NOT NULL DEFAULT 'legacy_original_unlock'"),
                 ("generation_credit_quantity", "INTEGER NOT NULL DEFAULT 0"),
                 ("unlock_entitlement_quantity", "INTEGER NOT NULL DEFAULT 0"),
+                ("pending_request_id", "TEXT"),
             ):
                 if name not in payment_order_columns:
                     connection.execute(
@@ -933,6 +958,8 @@ class Database:
             }
             if "pending_action" not in dialog_columns:
                 connection.execute("ALTER TABLE max_dialogs ADD COLUMN pending_action TEXT")
+            if "pending_request_id" not in dialog_columns:
+                connection.execute("ALTER TABLE max_dialogs ADD COLUMN pending_request_id TEXT")
             max_migration = connection.execute(
                 "SELECT 1 FROM schema_migrations WHERE version=3"
             ).fetchone()
@@ -1035,6 +1062,17 @@ class Database:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
+            pending_payment_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=11"
+            ).fetchone()
+            if pending_payment_migration is None:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(11,?,?)",
+                    (
+                        "pending_edit_payment_target",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
         finally:
             connection.close()
 
@@ -1107,7 +1145,8 @@ class Database:
             ALTER TABLE payment_intents RENAME TO payment_intents_legacy_unique_attempt;
             CREATE TABLE payment_intents (
                 id TEXT PRIMARY KEY,
-                attempt_id TEXT NOT NULL REFERENCES generation_attempts(id),
+                attempt_id TEXT REFERENCES generation_attempts(id),
+                pending_request_id TEXT,
                 idempotency_key TEXT NOT NULL UNIQUE,
                 amount_rub INTEGER NOT NULL,
                 status TEXT NOT NULL,
@@ -1122,13 +1161,63 @@ class Database:
                 product_code TEXT NOT NULL DEFAULT 'legacy_original_unlock'
             );
             INSERT INTO payment_intents(
-                id,attempt_id,idempotency_key,amount_rub,status,created_at,confirmed_at,
+                id,attempt_id,pending_request_id,idempotency_key,amount_rub,status,created_at,confirmed_at,
                 version_id,user_id,provider,currency,updated_at,expires_at,product_code
             )
-            SELECT id,attempt_id,idempotency_key,amount_rub,status,created_at,confirmed_at,
+            SELECT id,attempt_id,pending_request_id,idempotency_key,amount_rub,status,created_at,confirmed_at,
                    version_id,user_id,provider,currency,updated_at,expires_at,product_code
             FROM payment_intents_legacy_unique_attempt;
             DROP TABLE payment_intents_legacy_unique_attempt;
+            COMMIT;
+            PRAGMA legacy_alter_table=OFF;
+            PRAGMA foreign_keys=ON;
+            """
+        )
+
+    @staticmethod
+    def _allow_pending_payment_intents(connection: sqlite3.Connection) -> None:
+        """Allow a package purchase to target a durable edit request before generation."""
+
+        columns = {
+            row[1]: row
+            for row in connection.execute("PRAGMA table_info(payment_intents)")
+        }
+        attempt = columns.get("attempt_id")
+        if attempt is None or int(attempt[3]) == 0:
+            return
+        connection.executescript(
+            """
+            PRAGMA foreign_keys=OFF;
+            PRAGMA legacy_alter_table=ON;
+            BEGIN IMMEDIATE;
+            ALTER TABLE payment_intents RENAME TO payment_intents_legacy_required_attempt;
+            CREATE TABLE payment_intents (
+                id TEXT PRIMARY KEY,
+                attempt_id TEXT REFERENCES generation_attempts(id),
+                pending_request_id TEXT,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                amount_rub INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                confirmed_at TEXT,
+                version_id TEXT,
+                user_id TEXT,
+                provider TEXT NOT NULL DEFAULT 'legacy',
+                currency TEXT NOT NULL DEFAULT 'RUB',
+                updated_at TEXT,
+                expires_at TEXT,
+                product_code TEXT NOT NULL DEFAULT 'legacy_original_unlock'
+            );
+            INSERT INTO payment_intents(
+                id,attempt_id,pending_request_id,idempotency_key,amount_rub,status,
+                created_at,confirmed_at,version_id,user_id,provider,currency,
+                updated_at,expires_at,product_code
+            )
+            SELECT id,attempt_id,pending_request_id,idempotency_key,amount_rub,status,
+                   created_at,confirmed_at,version_id,user_id,provider,currency,
+                   updated_at,expires_at,product_code
+            FROM payment_intents_legacy_required_attempt;
+            DROP TABLE payment_intents_legacy_required_attempt;
             COMMIT;
             PRAGMA legacy_alter_table=OFF;
             PRAGMA foreign_keys=ON;

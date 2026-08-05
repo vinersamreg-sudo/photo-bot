@@ -17,6 +17,12 @@ The primary MAX flow is intentionally compact:
    presses “Оплатить 49 ₽”; the link screen does not repeat the package copy.
 7. After ResultURL confirms payment, download is the primary action.
 
+If a new photo and prompt arrive with no edits available, Ravuna stores them as
+a pending request and shows that photo with an exhausted-balance notice plus the
+same package block. The source-only request stays out of «Моих работ» until its
+processing succeeds. Payment and post-payment processing remain bound to that
+pending request; a previous or latest completed work is never used as fallback.
+
 ## Single-screen shell
 
 - With `MAX_SINGLE_SCREEN_UI_ENABLED=true`, each MAX dialog has one bot-owned
@@ -80,6 +86,14 @@ The primary MAX flow is intentionally compact:
   Back returns to the same history/work context.
 
 ## Payment state
+
+For an unprocessed pending photo, prefix the package language with:
+
+```text
+У вас закончились обработки.
+
+Чтобы обработать эту фотографию, приобретите пакет Ravuna.
+```
 
 Use exactly the product language:
 

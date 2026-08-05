@@ -54,6 +54,7 @@ class MaxDialog:
     session_id: Optional[str]
     pending_prompt: Optional[str]
     pending_action: Optional[str]
+    pending_request_id: Optional[str]
     current_gallery_item_id: Optional[str]
     current_version_id: Optional[str]
     gallery_cursor: int
@@ -72,7 +73,7 @@ class MaxConversationStore:
         return MaxDialog(
             row["platform_user_id"], row["chat_id"], row["user_id"], row["state"],
             row["selected_scenario_id"], row["session_id"], row["pending_prompt"],
-            row["pending_action"],
+            row["pending_action"], row["pending_request_id"],
             row["current_gallery_item_id"], row["current_version_id"],
             row["gallery_cursor"], row["status_message_id"],
         )
@@ -117,6 +118,7 @@ class MaxConversationStore:
         allowed_fields = {
             "chat_id", "user_id", "selected_scenario_id", "session_id", "pending_prompt",
             "pending_action",
+            "pending_request_id",
             "current_gallery_item_id", "current_version_id", "gallery_cursor",
             "status_message_id",
         }

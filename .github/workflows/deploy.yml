@@ -677,6 +677,9 @@ jobs:
               migration_v10 = bool(connection.execute(
                   "SELECT 1 FROM schema_migrations WHERE version=10"
               ).fetchone())
+              migration_v11 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=11"
+              ).fetchone())
               credit_accounts = connection.execute(
                   "SELECT COUNT(*) FROM user_credit_accounts"
               ).fetchone()[0]
@@ -709,6 +712,7 @@ jobs:
           assert migration_v8
           assert migration_v9
           assert migration_v10
+          assert migration_v11
           assert credit_accounts == users
           assert negative_credit_accounts == 0
           assert settings.payment_webhook_listener_enabled is True
@@ -812,6 +816,7 @@ jobs:
               "migration_v8": migration_v8,
               "migration_v9": migration_v9,
               "migration_v10": migration_v10,
+              "migration_v11": migration_v11,
               "credit_accounts": credit_accounts,
               "negative_credit_accounts": negative_credit_accounts,
               "payment_orders_total": payment_orders_total,

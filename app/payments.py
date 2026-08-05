@@ -108,8 +108,9 @@ class RefundReason(StrEnum):
 @dataclass(frozen=True)
 class PaymentIntent:
     id: str
-    version_id: str
-    attempt_id: str
+    version_id: str | None
+    attempt_id: str | None
+    pending_request_id: str | None
     user_id: str
     amount_minor: int
     currency: str
@@ -121,8 +122,9 @@ class PaymentOrder:
     id: str
     public_token: str
     intent_id: str
-    version_id: str
-    attempt_id: str
+    version_id: str | None
+    attempt_id: str | None
+    pending_request_id: str | None
     user_id: str
     provider: str
     provider_invoice_id: int
@@ -242,8 +244,12 @@ def _row_order(row: Mapping[str, object], payment_url: str | None = None) -> Pay
         id=str(row["id"]),
         public_token=str(row["public_token"]),
         intent_id=str(row["intent_id"]),
-        version_id=str(row["version_id"]),
-        attempt_id=str(row["attempt_id"]),
+        version_id=str(row["version_id"]) if row["version_id"] else None,
+        attempt_id=str(row["attempt_id"]) if row["attempt_id"] else None,
+        pending_request_id=(
+            str(row["pending_request_id"])
+            if row["pending_request_id"] else None
+        ),
         user_id=str(row["user_id"]),
         provider=str(row["provider"]),
         provider_invoice_id=int(row["provider_invoice_id"]),
@@ -340,7 +346,12 @@ class PaymentService:
         return _row_order(row)
 
     def create_order(
-        self, user_id: str, version_id: str, idempotency_key: str
+        self,
+        user_id: str,
+        version_id: str | None,
+        idempotency_key: str,
+        *,
+        pending_request_id: str | None = None,
     ) -> PaymentOrder:
         """Create a package order; the selected version is context, not an unlock target."""
 
@@ -349,23 +360,45 @@ class PaymentService:
             raise PaymentError("Payment idempotency key is required")
         if self.settings.continuation_pack_price_rub * 100 != PRICE_MINOR:
             raise PaymentError("Continuation pack price must be exactly 49 RUB")
+        if bool(version_id) == bool(pending_request_id):
+            raise PaymentError("Exactly one payment target is required")
         now = self.clock()
         expires_at = now + timedelta(minutes=self.settings.payment_order_ttl_minutes)
         with self.database.transaction() as connection:
-            version = connection.execute(
-                """SELECT v.id,v.attempt_id,v.unlock_status,v.original_path,
-                          v.gallery_item_id,a.user_id,a.status AS attempt_status,
-                          i.user_id AS item_user_id
-                   FROM gallery_versions v
-                   JOIN generation_attempts a ON a.id=v.attempt_id
-                   JOIN gallery_items i ON i.id=v.gallery_item_id
-                   WHERE v.id=?""",
-                (version_id,),
-            ).fetchone()
-            if version is None or version["user_id"] != user_id or version["item_user_id"] != user_id:
-                raise PaymentError("Gallery version was not found")
-            if version["attempt_status"] != "succeeded":
-                raise PaymentError("Only a completed version can start a package purchase")
+            if pending_request_id:
+                pending = connection.execute(
+                    """SELECT r.id,r.user_id,r.session_id,r.gallery_item_id,r.status
+                       FROM pending_edit_requests r
+                       JOIN demo_sessions s ON s.id=r.session_id
+                       JOIN gallery_items i ON i.id=r.gallery_item_id
+                       WHERE r.id=? AND s.user_id=r.user_id AND i.user_id=r.user_id""",
+                    (pending_request_id,),
+                ).fetchone()
+                if (
+                    pending is None
+                    or pending["user_id"] != user_id
+                    or pending["status"] not in {"awaiting_payment", "paid"}
+                ):
+                    raise PaymentError("Pending edit request was not found")
+                attempt_id = None
+                item_id = pending["gallery_item_id"]
+            else:
+                version = connection.execute(
+                    """SELECT v.id,v.attempt_id,v.unlock_status,v.original_path,
+                              v.gallery_item_id,a.user_id,a.status AS attempt_status,
+                              i.user_id AS item_user_id
+                       FROM gallery_versions v
+                       JOIN generation_attempts a ON a.id=v.attempt_id
+                       JOIN gallery_items i ON i.id=v.gallery_item_id
+                       WHERE v.id=?""",
+                    (version_id,),
+                ).fetchone()
+                if version is None or version["user_id"] != user_id or version["item_user_id"] != user_id:
+                    raise PaymentError("Gallery version was not found")
+                if version["attempt_status"] != "succeeded":
+                    raise PaymentError("Only a completed version can start a package purchase")
+                attempt_id = str(version["attempt_id"])
+                item_id = version["gallery_item_id"]
             replay = connection.execute(
                 """SELECT o.* FROM payment_intents i
                    JOIN payment_orders o ON o.intent_id=i.id
@@ -373,7 +406,15 @@ class PaymentService:
                 (idempotency_key,),
             ).fetchone()
             if replay is not None:
-                if replay["user_id"] != user_id or replay["product_code"] != PRODUCT_CODE:
+                if (
+                    replay["user_id"] != user_id
+                    or replay["product_code"] != PRODUCT_CODE
+                    or (replay["pending_request_id"] or None) != pending_request_id
+                    or (
+                        pending_request_id is None
+                        and replay["version_id"] != version_id
+                    )
+                ):
                     raise PaymentError("Payment idempotency key conflict")
                 order = _row_order(replay)
             else:
@@ -388,8 +429,14 @@ class PaymentService:
                 existing = connection.execute(
                     """SELECT * FROM payment_orders
                        WHERE user_id=? AND product_code=? AND status='pending' AND expires_at>=?
+                         AND ((? IS NOT NULL AND pending_request_id=?)
+                              OR (? IS NOT NULL AND pending_request_id IS NULL AND version_id=?))
                        ORDER BY created_at DESC LIMIT 1""",
-                    (user_id, PRODUCT_CODE, _iso(now)),
+                    (
+                        user_id, PRODUCT_CODE, _iso(now),
+                        pending_request_id, pending_request_id,
+                        version_id, version_id,
+                    ),
                 ).fetchone()
                 if existing is not None:
                     order = _row_order(existing)
@@ -407,15 +454,14 @@ class PaymentService:
                             raise PaymentError(
                                 "The bounded Robokassa sandbox order cap was reached"
                             )
-                    attempt_id = str(version["attempt_id"])
                     intent_id = uuid4().hex
                     connection.execute(
                         """INSERT INTO payment_intents(
-                               id,attempt_id,idempotency_key,amount_rub,status,created_at,
+                               id,attempt_id,pending_request_id,idempotency_key,amount_rub,status,created_at,
                                version_id,user_id,provider,currency,updated_at,expires_at,product_code
-                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
-                            intent_id, attempt_id, idempotency_key,
+                            intent_id, attempt_id, pending_request_id, idempotency_key,
                             self.settings.continuation_pack_price_rub,
                             PaymentStatus.PENDING.value, _iso(now), version_id, user_id,
                             provider.name, self.settings.payment_currency, _iso(now),
@@ -430,17 +476,17 @@ class PaymentService:
                                id,public_token,intent_id,attempt_id,version_id,user_id,provider,
                                merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
                                created_at,updated_at,expires_at,product_code,
-                               generation_credit_quantity,unlock_entitlement_quantity
-                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               generation_credit_quantity,unlock_entitlement_quantity,pending_request_id
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
-                            order_id, public_token, intent_id, attempt_id, version_id, user_id,
+                            order_id, public_token, intent_id, attempt_id or "", version_id or "", user_id,
                             provider.name,
                             hashlib.sha256(provider.merchant_login.encode("utf-8")).hexdigest(),
                             invoice_id, PRICE_MINOR, self.settings.payment_currency,
                             PaymentStatus.PENDING.value,
                             self.settings.payment_receipt_item_name, _iso(now), _iso(now),
                             _iso(expires_at), PRODUCT_CODE, GENERATION_CREDITS_PER_PACK,
-                            UNLOCK_ENTITLEMENTS_PER_PACK,
+                            UNLOCK_ENTITLEMENTS_PER_PACK, pending_request_id,
                         ),
                     )
                     receipt_id = uuid4().hex
@@ -464,7 +510,7 @@ class PaymentService:
                     )
                     self._record_product_event(
                         connection, "continuation_pack_payment_started",
-                        attempt_id=attempt_id, item_id=version["gallery_item_id"],
+                        attempt_id=attempt_id, item_id=item_id,
                         user_id=user_id,
                     )
                     previous_paid = int(
@@ -489,7 +535,8 @@ class PaymentService:
                         )
                     order = PaymentOrder(
                         id=order_id, public_token=public_token, intent_id=intent_id,
-                        version_id=version_id, attempt_id=attempt_id, user_id=user_id,
+                        version_id=version_id, attempt_id=attempt_id,
+                        pending_request_id=pending_request_id, user_id=user_id,
                         provider=provider.name, provider_invoice_id=invoice_id,
                         amount_minor=PRICE_MINOR, currency=self.settings.payment_currency,
                         status=PaymentStatus.PENDING, expires_at=expires_at,
@@ -497,6 +544,12 @@ class PaymentService:
                         generation_credit_quantity=GENERATION_CREDITS_PER_PACK,
                         unlock_entitlement_quantity=UNLOCK_ENTITLEMENTS_PER_PACK,
                     )
+            if pending_request_id:
+                connection.execute(
+                    """UPDATE pending_edit_requests
+                       SET payment_order_id=?,updated_at=? WHERE id=?""",
+                    (order.id, _iso(now), pending_request_id),
+                )
         request = RobokassaPaymentRequest(
             invoice_id=order.provider_invoice_id,
             amount_minor=order.amount_minor,
@@ -664,12 +717,18 @@ class PaymentService:
                 )
                 if order is not None:
                     item = connection.execute(
-                        "SELECT gallery_item_id FROM gallery_versions WHERE id=?",
-                        (order["version_id"],),
+                        """SELECT gallery_item_id FROM pending_edit_requests WHERE id=?
+                           UNION ALL
+                           SELECT gallery_item_id FROM gallery_versions
+                           WHERE id=? AND ? IS NULL LIMIT 1""",
+                        (
+                            order["pending_request_id"], order["version_id"],
+                            order["pending_request_id"],
+                        ),
                     ).fetchone()
                     self._record_product_event(
                         connection, "continuation_pack_failed",
-                        attempt_id=order["attempt_id"],
+                        attempt_id=order["attempt_id"] or None,
                         item_id=item["gallery_item_id"] if item else None,
                         user_id=order["user_id"],
                     )
@@ -692,8 +751,21 @@ class PaymentService:
                     (_iso(now), order_id),
                 )
                 item = connection.execute(
-                    "SELECT gallery_item_id FROM gallery_versions WHERE id=?", (order["version_id"],)
+                    """SELECT gallery_item_id FROM pending_edit_requests WHERE id=?
+                       UNION ALL
+                       SELECT gallery_item_id FROM gallery_versions
+                       WHERE id=? AND ? IS NULL LIMIT 1""",
+                    (
+                        order["pending_request_id"], order["version_id"],
+                        order["pending_request_id"],
+                    ),
                 ).fetchone()
+                if order["pending_request_id"]:
+                    connection.execute(
+                        """UPDATE pending_edit_requests SET status='paid',updated_at=?
+                           WHERE id=? AND status='awaiting_payment'""",
+                        (_iso(now), order["pending_request_id"]),
+                    )
                 self.commerce.grant_continuation_pack(
                     connection,
                     user_id=order["user_id"],
@@ -701,7 +773,7 @@ class PaymentService:
                     payment_intent_id=order["intent_id"],
                 )
                 self._record_product_event(
-                    connection, "packs_per_payer", attempt_id=order["attempt_id"],
+                    connection, "packs_per_payer", attempt_id=order["attempt_id"] or None,
                     item_id=item["gallery_item_id"] if item else None,
                     user_id=order["user_id"],
                     value_integer=int(

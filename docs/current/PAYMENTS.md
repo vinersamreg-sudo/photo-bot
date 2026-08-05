@@ -19,8 +19,10 @@
 
 ## Authoritative flow
 
-1. Ravuna creates/reuses a bounded PaymentIntent and PaymentOrder.
-2. The user opens a signed Robokassa payment URL.
+1. Ravuna first shows a payment offer for an explicit completed version or
+   durable pending edit request; no PaymentIntent exists before the pay click.
+2. On “Оплатить 49 ₽”, Ravuna creates/reuses one bounded PaymentIntent and
+   PaymentOrder for that exact target, then shows the signed Robokassa URL.
 3. Robokassa POSTs ResultURL.
 4. Ravuna verifies Password #2 signature, amount, invoice and order state.
 5. One transaction marks the order paid and grants +2 edits and +1 original.
@@ -45,6 +47,8 @@ contract. Never print canonical strings containing real passwords.
 ## Idempotency
 
 - Duplicate button taps should reuse an applicable pending purchase.
+- Pending purchases are target-scoped; an absent target must fail closed and
+  must never fall back to the latest completed work.
 - Duplicate ResultURL callbacks return the expected acknowledgement without a
   second grant, entitlement, receipt or ledger mutation.
 - PaymentIntent, provider order, grant and receipt have independent idempotency

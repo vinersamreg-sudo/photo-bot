@@ -108,6 +108,11 @@ PAYMENT_OFFER_TEXT = (
     "• оригинал этой фотографии без водяного знака\n\n"
     "Пакет начислится сразу после оплаты."
 )
+PENDING_EDIT_PAYMENT_TEXT = (
+    "У вас закончились обработки.\n\n"
+    "Чтобы обработать эту фотографию, приобретите пакет Ravuna.\n\n"
+    + PAYMENT_OFFER_TEXT
+)
 PAYMENT_LINK_TEXT = (
     "Ссылка на оплату готова.\n\n"
     "После оплаты пакет начислится автоматически."
@@ -769,6 +774,7 @@ class MaxApplication:
             session_id=None,
             pending_prompt=None,
             pending_action=None,
+            pending_request_id=None,
             current_gallery_item_id=None,
             current_version_id=None,
             gallery_cursor=0,
@@ -786,6 +792,7 @@ class MaxApplication:
             session_id=None,
             pending_prompt=None,
             pending_action="initial",
+            pending_request_id=None,
             current_gallery_item_id=None,
             current_version_id=None,
             gallery_cursor=0,
@@ -878,6 +885,9 @@ class MaxApplication:
             )
             return
         if action == "nav:back:main":
+            if dialog.pending_request_id:
+                self._show_main(event.user_id, dialog, event.event_key)
+                return
             if dialog.pending_action in {
                 NAV_WORK,
                 NAV_HISTORY,
@@ -945,6 +955,8 @@ class MaxApplication:
             self._show_share(event, dialog)
         elif action == "package:buy":
             self._buy_continuation_pack(event, dialog)
+        elif action == "pending:process":
+            self._process_paid_pending_request(event, dialog)
         elif action == "package:offer":
             self._show_continuation_pack_offer(event, dialog)
         elif action == "result:correct":
@@ -1099,6 +1111,7 @@ class MaxApplication:
                 session_id=session_id,
                 current_gallery_item_id=item_id,
                 current_version_id=None,
+                pending_request_id=None,
             )
             self._generate(event, updated, correction=False)
             return
@@ -1108,6 +1121,7 @@ class MaxApplication:
             user_id=user_id,
             selected_scenario_id=scenario_id, pending_prompt=None,
             pending_action="initial",
+            pending_request_id=None,
             session_id=session_id,
             current_gallery_item_id=item_id if reusable_source else None,
             current_version_id=None,
@@ -1188,6 +1202,7 @@ class MaxApplication:
                 current_version_id=None,
                 pending_prompt="Применить выбранный сценарий",
                 pending_action="initial",
+                pending_request_id=None,
                 status_message_id=None,
             )
             self._generate(event, updated, correction=False)
@@ -1197,6 +1212,7 @@ class MaxApplication:
                 force=True,
                 user_id=session.user_id, session_id=session.session_id,
                 current_gallery_item_id=item_id, current_version_id=None,
+                pending_request_id=None,
                 selected_scenario_id=None, pending_action="initial",
             )
             inline_prompt = (event.text or "").strip()
@@ -1373,7 +1389,10 @@ class MaxApplication:
                 session_id=dialog.session_id,
                 gallery_item_id=dialog.current_gallery_item_id,
             )
-            self._show_continuation_pack_offer(event, dialog)
+            if not correction and not repeat and not dialog.current_version_id:
+                self._show_pending_edit_offer(event, dialog, prompt)
+            else:
+                self._show_continuation_pack_offer(event, dialog)
             return
         remaining_after = available - 1
         status_id = self._send_message(
@@ -1451,8 +1470,17 @@ class MaxApplication:
             )
             self.store.transition(
                 event.user_id, recovery_state, event_key=event.event_key,
-                status_message_id=status_id, pending_prompt=None, force=True,
+                status_message_id=status_id,
+                pending_prompt=prompt if dialog.pending_request_id else None,
+                force=True,
             )
+            if dialog.pending_request_id:
+                with self.database.transaction() as connection:
+                    connection.execute(
+                        """UPDATE pending_edit_requests SET status='paid',updated_at=?
+                           WHERE id=? AND status='processing'""",
+                        (self.demo.clock().isoformat(), dialog.pending_request_id),
+                    )
             raise
         with self.database.read() as connection:
             version = connection.execute(
@@ -1469,7 +1497,15 @@ class MaxApplication:
             current_gallery_item_id=version["gallery_item_id"],
             current_version_id=version["id"], status_message_id=None,
             pending_prompt=None, pending_action=None,
+            pending_request_id=None,
         )
+        if dialog.pending_request_id:
+            with self.database.transaction() as connection:
+                connection.execute(
+                    """UPDATE pending_edit_requests SET status='completed',updated_at=?
+                       WHERE id=?""",
+                    (self.demo.clock().isoformat(), dialog.pending_request_id),
+                )
         if self.settings.max_single_screen_ui_enabled:
             active_result = self.ui.current(event.user_id)
             if active_result and active_result.screen == "result_ready":
@@ -1649,6 +1685,116 @@ class MaxApplication:
                 retry_delivery_actions(),
             )
 
+    def _show_pending_edit_offer(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, prompt: str
+    ) -> None:
+        if (
+            not dialog.user_id
+            or not dialog.session_id
+            or not dialog.current_gallery_item_id
+            or not prompt
+        ):
+            raise InvalidInputError("A complete pending edit request is required")
+        now = self.demo.clock().isoformat()
+        with self.database.transaction() as connection:
+            existing = connection.execute(
+                "SELECT id,status FROM pending_edit_requests WHERE session_id=?",
+                (dialog.session_id,),
+            ).fetchone()
+            request_id = existing["id"] if existing else uuid4().hex
+            if existing is None:
+                connection.execute(
+                    """INSERT INTO pending_edit_requests(
+                           id,platform_user_id,user_id,session_id,gallery_item_id,
+                           prompt,status,created_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,'awaiting_payment',?,?)""",
+                    (
+                        request_id, event.user_id, dialog.user_id,
+                        dialog.session_id, dialog.current_gallery_item_id,
+                        prompt, now, now,
+                    ),
+                )
+            elif existing["status"] not in {"paid", "processing", "completed"}:
+                connection.execute(
+                    """UPDATE pending_edit_requests
+                       SET prompt=?,status='awaiting_payment',updated_at=? WHERE id=?""",
+                    (prompt, now, request_id),
+                )
+            source = connection.execute(
+                """SELECT i.original_source_path
+                   FROM pending_edit_requests r
+                   JOIN gallery_items i ON i.id=r.gallery_item_id
+                   WHERE r.id=? AND i.user_id=r.user_id""",
+                (request_id,),
+            ).fetchone()
+        source_path = Path(source["original_source_path"]) if source else None
+        if source_path is None or not source_path.is_file():
+            raise AssetUnavailableError("Pending edit source is unavailable")
+        updated = self.store.transition(
+            event.user_id,
+            "result_ready",
+            event_key=event.event_key,
+            force=True,
+            pending_prompt=prompt,
+            pending_action="checkout",
+            pending_request_id=request_id,
+            current_gallery_item_id=dialog.current_gallery_item_id,
+            current_version_id=None,
+            status_message_id=None,
+        )
+        self._send_image(
+            event.user_id,
+            source_path,
+            PENDING_EDIT_PAYMENT_TEXT,
+            (
+                Button("Оплатить 49 ₽", "package:buy"),
+                Button("← Назад", "nav:back:main"),
+            ),
+            screen="pending_payment_offer",
+            context={
+                "gallery_item_id": updated.current_gallery_item_id,
+                "version_id": None,
+            },
+        )
+        self.attribution.record_event(
+            event.user_id,
+            "payment_offer_opened",
+            idempotency_key=f"payment-offer:{event.event_key}",
+            user_id=dialog.user_id,
+        )
+
+    def _process_paid_pending_request(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        if not dialog.pending_request_id or dialog.pending_action != "pending_paid":
+            return
+        with self.database.transaction() as connection:
+            pending = connection.execute(
+                """SELECT * FROM pending_edit_requests
+                   WHERE id=? AND status IN ('paid','processing')""",
+                (dialog.pending_request_id,),
+            ).fetchone()
+            if pending is None or pending["platform_user_id"] != event.user_id:
+                raise InvalidInputError("Pending edit request is unavailable")
+            connection.execute(
+                "UPDATE pending_edit_requests SET status='processing',updated_at=? WHERE id=?",
+                (self.demo.clock().isoformat(), dialog.pending_request_id),
+            )
+        updated = self.store.transition(
+            event.user_id,
+            "confirmation",
+            event_key=event.event_key,
+            force=True,
+            user_id=pending["user_id"],
+            session_id=pending["session_id"],
+            current_gallery_item_id=pending["gallery_item_id"],
+            current_version_id=None,
+            pending_prompt=pending["prompt"],
+            pending_action="initial",
+            pending_request_id=pending["id"],
+        )
+        self._generate(event, updated, correction=False)
+
     def _show_continuation_pack_offer(
         self, event: MaxIncomingEvent, dialog: MaxDialog
     ) -> None:
@@ -1658,22 +1804,13 @@ class MaxApplication:
         if current.pending_action == "checkout":
             return
         dialog = current
-        if not dialog.current_version_id and dialog.user_id:
-            with self.database.read() as connection:
-                latest = connection.execute(
-                    """SELECT v.id,v.gallery_item_id
-                       FROM gallery_versions v
-                       JOIN gallery_items i ON i.id=v.gallery_item_id
-                       WHERE i.user_id=? AND i.deleted=0 AND v.status='succeeded'
-                       ORDER BY v.created_at DESC,v.version_number DESC LIMIT 1""",
-                    (dialog.user_id,),
-                ).fetchone()
-            if latest:
-                dialog = self.store.update(
-                    event.user_id,
-                    current_gallery_item_id=latest["gallery_item_id"],
-                    current_version_id=latest["id"],
-                )
+        if not dialog.current_version_id:
+            self._send_message(
+                event.user_id,
+                "Не удалось определить фотографию для оплаты.",
+                (Button("← Назад", "nav:back:main"),),
+            )
+            return
         if dialog.current_version_id and not self.settings.max_single_screen_ui_enabled:
             self._send_selected_preview(
                 event.user_id, dialog, "Выбранная версия"
@@ -1733,21 +1870,12 @@ class MaxApplication:
             if not current.user_id:
                 raise InvalidInputError("No Ravuna account is selected")
             version_id = current.current_version_id
-            if not version_id:
-                with self.database.read() as connection:
-                    latest = connection.execute(
-                        """SELECT v.id FROM gallery_versions v
-                           JOIN gallery_items i ON i.id=v.gallery_item_id
-                           WHERE i.user_id=? AND i.deleted=0 AND v.status='succeeded'
-                           ORDER BY v.created_at DESC,v.version_number DESC LIMIT 1""",
-                        (current.user_id,),
-                    ).fetchone()
-                version_id = latest["id"] if latest else None
-            if not version_id:
+            pending_request_id = current.pending_request_id
+            if not version_id and not pending_request_id:
                 raise InvalidInputError(
-                    "A completed Ravuna version is required for checkout"
+                    "A current Ravuna payment target is required for checkout"
                 )
-            if self._paid_order_exists(current.user_id, version_id):
+            if version_id and self._paid_order_exists(current.user_id, version_id):
                 current = self.store.update(
                     event.user_id,
                     current_version_id=version_id,
@@ -1756,20 +1884,33 @@ class MaxApplication:
                 return
             try:
                 order = self.payments.create_order(
-                    current.user_id, version_id, f"max:{event.event_key}"
+                    current.user_id,
+                    version_id,
+                    f"max:{event.event_key}",
+                    pending_request_id=pending_request_id,
                 )
             except PaymentUnavailable:
                 self._send_message(
                     event.user_id,
                     UNLOCK_PLACEHOLDER,
-                    (Button("← Назад", "nav:back:work"),),
+                    (
+                        Button(
+                            "← Назад",
+                            "nav:back:main" if pending_request_id else "nav:back:work",
+                        ),
+                    ),
                 )
                 return
             except PaymentError:
                 self._send_message(
                     event.user_id,
                     "Не удалось подготовить оплату. Попробуйте позже.",
-                    (Button("← Назад", "nav:back:work"),),
+                    (
+                        Button(
+                            "← Назад",
+                            "nav:back:main" if pending_request_id else "nav:back:work",
+                        ),
+                    ),
                 )
                 return
             self.attribution.record_event(
@@ -1786,7 +1927,10 @@ class MaxApplication:
                 PAYMENT_LINK_TEXT,
                 (
                     Button("Оплатить 49 ₽", order.payment_url or "package:buy"),
-                    Button("← Назад", "nav:back:work"),
+                    Button(
+                        "← Назад",
+                        "nav:back:main" if pending_request_id else "nav:back:work",
+                    ),
                 ),
             )
             self._mark_payment_card_sent(
@@ -1878,10 +2022,16 @@ class MaxApplication:
             row = connection.execute(
                 """SELECT o.user_id,u.platform_user_id,
                           COALESCE(i.version_id,o.version_id) AS target_version_id,
-                          v.gallery_item_id
+                          v.gallery_item_id,
+                          COALESCE(i.pending_request_id,o.pending_request_id) AS pending_request_id,
+                          r.session_id AS pending_session_id,
+                          r.gallery_item_id AS pending_gallery_item_id,
+                          r.prompt AS pending_prompt
                    FROM payment_orders o
                    LEFT JOIN payment_intents i ON i.id=o.intent_id
-                   JOIN gallery_versions v ON v.id=COALESCE(i.version_id,o.version_id)
+                   LEFT JOIN gallery_versions v ON v.id=COALESCE(i.version_id,o.version_id)
+                   LEFT JOIN pending_edit_requests r
+                     ON r.id=COALESCE(i.pending_request_id,o.pending_request_id)
                    JOIN users u ON u.id=o.user_id
                    WHERE o.id=?""",
                 (order_id,),
@@ -1891,14 +2041,56 @@ class MaxApplication:
         if not self.settings.max_single_screen_ui_enabled:
             self._deactivate_payment_card(order_id)
         self.store.get_or_create(row["platform_user_id"], None)
+        balance = self.demo.commerce.balance(row["user_id"])
+        entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
+        if row["pending_request_id"]:
+            if (
+                not row["pending_session_id"]
+                or not row["pending_gallery_item_id"]
+                or not row["pending_prompt"]
+            ):
+                raise PaymentError("Paid pending edit request is incomplete")
+            self.store.transition(
+                row["platform_user_id"],
+                "result_ready",
+                force=True,
+                user_id=row["user_id"],
+                session_id=row["pending_session_id"],
+                current_gallery_item_id=row["pending_gallery_item_id"],
+                current_version_id=None,
+                pending_prompt=row["pending_prompt"],
+                pending_action="pending_paid",
+                pending_request_id=row["pending_request_id"],
+                status_message_id=None,
+            )
+            self._send_message(
+                row["platform_user_id"],
+                "✅ Оплата прошла успешно\n\n"
+                "Фотография и запрос сохранены. Можно начать обработку.\n\n"
+                "Осталось:\n"
+                f"• обработок — {balance.available};\n"
+                f"• оригиналов — {entitlements.available}.",
+                (
+                    Button("Обработать эту фотографию", "pending:process"),
+                    Button("← Назад", "nav:back:main"),
+                ),
+                screen="pending_payment_success",
+            )
+            self.attribution.record_event(
+                row["platform_user_id"],
+                "payment_success",
+                idempotency_key=f"payment-success:{order_id}",
+                user_id=row["user_id"],
+            )
+            return True
+        if not row["target_version_id"] or not row["gallery_item_id"]:
+            raise PaymentError("Paid version target is incomplete")
         self.store.update(
             row["platform_user_id"],
             user_id=row["user_id"],
             current_gallery_item_id=row["gallery_item_id"],
             current_version_id=row["target_version_id"],
         )
-        balance = self.demo.commerce.balance(row["user_id"])
-        entitlements = self.demo.commerce.entitlement_balance(row["user_id"])
         actions = paid_actions()
         if self.settings.max_single_screen_ui_enabled:
             self._send_message(
