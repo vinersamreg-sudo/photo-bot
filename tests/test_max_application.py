@@ -392,25 +392,41 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.provider.calls, provider_calls)
         self.assertIn("Здесь пока пусто", self.transport.edits[-1][1])
 
-    def test_single_screen_repeat_start_reuses_complete_active_menu(self) -> None:
+    def test_single_screen_repeat_start_sends_new_complete_active_menu(self) -> None:
         self.enable_single_screen()
         self.app.handle(self.event("bot_started"))
         active = self.app.ui.current("u1")
         message_count = len(self.transport.messages)
 
         self.app.handle(self.event("message_created", text="/start"))
+        after_command = self.app.ui.current("u1")
         self.app.handle(self.event("message_created", text="Старт"))
 
         current = self.app.ui.current("u1")
         self.assertEqual(self.store.get("u1").state, "main_menu")
-        self.assertEqual(current.message_id, active.message_id)
-        self.assertEqual(len(self.transport.messages), message_count)
-        self.assertEqual(self.transport.edits[-1][0], active.message_id)
-        self.assertIn("Что хотите сделать с фотографией?", self.transport.edits[-1][1])
+        self.assertNotEqual(after_command.message_id, active.message_id)
+        self.assertNotEqual(current.message_id, after_command.message_id)
+        self.assertEqual(len(self.transport.messages), message_count + 2)
+        self.assertEqual(
+            self.transport.deletes,
+            [active.message_id, after_command.message_id],
+        )
+        self.assertEqual(current.message_id, self.transport.messages[-1][4])
+        self.assertIn(
+            "Что хотите сделать с фотографией?",
+            self.transport.messages[-1][1],
+        )
         self.assertIn(
             "📁 Мои работы",
-            [button.text for button in self.transport.edits[-1][2]],
+            [button.text for button in self.transport.messages[-1][2]],
         )
+        message_count = len(self.transport.messages)
+        self.callback("studio:works")
+
+        updated = self.app.ui.current("u1")
+        self.assertEqual(updated.message_id, current.message_id)
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(self.transport.edits[-1][0], current.message_id)
         self.assertEqual(self.provider.calls, 0)
 
     def test_single_screen_processing_becomes_preview_in_same_message(self) -> None:

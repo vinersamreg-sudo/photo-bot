@@ -477,8 +477,7 @@ class MaxApplication:
         )
         if (
             self.settings.max_single_screen_ui_enabled
-            and event.event_type == "message_created"
-            and not is_start
+            and event.event_type in {"message_created", "bot_started"}
         ):
             self.ui.begin_user_input(event.user_id, chat_id=event.chat_id)
         if is_start:

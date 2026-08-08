@@ -48,6 +48,9 @@ pending request; a previous or latest completed work is never used as fallback.
 
 - Show the complete welcome text and main-menu keyboard; `/start` and
   `bot_started` do not enter the photo-waiting state.
+- An explicit `/start`, start text or `bot_started`/deeplink retires the previous
+  active bot screen and sends a new complete start screen below the user action.
+  Callback navigation then continues to edit that new screen in place.
 - The explicit photo-processing action replaces the active screen with the
   upload instruction, enters the photo-waiting state and provides “← Назад”.
 - “← Назад” clears the transient upload state and restores the complete main
