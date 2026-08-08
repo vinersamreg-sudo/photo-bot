@@ -534,9 +534,31 @@ class MaxApiClient:
     ) -> Optional[str]:
         try:
             token = self.upload_image(image)
-            return self.send_message(
-                platform_user_id, caption, buttons, image_token=token, notify=notify
-            )
+            backoff_seconds = (0.5, 1.0)
+            for attempt in range(len(backoff_seconds) + 1):
+                try:
+                    return self.send_message(
+                        platform_user_id,
+                        caption,
+                        buttons,
+                        image_token=token,
+                        notify=notify,
+                    )
+                except MaxTransportError as exc:
+                    attachment_not_ready = (
+                        exc.stage == "image_message_send"
+                        and exc.error_code == "attachment.not.ready"
+                    )
+                    if not attachment_not_ready or attempt >= len(backoff_seconds):
+                        raise
+                    delay = backoff_seconds[attempt]
+                    LOGGER.info(
+                        "MAX image attachment is not ready; retrying "
+                        "(attempt=%s,delay_seconds=%s)",
+                        attempt + 2,
+                        delay,
+                    )
+                    self._sleep(delay)
         except MaxTransportError as exc:
             LOGGER.warning(
                 "MAX image delivery failed (kind=%s,http_status=%s)",

@@ -214,6 +214,7 @@ class MaxUiShell:
         image: Optional[Path] = None,
         expected_revision: Optional[int] = None,
         notify: bool = False,
+        force_new_image_message: bool = False,
     ) -> RenderResult:
         now = _now()
         encoded_context = json.dumps(
@@ -270,7 +271,18 @@ class MaxUiShell:
         )
         message_id = previous_message_id
         used_fallback = False
-        if previous_message_id:
+        replace_with_new_image = bool(
+            previous_message_id and image is not None and force_new_image_message
+        )
+        if replace_with_new_image:
+            message_id = self._send(
+                platform_user_id,
+                text,
+                rendered_buttons,
+                image=image,
+                notify=notify,
+            )
+        elif previous_message_id:
             try:
                 if image is None:
                     self.transport.edit_message(
@@ -329,6 +341,12 @@ class MaxUiShell:
                 current.revision if current else revision,
                 used_fallback,
             )
+        if replace_with_new_image and previous_message_id:
+            try:
+                self.transport.delete_message(previous_message_id)
+            except MaxTransportError:
+                pass
+            self.keyboards.clear_keyboard(platform_user_id, previous_message_id)
         if rendered_buttons and message_id:
             self.keyboards.register_keyboard(platform_user_id, message_id, text)
         elif message_id:

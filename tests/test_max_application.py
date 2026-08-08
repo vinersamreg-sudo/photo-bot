@@ -429,23 +429,59 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.edits[-1][0], current.message_id)
         self.assertEqual(self.provider.calls, 0)
 
-    def test_single_screen_processing_becomes_preview_in_same_message(self) -> None:
+    def test_single_screen_finished_preview_is_new_native_image_message(self) -> None:
         self.enable_single_screen()
         self.generate_first()
 
         self.assertEqual(len(self.transport.messages), 2)
-        self.assertEqual(len(self.transport.images), 0)
-        self.assertEqual(len(self.transport.image_edits), 1)
+        self.assertEqual(len(self.transport.images), 1)
+        self.assertEqual(len(self.transport.image_edits), 0)
         active = self.app.ui.current("u1")
+        processing_message_id = self.transport.messages[-1][4]
         self.assertEqual(self.transport.messages[-1][1], PROCESSING_TEXT)
-        self.assertEqual(self.transport.deletes, [self.transport.messages[0][4]])
+        self.assertEqual(
+            self.transport.deletes,
+            [self.transport.messages[0][4], processing_message_id],
+        )
         self.assertNotIn("mid-2", self.transport.deletes)
-        self.assertEqual(self.transport.messages[-1][4], active.message_id)
-        self.assertEqual(self.transport.image_edits[-1][0], active.message_id)
-        self.assertEqual(self.transport.image_edits[-1][2], "Готово")
+        self.assertEqual(active.message_id, "image-1")
+        self.assertNotEqual(processing_message_id, active.message_id)
+        self.assertEqual(self.transport.images[-1][2], "Готово")
         self.assertEqual(
             self.demo.commerce.balance(self.store.get("u1").user_id).available,
             1,
+        )
+
+    def test_single_screen_failed_fresh_preview_keeps_processing_and_credit(self) -> None:
+        self.enable_single_screen()
+        self.transport.image_delivery = False
+
+        self.app.handle(self.event("bot_started"))
+        self.app.handle(
+            self.event(
+                "message_created",
+                text="Сделай светлый фон",
+                image_url="https://iu.oneme.ru/source",
+            )
+        )
+
+        processing_message_id = self.transport.messages[-1][4]
+        active = self.app.ui.current("u1")
+        with self.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT status FROM generation_attempts"
+            ).fetchone()
+        self.assertEqual(attempt[0], "delivery_failed")
+        self.assertEqual(
+            self.demo.commerce.balance(self.store.get("u1").user_id).available,
+            2,
+        )
+        self.assertEqual(active.message_id, processing_message_id)
+        self.assertNotIn(processing_message_id, self.transport.deletes)
+        self.assertEqual(len(self.transport.image_edits), 0)
+        self.assertEqual(
+            self.transport.edits[-1][1],
+            "Изображение создано, но не удалось отправить его в MAX. Попытка не списана.",
         )
 
     def test_single_screen_edit_fallback_sends_once_and_deletes_old_bot_message(self) -> None:
@@ -615,6 +651,7 @@ class MaxApplicationTests(TestCase):
         self.callback("result:correct")
         old_active = self.app.ui.current("u1").message_id
         messages_before = len(self.transport.messages)
+        image_edits_before = len(self.transport.image_edits)
         self.clock.advance(2)
 
         correction_event = self.event(
@@ -623,13 +660,17 @@ class MaxApplicationTests(TestCase):
         self.app.handle(correction_event)
 
         active = self.app.ui.current("u1")
+        processing_message_id = self.transport.messages[-1][4]
         self.assertEqual(len(self.transport.messages), messages_before + 1)
         self.assertEqual(self.transport.messages[-1][1], PROCESSING_TEXT)
-        self.assertEqual(self.transport.messages[-1][4], active.message_id)
+        self.assertEqual(active.message_id, f"image-{len(self.transport.images)}")
+        self.assertNotEqual(processing_message_id, active.message_id)
         self.assertNotEqual(active.message_id, old_active)
         self.assertIn(old_active, self.transport.deletes)
+        self.assertIn(processing_message_id, self.transport.deletes)
         self.assertNotIn(correction_event.message_id, self.transport.deletes)
-        self.assertEqual(self.transport.image_edits[-1][0], active.message_id)
+        self.assertEqual(len(self.transport.image_edits), image_edits_before)
+        self.assertEqual(self.transport.images[-1][2], "Готово")
 
     def test_single_screen_gallery_page_switch_changes_sheet_and_mapping(self) -> None:
         self.enable_single_screen()

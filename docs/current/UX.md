@@ -83,8 +83,10 @@ pending request; a previous or latest completed work is never used as fallback.
 - “Исправить” must explain in one response what to type, with short examples.
 - When no edits remain, do not invite correction; offer the existing package.
 - Every callback must produce visible feedback or a clear unavailable message.
-- The processing screen becomes the watermarked result in the same active
-  message. The result and selected-work screens include
+- The processing text is temporary. A finished watermarked preview is sent as a
+  new native image message, adopted as the active UI message, and only then is
+  the processing message deleted. Subsequent callback navigation continues
+  edit-in-place. The result and selected-work screens include
   “📤 Поделиться результатом”.
 
 ## Works and versions

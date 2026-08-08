@@ -1583,20 +1583,25 @@ class MaxApplication:
             nonlocal preview_delivered
             caption = result_actions(remaining_after).text
             if self.settings.max_single_screen_ui_enabled:
-                rendered = self.ui.render(
-                    event.user_id,
-                    text=caption,
-                    buttons=result_actions(remaining_after).buttons,
-                    screen="result_ready",
-                    context={
-                        "gallery_item_id": dialog.current_gallery_item_id,
-                        "version_id": dialog.current_version_id,
-                    },
-                    chat_id=event.chat_id,
-                    image=preview,
-                    expected_revision=processing_revision,
-                    notify=False,
-                )
+                try:
+                    rendered = self.ui.render(
+                        event.user_id,
+                        text=caption,
+                        buttons=result_actions(remaining_after).buttons,
+                        screen="result_ready",
+                        context={
+                            "gallery_item_id": dialog.current_gallery_item_id,
+                            "version_id": dialog.current_version_id,
+                        },
+                        chat_id=event.chat_id,
+                        image=preview,
+                        expected_revision=processing_revision,
+                        notify=False,
+                        force_new_image_message=True,
+                    )
+                except MaxTransportError:
+                    LOGGER.info("MAX fresh preview delivery failed safely")
+                    return False
                 if not rendered.applied:
                     try:
                         self.transport.send_message(

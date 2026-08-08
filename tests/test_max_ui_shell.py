@@ -19,6 +19,7 @@ class FakeUiTransport:
         self.image_edits = []
         self.deletes = []
         self.fail_edit = False
+        self.fail_image_send = False
 
     def send_message(self, user_id, text, buttons=(), **kwargs):
         message_id = f"bot-{len(self.sends) + len(self.image_sends) + 1}"
@@ -32,6 +33,8 @@ class FakeUiTransport:
         self.edits.append((message_id, text, tuple(buttons), kwargs))
 
     def send_image(self, user_id, image, caption, buttons, **kwargs):
+        if self.fail_image_send:
+            return None
         message_id = f"bot-{len(self.sends) + len(self.image_sends) + 1}"
         self.image_sends.append(
             (user_id, Path(image), caption, tuple(buttons), kwargs, message_id)
@@ -88,6 +91,51 @@ class MaxUiShellTests(TestCase):
         self.assertTrue(
             self.shell.callback_is_current("u1", second.message_id, second.revision)
         )
+
+    def test_finished_preview_sends_new_image_then_deletes_processing_message(self) -> None:
+        processing = self.shell.render(
+            "u1", text="Обрабатываю", screen="processing"
+        )
+
+        result = self.shell.render(
+            "u1",
+            text="Готово",
+            buttons=(Button("Назад", "menu"),),
+            screen="result_ready",
+            image=self.image,
+            expected_revision=processing.revision,
+            force_new_image_message=True,
+        )
+
+        self.assertEqual(len(self.transport.image_sends), 1)
+        self.assertEqual(len(self.transport.image_edits), 0)
+        self.assertEqual(self.transport.deletes, [processing.message_id])
+        self.assertNotEqual(result.message_id, processing.message_id)
+        self.assertEqual(self.shell.current("u1").message_id, result.message_id)
+
+        self.shell.render("u1", text="Главное меню", screen="main")
+        self.assertEqual(self.transport.edits[-1][0], result.message_id)
+
+    def test_failed_fresh_image_send_keeps_processing_message(self) -> None:
+        processing = self.shell.render(
+            "u1", text="Обрабатываю", screen="processing"
+        )
+        self.transport.fail_image_send = True
+
+        with self.assertRaises(MaxTransportError):
+            self.shell.render(
+                "u1",
+                text="Готово",
+                screen="result_ready",
+                image=self.image,
+                expected_revision=processing.revision,
+                force_new_image_message=True,
+            )
+
+        self.assertEqual(len(self.transport.image_sends), 0)
+        self.assertEqual(len(self.transport.image_edits), 0)
+        self.assertEqual(self.transport.deletes, [])
+        self.assertEqual(self.shell.current("u1").message_id, processing.message_id)
 
     def test_failed_edit_sends_once_then_deletes_only_old_bot_message(self) -> None:
         first = self.shell.render("u1", text="Первый", screen="main")
