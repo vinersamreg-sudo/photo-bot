@@ -31,6 +31,22 @@ class DeployPolicyTests(TestCase):
         self.assertIn("--include='/site/nginx/ravuna.ru.conf'", self.workflow)
         self.assertIn("--exclude='/site/***'", self.workflow)
 
+    def test_ravuna_payment_nginx_deploy_uses_bounded_sudo_with_rollback(self) -> None:
+        script = (ROOT / "ops" / "deploy_nginx_ravuna_payment.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn(
+            'sudo -n bash "$ROOT/ops/deploy_nginx_ravuna_payment.sh"', self.workflow
+        )
+        self.assertIn('bash "$ROOT/ops/deploy_nginx_ravuna_payment.sh"', self.workflow)
+        self.assertIn(
+            'sudo -n install -o root -g root -m 644 "$CANDIDATE" "$ACTIVE"',
+            script,
+        )
+        self.assertIn("sudo -n nginx -t", script)
+        self.assertIn("sudo -n systemctl reload nginx", script)
+        self.assertIn("trap rollback ERR", script)
+
     def test_operating_flags_preserve_live_state_but_fresh_env_is_fail_closed(self) -> None:
         for key, default in (
             ("MAX_PUBLIC_ACCESS_ENABLED", "false"),

@@ -646,7 +646,7 @@ jobs:
               done
               test "$RESTARTED" = 1
               ! kill -0 "$OLD_PID" 2>/dev/null
-              sudo -n bash "$ROOT/ops/deploy_nginx_ravuna_payment.sh" \
+              bash "$ROOT/ops/deploy_nginx_ravuna_payment.sh" \
                 "$ROOT/site/nginx/ravuna.ru.conf"
             else
               rm -f "$ROOT/data/photo-bot.pid"

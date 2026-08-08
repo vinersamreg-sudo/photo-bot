@@ -41,9 +41,11 @@ Production secrets alone must not silently make a fresh server public.
 7. Synchronize code while preserving mutable paths.
 8. Install/check dependencies and run migrations.
 9. Install/restart one hardened systemd service.
-10. Run health, migration, ledger, storage and runtime audits.
-11. Record exact deployed SHA only after successful health checks.
-12. Verify ResultURL transport without creating payment state.
+10. Install the exact Ravuna payment/return nginx routes through bounded sudo
+    commands with config validation and automatic rollback.
+11. Run health, migration, ledger, storage and runtime audits.
+12. Record exact deployed SHA only after successful health checks.
+13. Verify ResultURL transport without creating payment state.
 
 ## Production snapshot
 
