@@ -43,7 +43,9 @@ Production secrets alone must not silently make a fresh server public.
 9. Install/restart one hardened systemd service.
 10. Before the application workflow, a root operator installs the exact Ravuna
     payment/return nginx routes with `ops/deploy_nginx_ravuna_payment.sh`; the
-    workflow verifies the backend-marked route before stopping the service.
+    workflow verifies the nginx-owned route marker before stopping the service.
+    This marker is deliberately independent of the backend SHA, so routes can be
+    published safely while the previous backend still serves the established flow.
 11. Run health, migration, ledger, storage and runtime audits.
 12. Record exact deployed SHA only after successful health checks.
 13. Verify ResultURL transport without creating payment state.

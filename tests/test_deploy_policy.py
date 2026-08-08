@@ -7,6 +7,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 ENV_EXAMPLE = ROOT / ".env.example"
 SERVICE = ROOT / "ops" / "photo-bot.service"
 NGINX_RESULTURL_DEPLOY = ROOT / "ops" / "deploy_nginx_resulturl.sh"
+NGINX_RAVUNA_CONFIG = ROOT / "site" / "nginx" / "ravuna.ru.conf"
 
 
 class DeployPolicyTests(TestCase):
@@ -35,6 +36,7 @@ class DeployPolicyTests(TestCase):
         script = (ROOT / "ops" / "deploy_nginx_ravuna_payment.sh").read_text(
             encoding="utf-8"
         )
+        nginx_config = NGINX_RAVUNA_CONFIG.read_text(encoding="utf-8")
         self.assertIn('if [ "$(id -u)" -ne 0 ]', script)
         self.assertIn('install -o root -g root -m 644 "$CANDIDATE" "$ACTIVE"', script)
         self.assertIn("nginx -t", script)
@@ -42,12 +44,20 @@ class DeployPolicyTests(TestCase):
         self.assertIn("trap rollback ERR", script)
         self.assertIn("Require preinstalled Ravuna payment routes", self.workflow)
         self.assertIn("https://ravuna.ru/p/00000000000000000000000000000000", self.workflow)
-        self.assertIn("RavunaPaymentWebhook", self.workflow)
+        self.assertIn("X-Ravuna-Payment-Route: active", self.workflow)
         self.assertIn("Validate Ravuna nginx candidate with nginx", self.workflow)
         self.assertIn("nginx:1.27-alpine nginx -t", self.workflow)
         self.assertIn(
             'location ~ "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$" {',
             script,
+        )
+        self.assertIn(
+            'add_header X-Ravuna-Payment-Route "active" always;',
+            script,
+        )
+        self.assertIn(
+            'add_header X-Ravuna-Payment-Route "active" always;',
+            nginx_config,
         )
 
     def test_operating_flags_preserve_live_state_but_fresh_env_is_fail_closed(self) -> None:

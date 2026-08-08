@@ -25,6 +25,7 @@ fi
 grep -F 'proxy_pass http://127.0.0.1:8091$request_uri;' "$CANDIDATE" >/dev/null
 grep -F 'location ~ "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$" {' \
   "$CANDIDATE" >/dev/null
+grep -F 'add_header X-Ravuna-Payment-Route "active" always;' "$CANDIDATE" >/dev/null
 
 cp "$ACTIVE" "$BACKUP"
 rollback() {
@@ -46,13 +47,13 @@ for _attempt in $(seq 1 10); do
   STATUS=$(curl --silent --show-error --output /dev/null --dump-header "$HEADERS" \
     --write-out '%{http_code}' --resolve ravuna.ru:443:127.0.0.1 \
     https://ravuna.ru/p/00000000000000000000000000000000)
-  if [ "$STATUS" = 404 ] && grep -Fi 'RavunaPaymentWebhook' "$HEADERS" >/dev/null; then
+  if [ "$STATUS" = 404 ] && grep -Fi 'X-Ravuna-Payment-Route: active' "$HEADERS" >/dev/null; then
     break
   fi
   sleep 1
 done
 test "$STATUS" = 404
-grep -Fi 'RavunaPaymentWebhook' "$HEADERS" >/dev/null
+grep -Fi 'X-Ravuna-Payment-Route: active' "$HEADERS" >/dev/null
 
 trap - ERR
 rm -f "$HEADERS"

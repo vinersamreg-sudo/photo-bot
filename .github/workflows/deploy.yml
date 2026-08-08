@@ -222,7 +222,7 @@ jobs:
               --write-out '%{http_code}' --resolve ravuna.ru:443:127.0.0.1 \
               https://ravuna.ru/p/00000000000000000000000000000000)
             test "$STATUS" = 404
-            grep -Fi 'RavunaPaymentWebhook' "$HEADERS" >/dev/null
+            grep -Fi 'X-Ravuna-Payment-Route: active' "$HEADERS" >/dev/null
             printf 'ravuna_payment_route_preflight=%s\n' "$STATUS"
           REMOTE
       - name: Require idle production before deployment
