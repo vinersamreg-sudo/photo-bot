@@ -195,6 +195,24 @@ jobs:
           path: artifact/pre-deploy-status.txt
           if-no-files-found: error
           retention-days: 14
+      - name: Require preinstalled Ravuna payment routes
+        if: env.DEPLOY_CONFIGURED == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            HEADERS=$(mktemp /tmp/ravuna-payment-preflight.XXXXXX)
+            trap 'rm -f "$HEADERS"' EXIT
+            STATUS=$(curl --silent --show-error --output /dev/null --dump-header "$HEADERS" \
+              --write-out '%{http_code}' --resolve ravuna.ru:443:127.0.0.1 \
+              https://ravuna.ru/p/00000000000000000000000000000000)
+            test "$STATUS" = 404
+            grep -Fi 'RavunaPaymentWebhook' "$HEADERS" >/dev/null
+            printf 'ravuna_payment_route_preflight=%s\n' "$STATUS"
+          REMOTE
       - name: Require idle production before deployment
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -646,8 +664,6 @@ jobs:
               done
               test "$RESTARTED" = 1
               ! kill -0 "$OLD_PID" 2>/dev/null
-              bash "$ROOT/ops/deploy_nginx_ravuna_payment.sh" \
-                "$ROOT/site/nginx/ravuna.ru.conf"
             else
               rm -f "$ROOT/data/photo-bot.pid"
               if systemctl cat photo-bot.service >/dev/null 2>&1; then

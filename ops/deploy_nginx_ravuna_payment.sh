@@ -2,10 +2,14 @@
 set -euo pipefail
 
 CANDIDATE="${1:-}"
+if [ "$(id -u)" -ne 0 ]; then
+  echo "deploy_nginx_ravuna_payment.sh must run as root" >&2
+  exit 1
+fi
+
 ACTIVE=/etc/nginx/sites-available/ravuna.ru
 ENABLED=/etc/nginx/sites-enabled/ravuna.ru
 BACKUP=$(mktemp /tmp/ravuna.ru.conf.backup.XXXXXX)
-INSTALLED=0
 
 cleanup() { rm -f "$BACKUP"; }
 if [ -z "$CANDIDATE" ] || [ ! -f "$CANDIDATE" ] || [ -L "$CANDIDATE" ]; then
@@ -23,23 +27,16 @@ grep -F '^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$' "$CANDIDATE" >/dev/nu
 
 cp "$ACTIVE" "$BACKUP"
 rollback() {
-  status=$?
-  trap - ERR
-  set +e
-  if [ "$INSTALLED" = 1 ]; then
-    sudo -n install -o root -g root -m 644 "$BACKUP" "$ACTIVE"
-    sudo -n nginx -t >/dev/null
-    sudo -n systemctl reload nginx
-  fi
+  install -o root -g root -m 644 "$BACKUP" "$ACTIVE"
+  nginx -t >/dev/null
+  systemctl reload nginx
   cleanup
-  exit "$status"
 }
 trap rollback ERR
 
-sudo -n install -o root -g root -m 644 "$CANDIDATE" "$ACTIVE"
-INSTALLED=1
-sudo -n nginx -t
-sudo -n systemctl reload nginx
+install -o root -g root -m 644 "$CANDIDATE" "$ACTIVE"
+nginx -t
+systemctl reload nginx
 
 HEADERS=$(mktemp /tmp/ravuna-payment-headers.XXXXXX)
 trap 'rm -f "$HEADERS"; rollback' ERR
