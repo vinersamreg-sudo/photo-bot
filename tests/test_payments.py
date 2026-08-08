@@ -162,8 +162,8 @@ class PaymentTests(TestCase):
         self.assertEqual(receipt["items"][0]["name"], "Пакет доступа Ravuna")
         expected_signature_base = (
             f"ravuna-test:49.00:{order.provider_invoice_id}:"
-            f"{receipt_once_encoded}:{quote_plus(success_url, safe='')}:GET:"
-            f"{quote_plus(fail_url, safe='')}:GET:"
+            f"{receipt_once_encoded}:{success_url}:GET:"
+            f"{fail_url}:GET:"
             f"password-one:Shp_order={order.public_token}"
         )
         self.assertEqual(
@@ -1073,7 +1073,7 @@ class PaymentTests(TestCase):
 
 
 class RobokassaSignatureTests(TestCase):
-    def test_production_form_uses_official_receipt_return_url_and_shp_signature(self) -> None:
+    def test_production_form_signs_exact_post_return_url_values(self) -> None:
         provider = RobokassaProvider(
             merchant_login="ravuna-production",
             password1="fixture-password-one",
@@ -1103,11 +1103,9 @@ class RobokassaSignatureTests(TestCase):
         form = provider.payment_form(request)
         fields = dict(form.fields)
         receipt = quote_plus(provider._receipt(request), safe="")
-        success = quote_plus(request.success_url, safe="")
-        failure = quote_plus(request.fail_url, safe="")
         expected_redacted = (
             "ravuna-production:49.00:9223372036854775000:"
-            f"{receipt}:{success}:GET:{failure}:GET:[PASSWORD1]:"
+            f"{receipt}:{request.success_url}:GET:{request.fail_url}:GET:[PASSWORD1]:"
             "Shp_order=0123456789abcdef0123456789abcdef"
         )
         expected_actual = expected_redacted.replace(

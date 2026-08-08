@@ -51,9 +51,10 @@ Outgoing payment signature uses the established canonical fields:
 MerchantLogin:OutSum:InvId:Receipt:SuccessUrl2:SuccessUrl2Method:FailUrl2:FailUrl2Method:Password1:Shp_order=...
 ```
 
-`Receipt` and ReturnURL modifiers are signed in their canonical
-`application/x-www-form-urlencoded` representation. The signed values and the
-POST fields must be built by the same request builder.
+`Receipt` is signed as the provider's once-encoded JSON value. ReturnURL
+modifiers are signed as the exact raw URL values placed in the POST fields;
+HTML form encoding is applied only by the transport afterwards. The signed
+values and the POST fields must be built by the same request builder.
 
 ResultURL verification uses the Robokassa callback contract and Password #2.
 Refund operations, when separately enabled, use their dedicated credential and

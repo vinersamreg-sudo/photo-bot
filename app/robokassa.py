@@ -173,9 +173,10 @@ class RobokassaProvider:
         expiration_date = request.expires_at.astimezone(
             ROBOKASSA_TIMEZONE
         ).strftime("%Y-%m-%dT%H:%M")
-        # Receipt and ReturnURL modifiers participate in SignatureValue in
-        # application/x-www-form-urlencoded form. quote_plus keeps the signed
-        # value identical to Robokassa's documented canonical representation.
+        # Receipt is passed as the provider's once-encoded JSON value. ReturnURL
+        # modifiers, however, must be signed exactly as they appear in the POST
+        # fields; the browser applies application/x-www-form-urlencoded escaping
+        # to the transport after SignatureValue has already been calculated.
         receipt_encoded = quote_plus(self._receipt(request), safe="")
         shp = {"Shp_order": request.public_token}
         signature_parts = [
@@ -188,9 +189,9 @@ class RobokassaProvider:
             raise ValueError("Robokassa return URLs must be configured together")
         if request.success_url:
             signature_parts.extend((
-                quote_plus(request.success_url, safe=""),
+                request.success_url,
                 "GET",
-                quote_plus(request.fail_url, safe=""),
+                request.fail_url,
                 "GET",
             ))
         signature_parts.append(self.password1)
