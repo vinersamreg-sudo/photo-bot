@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import threading
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -94,6 +95,43 @@ class PaymentWebhookServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _payment_form(self, token: str) -> None:
+                form = owner.service.payment_redirect_form(token)
+                nonce = secrets.token_urlsafe(18)
+                fields = "".join(
+                    '<input type="hidden" name="{}" value="{}">'.format(
+                        escape(name, quote=True), escape(value, quote=True)
+                    )
+                    for name, value in form.fields
+                )
+                body = (
+                    '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                    '<title>Переходим к оплате…</title></head><body>'
+                    '<main><p>Переходим к безопасной оплате…</p>'
+                    f'<form id="robokassa-payment" method="post" action="{escape(form.action_url, quote=True)}">'
+                    f'{fields}<noscript><button type="submit">Перейти к оплате</button></noscript>'
+                    '</form></main>'
+                    f'<script nonce="{nonce}">document.getElementById("robokassa-payment").submit();</script>'
+                    '</body></html>'
+                ).encode("utf-8")
+                action = urlsplit(form.action_url)
+                action_origin = f"{action.scheme}://{action.netloc}"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'none'; "
+                    f"script-src 'nonce-{nonce}'; form-action {action_origin}; "
+                    "base-uri 'none'; frame-ancestors 'none'",
+                )
+                self.end_headers()
+                self.wfile.write(body)
+
             def _max_url(self, token: str, *, failed: bool = False) -> str:
                 separator = "&" if "?" in owner.service.settings.max_bot_url else "?"
                 prefix = "payfail_" if failed else "pay_"
@@ -120,7 +158,7 @@ class PaymentWebhookServer:
                 try:
                     order = owner.service.order_by_public_token(token)
                     if kind == "checkout":
-                        self._empty(303, location=owner.service.payment_redirect_url(token))
+                        self._payment_form(token)
                         return True
                 except (PaymentError, PaymentUnavailable):
                     self._page(404, "Ссылка недоступна", "Срок действия ссылки истёк или она неверна.")

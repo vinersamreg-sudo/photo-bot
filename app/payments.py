@@ -27,6 +27,7 @@ from app.database import Database
 from app.domain import InvalidInputError, PaymentRequiredError
 from app.robokassa import (
     RobokassaError,
+    RobokassaPaymentForm,
     RobokassaPaymentRequest,
     RobokassaProvider,
     RobokassaRefundRequest,
@@ -70,6 +71,7 @@ class PaymentProvider(Protocol):
     merchant_login: str
 
     def payment_link(self, request: RobokassaPaymentRequest) -> str: ...
+    def payment_form(self, request: RobokassaPaymentRequest) -> RobokassaPaymentForm: ...
     def parse_notification(self, values: Mapping[str, str]): ...
     def create_refund(self, request: RobokassaRefundRequest): ...
     def refund_status(self, request_id: str) -> tuple[str, int]: ...
@@ -390,6 +392,9 @@ class PaymentService:
         return f"{self._public_origin()}/p/{order.public_token}"
 
     def _provider_payment_url(self, order: PaymentOrder) -> str:
+        return self._provider_payment_form(order).as_url()
+
+    def _provider_payment_form(self, order: PaymentOrder) -> RobokassaPaymentForm:
         provider = self._require_provider()
         origin = self._public_origin()
         request = RobokassaPaymentRequest(
@@ -403,7 +408,7 @@ class PaymentService:
             success_url=f"{origin}/payment/success/{order.public_token}",
             fail_url=f"{origin}/payment/fail/{order.public_token}",
         )
-        return provider.payment_link(request)
+        return provider.payment_form(request)
 
     def payment_redirect_url(self, public_token: str) -> str:
         """Return the signed provider URL for an existing active order only."""
@@ -412,6 +417,14 @@ class PaymentService:
         if order.status is not PaymentStatus.PENDING or self.clock() >= order.expires_at:
             raise PaymentError("Payment link is no longer active")
         return self._provider_payment_url(order)
+
+    def payment_redirect_form(self, public_token: str) -> RobokassaPaymentForm:
+        """Return signed POST fields for an existing active order only."""
+
+        order = self.order_by_public_token(public_token)
+        if order.status is not PaymentStatus.PENDING or self.clock() >= order.expires_at:
+            raise PaymentError("Payment link is no longer active")
+        return self._provider_payment_form(order)
 
     def create_order(
         self,

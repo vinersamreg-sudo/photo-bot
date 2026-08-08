@@ -26,8 +26,9 @@
 2. The “Оплатить 49 ₽” button contains only Ravuna's short opaque URL
    `https://ravuna.ru/p/<opaque-token>`; no long provider URL or intermediate
    “link ready” screen is shown.
-3. The short endpoint resolves only an active owned order and redirects the
-   browser to its freshly signed Robokassa URL.
+3. The short endpoint resolves only an active owned order and returns an
+   auto-submitted POST form to Robokassa. Provider parameters are hidden form
+   fields, so the browser address bar does not contain the long signed query.
 4. Robokassa POSTs ResultURL.
 5. Ravuna verifies Password #2 signature, amount, invoice and order state.
 6. One transaction marks the order paid and grants +2 edits and +1 original.
@@ -49,6 +50,10 @@ Outgoing payment signature uses the established canonical fields:
 ```text
 MerchantLogin:OutSum:InvId:Receipt:SuccessUrl2:SuccessUrl2Method:FailUrl2:FailUrl2Method:Password1:Shp_order=...
 ```
+
+`Receipt` and ReturnURL modifiers are signed in their canonical
+`application/x-www-form-urlencoded` representation. The signed values and the
+POST fields must be built by the same request builder.
 
 ResultURL verification uses the Robokassa callback contract and Password #2.
 Refund operations, when separately enabled, use their dedicated credential and

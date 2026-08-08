@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, unquote_plus, urlparse
 
 import httpx
 from PIL import Image
@@ -131,7 +131,7 @@ class PaymentTests(TestCase):
         self.assertEqual(query["FailUrl2Method"], ["GET"])
         self.assertIn("Receipt", query)
         receipt_once_encoded = query["Receipt"][0]
-        receipt_text = unquote(receipt_once_encoded)
+        receipt_text = unquote_plus(receipt_once_encoded)
         self.assertIn('"sum":49.00', receipt_text)
         self.assertNotIn("149", receipt_text)
         receipt = json.loads(receipt_text)
@@ -158,12 +158,12 @@ class PaymentTests(TestCase):
         )
         self.assertIn("%25", raw_receipt)
         self.assertEqual(unquote(raw_receipt), receipt_once_encoded)
-        self.assertEqual(unquote(unquote(raw_receipt)), receipt_text)
+        self.assertEqual(unquote_plus(unquote(raw_receipt)), receipt_text)
         self.assertEqual(receipt["items"][0]["name"], "Пакет доступа Ravuna")
         expected_signature_base = (
             f"ravuna-test:49.00:{order.provider_invoice_id}:"
-            f"{receipt_once_encoded}:{quote(success_url, safe='')}:GET:"
-            f"{quote(fail_url, safe='')}:GET:"
+            f"{receipt_once_encoded}:{quote_plus(success_url, safe='')}:GET:"
+            f"{quote_plus(fail_url, safe='')}:GET:"
             f"password-one:Shp_order={order.public_token}"
         )
         self.assertEqual(
@@ -1014,8 +1014,20 @@ class PaymentTests(TestCase):
         self.addCleanup(server.stop)
         base = f"http://127.0.0.1:{server.bound_port}"
         short = httpx.get(f"{base}/p/{order.public_token}")
-        self.assertEqual(short.status_code, 303)
-        self.assertEqual(short.headers["location"], order.payment_url)
+        self.assertEqual(short.status_code, 200)
+        self.assertNotIn("location", short.headers)
+        self.assertIn('method="post"', short.text)
+        self.assertIn(
+            'action="https://auth.robokassa.ru/Merchant/Index.aspx"',
+            short.text,
+        )
+        self.assertNotIn("Merchant/Index.aspx?", short.text)
+        self.assertIn('name="SignatureValue"', short.text)
+        self.assertIn('name="Receipt"', short.text)
+        self.assertIn('name="SuccessUrl2"', short.text)
+        self.assertIn('name="FailUrl2"', short.text)
+        self.assertNotIn("password-one", short.text)
+        self.assertIn("form-action https://auth.robokassa.ru", short.headers["content-security-policy"])
         pending_return = httpx.get(
             f"{base}/payment/success/{order.public_token}"
         )
@@ -1061,6 +1073,65 @@ class PaymentTests(TestCase):
 
 
 class RobokassaSignatureTests(TestCase):
+    def test_production_form_uses_official_receipt_return_url_and_shp_signature(self) -> None:
+        provider = RobokassaProvider(
+            merchant_login="ravuna-production",
+            password1="fixture-password-one",
+            password2="fixture-password-two",
+            hash_algorithm="sha256",
+            mode="production",
+        )
+        self.addCleanup(provider.close)
+        request = RobokassaPaymentRequest(
+            invoice_id=9_223_372_036_854_775_000,
+            amount_minor=4900,
+            description="Пакет доступа Ravuna",
+            public_token="0123456789abcdef0123456789abcdef",
+            expires_at=datetime(2026, 8, 8, 12, 30, tzinfo=timezone.utc),
+            receipt_name="Пакет доступа Ravuna",
+            receipt_tax="none",
+            success_url=(
+                "https://ravuna.ru/payment/success/"
+                "0123456789abcdef0123456789abcdef"
+            ),
+            fail_url=(
+                "https://ravuna.ru/payment/fail/"
+                "0123456789abcdef0123456789abcdef"
+            ),
+        )
+
+        form = provider.payment_form(request)
+        fields = dict(form.fields)
+        receipt = quote_plus(provider._receipt(request), safe="")
+        success = quote_plus(request.success_url, safe="")
+        failure = quote_plus(request.fail_url, safe="")
+        expected_redacted = (
+            "ravuna-production:49.00:9223372036854775000:"
+            f"{receipt}:{success}:GET:{failure}:GET:[PASSWORD1]:"
+            "Shp_order=0123456789abcdef0123456789abcdef"
+        )
+        expected_actual = expected_redacted.replace(
+            "[PASSWORD1]", "fixture-password-one"
+        )
+
+        self.assertEqual(form.signature_base_redacted, expected_redacted)
+        self.assertIn("+", receipt)
+        self.assertNotIn("%20", receipt)
+        self.assertEqual(fields["Receipt"], receipt)
+        self.assertEqual(fields["SuccessUrl2"], request.success_url)
+        self.assertEqual(fields["SuccessUrl2Method"], "GET")
+        self.assertEqual(fields["FailUrl2"], request.fail_url)
+        self.assertEqual(fields["FailUrl2Method"], "GET")
+        self.assertEqual(fields["Shp_order"], request.public_token)
+        self.assertNotIn("IsTest", fields)
+        self.assertNotIn("StepByStep", fields)
+        self.assertNotIn("ResultUrl2", fields)
+        self.assertEqual(
+            fields["SignatureValue"],
+            hashlib.sha256(expected_actual.encode("utf-8")).hexdigest().upper(),
+        )
+        self.assertNotIn("fixture-password-one", form.signature_base_redacted)
+
     def test_provider_rejects_non_sha256_algorithms(self) -> None:
         for rejected in ("md5", "sha512"):
             with self.subTest(rejected=rejected):

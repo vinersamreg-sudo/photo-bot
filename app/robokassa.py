@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping
-from urllib.parse import quote, urlencode
+from urllib.parse import quote_plus, urlencode
 
 import httpx
 
@@ -33,6 +33,18 @@ class RobokassaPaymentRequest:
     receipt_tax: str
     success_url: str = ""
     fail_url: str = ""
+
+
+@dataclass(frozen=True)
+class RobokassaPaymentForm:
+    """Signed provider form assembled once for either POST or legacy GET use."""
+
+    action_url: str
+    fields: tuple[tuple[str, str], ...]
+    signature_base_redacted: str
+
+    def as_url(self) -> str:
+        return f"{self.action_url}?{urlencode(self.fields)}"
 
 
 @dataclass(frozen=True)
@@ -155,13 +167,16 @@ class RobokassaProvider:
     def _shp(params: Mapping[str, str]) -> str:
         return "".join(f":{key}={params[key]}" for key in sorted(params))
 
-    def payment_link(self, request: RobokassaPaymentRequest) -> str:
+    def payment_form(self, request: RobokassaPaymentRequest) -> RobokassaPaymentForm:
         if request.expires_at.tzinfo is None:
             raise ValueError("Robokassa expiration date must be timezone-aware")
         expiration_date = request.expires_at.astimezone(
             ROBOKASSA_TIMEZONE
         ).strftime("%Y-%m-%dT%H:%M")
-        receipt_encoded = quote(self._receipt(request), safe="")
+        # Receipt and ReturnURL modifiers participate in SignatureValue in
+        # application/x-www-form-urlencoded form. quote_plus keeps the signed
+        # value identical to Robokassa's documented canonical representation.
+        receipt_encoded = quote_plus(self._receipt(request), safe="")
         shp = {"Shp_order": request.public_token}
         signature_parts = [
             self.merchant_login,
@@ -173,13 +188,15 @@ class RobokassaProvider:
             raise ValueError("Robokassa return URLs must be configured together")
         if request.success_url:
             signature_parts.extend((
-                quote(request.success_url, safe=""),
+                quote_plus(request.success_url, safe=""),
                 "GET",
-                quote(request.fail_url, safe=""),
+                quote_plus(request.fail_url, safe=""),
                 "GET",
             ))
         signature_parts.append(self.password1)
         base = ":".join(signature_parts) + self._shp(shp)
+        redacted_parts = [*signature_parts[:-1], "[PASSWORD1]"]
+        redacted_base = ":".join(redacted_parts) + self._shp(shp)
         params: dict[str, str] = {
             "MerchantLogin": self.merchant_login,
             "OutSum": amount_text(request.amount_minor),
@@ -203,7 +220,16 @@ class RobokassaProvider:
                 "FailUrl2": request.fail_url,
                 "FailUrl2Method": "GET",
             })
-        return f"{self.payment_url}?{urlencode(params)}"
+        return RobokassaPaymentForm(
+            action_url=self.payment_url,
+            fields=tuple(params.items()),
+            signature_base_redacted=redacted_base,
+        )
+
+    def payment_link(self, request: RobokassaPaymentRequest) -> str:
+        """Build the legacy GET representation for internal compatibility."""
+
+        return self.payment_form(request).as_url()
 
     def parse_notification(self, values: Mapping[str, str]) -> RobokassaNotification:
         raw_invoice = values.get("InvId") or values.get("InvID") or ""
