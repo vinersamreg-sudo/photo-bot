@@ -8,7 +8,6 @@ from unittest import TestCase
 import httpx
 from PIL import Image
 
-from app.direct_prompt import build_direct_prompt
 from app.domain import (
     PolicyRejectedError,
     ProviderInvalidRequestError,
@@ -30,7 +29,7 @@ class GeminiImageProviderTests(TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_interactions_payload_keeps_unicode_prompt_and_deterministic_guard(self) -> None:
+    def test_interactions_payload_keeps_exact_unicode_prompt(self) -> None:
         captured = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -58,16 +57,20 @@ class GeminiImageProviderTests(TestCase):
             size="1024x1024",
             output_format="png",
         )
-        user_text = "Поменять одежду. Улучшить фон"
-        prompt = build_direct_prompt(user_text)
+        user_text = "Изменить размер для загрузки на сотовый телефон"
 
-        result = provider.edit(self.source, prompt)
+        result = provider.edit(self.source, user_text)
 
         self.assertEqual(set(captured), {"model", "input", "response_format"})
         self.assertEqual(captured["model"], "gemini-3.1-flash-image")
-        self.assertEqual(captured["input"][0], {"type": "text", "text": prompt})
-        self.assertTrue(captured["input"][0]["text"].startswith(user_text + "\n\n"))
-        self.assertIn("личности и узнаваемые лица", captured["input"][0]["text"])
+        self.assertEqual(captured["input"][0], {"type": "text", "text": user_text})
+        self.assertEqual(
+            captured["input"][0]["text"].encode("utf-8"),
+            user_text.encode("utf-8"),
+        )
+        self.assertNotIn("Сохрани", captured["input"][0]["text"])
+        self.assertNotIn("Измени только", captured["input"][0]["text"])
+        self.assertNotIn("preservation", captured["input"][0]["text"].casefold())
         self.assertNotIn("system_instruction", captured)
         self.assertEqual(captured["input"][1]["type"], "image")
         self.assertEqual(captured["input"][1]["mime_type"], "image/png")
@@ -104,12 +107,14 @@ class GeminiImageProviderTests(TestCase):
             ),
             "gemini-3-pro-image",
         )
-        prompt = "Одень меня как на втором фото"
+        prompt = "Муж меня обнимает"
 
         provider.edit_many((self.source, second), prompt)
 
         self.assertEqual(captured["input"][0], {"type": "text", "text": prompt})
         self.assertEqual([part["type"] for part in captured["input"]], ["text", "image", "image"])
+        self.assertNotIn("Сохрани", captured["input"][0]["text"])
+        self.assertNotIn("Измени только", captured["input"][0]["text"])
         self.assertNotIn("system_instruction", captured)
 
     def test_text_only_provider_refusal_maps_to_policy_error(self) -> None:

@@ -1,4 +1,4 @@
-# Direct Provider Mode and Subject Preservation Guard
+# Direct Provider Mode and Exact Gemini Passthrough
 
 ## Why this experiment exists
 
@@ -7,19 +7,16 @@ expanded English technical prompt. The experiment tests the hypothesis that this
 layer can conflict with the original intent or make the requested change less
 visible.
 
-Direct Provider Mode keeps the exact Unicode string received from the product flow
-as the first provider-prompt segment. It performs no translation, artistic
-interpretation, prompt expansion, system-instruction injection, `edit_intent`,
-`prompt_builder` or LLM analysis. A short deterministic subject-preservation guard
-is appended after the unchanged text so Gemini does not regenerate people when the
-request only targets clothing, background or another local attribute.
+Direct Provider Mode sends the exact Unicode string received from the product flow
+to Gemini. It performs no translation, artistic interpretation, prompt expansion,
+system-instruction injection, `edit_intent`, `prompt_builder`, LLM analysis or
+preservation-instruction injection. One or two source images may accompany the
+same unchanged text.
 
-The guard protects identities and recognizable faces, expressions, poses, body
-positions, proportions, viewpoint and composition. Each protection is removed
-independently when the user explicitly asks to change that attribute. Requests for
-glasses, hairstyle or makeup therefore keep identity, pose and composition
-protection. The final sentence always limits the edit to what the user directly
-requested.
+The deterministic subject-preservation guard remains in the repository for
+compatibility with non-Gemini direct-provider paths, but `gemini` and its
+`nanobanana` routing alias do not append it. Lineage and edit-plan metadata do not
+modify the provider prompt.
 
 The same passthrough rule applies to initial requests, corrections, scenarios and
 repeats: the current user text is the provider text. Scenario templates and parent
@@ -35,15 +32,17 @@ IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true
 IMAGE_FACE_PRESERVE_GUARD_ENABLED=true
 ```
 
-`true` is the repository default. Set `IMAGE_DIRECT_PROMPT_ENABLED=false` to
+Direct prompting is the repository default. Set
+`IMAGE_DIRECT_PROMPT_ENABLED=false` to
 restore the preserved `edit_intent` plus English technical prompt layer. The old
 `OPENAI_DIRECT_PROMPT_ENABLED` environment name remains a compatibility fallback
 when the provider-neutral flag is absent. A production change or deploy still
 requires separate approval and an exact pre-test snapshot/restoration plan.
 
-Set `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=false` for exact prompt-only rollback.
-When the new flag is absent, the deprecated `IMAGE_FACE_PRESERVE_GUARD_ENABLED`
-value is accepted as a compatibility fallback.
+The preservation flags apply only to non-Gemini direct-provider paths. They are
+ignored for `gemini` and `nanobanana`, where exact passthrough is unconditional
+while direct mode is enabled. When the subject flag is absent, the deprecated
+`IMAGE_FACE_PRESERVE_GUARD_ENABLED` value remains a compatibility fallback.
 
 Attempts are labeled with `prompt_builder_version=direct-unicode-v4` in direct mode
 and the current technical builder version in the baseline mode.

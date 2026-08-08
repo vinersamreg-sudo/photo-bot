@@ -511,6 +511,7 @@ class DemoService:
                     prompt,
                     preservation_guard_enabled=(
                         self.settings.image_subject_preserve_guard_enabled
+                        and self.provider.name not in {"gemini", "nanobanana"}
                     ),
                 )
             else:

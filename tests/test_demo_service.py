@@ -65,6 +65,11 @@ class RecordingProvider(FakeImageProvider):
         return super().edit(source_path, prompt)
 
 
+class RecordingGeminiProvider(RecordingProvider):
+    name = "gemini"
+    model = "gemini-3-pro-image"
+
+
 class MultiSourceRecordingProvider(FakeImageProvider):
     def __init__(self, fail=None) -> None:
         super().__init__(fail=fail)
@@ -75,6 +80,11 @@ class MultiSourceRecordingProvider(FakeImageProvider):
         self.sources = source_paths
         self.prompt = prompt
         return super().edit_many(source_paths, prompt)
+
+
+class MultiSourceRecordingGeminiProvider(MultiSourceRecordingProvider):
+    name = "gemini"
+    model = "gemini-3-pro-image"
 
 
 class DemoServiceTests(TestCase):
@@ -142,22 +152,26 @@ class DemoServiceTests(TestCase):
             )
 
     def test_two_sources_use_one_provider_call_one_credit_and_preserve_lineage(self) -> None:
-        provider = MultiSourceRecordingProvider()
+        provider = MultiSourceRecordingGeminiProvider()
         service = self.service(provider=provider)
         session = service.start_session("max", "two-source-user", self.source)
         second = self.base / "second.png"
         Image.new("RGB", (500, 700), "red").save(second)
         stored_second = service.add_secondary_source(session.session_id, second)
+        user_prompt = "Муж меня обнимает"
 
         result = service.generate(
             session.session_id,
-            "Одень меня как на втором фото",
+            user_prompt,
             "two-source-attempt",
         )
 
         self.assertEqual(provider.calls, 1)
         self.assertEqual(provider.sources, (session.source_path, stored_second))
-        self.assertTrue(provider.prompt.startswith("Одень меня как на втором фото"))
+        self.assertEqual(provider.prompt, user_prompt)
+        self.assertEqual(provider.prompt.encode("utf-8"), user_prompt.encode("utf-8"))
+        self.assertNotIn("Сохрани", provider.prompt)
+        self.assertNotIn("Измени только", provider.prompt)
         self.assertEqual(result.remaining_generations, 1)
         with service.database.read() as connection:
             attempt = connection.execute(
@@ -356,14 +370,14 @@ class DemoServiceTests(TestCase):
                     0,
                 )
 
-    def test_direct_prompt_mode_bypasses_expansion_and_preserves_lineage(self) -> None:
-        provider = RecordingProvider()
+    def test_gemini_direct_prompt_is_exact_for_initial_and_correction(self) -> None:
+        provider = RecordingGeminiProvider()
         settings = replace(self.settings, image_direct_prompt_enabled=True)
         service = self.service(provider=provider, settings=settings)
         session = service.start_session("max", "direct-prompt", self.source)
 
-        first_text = "сделай меня красивее"
-        second_text = "поменяй одежду"
+        first_text = "Изменить размер для загрузки на сотовый телефон"
+        second_text = "Муж меня обнимает"
         with patch(
             "app.demo_service.build_provider_prompt",
             side_effect=AssertionError("technical prompt builder must be bypassed"),
@@ -387,10 +401,15 @@ class DemoServiceTests(TestCase):
             )
 
         self.assertEqual(len(provider.prompts), 2)
+        self.assertEqual(provider.prompts, [first_text, second_text])
         self.assertEqual(
-            provider.prompts,
-            [build_direct_prompt(first_text), build_direct_prompt(second_text)],
+            [value.encode("utf-8") for value in provider.prompts],
+            [first_text.encode("utf-8"), second_text.encode("utf-8")],
         )
+        for provider_prompt in provider.prompts:
+            self.assertNotIn("Сохрани", provider_prompt)
+            self.assertNotIn("Измени только", provider_prompt)
+            self.assertNotIn("preservation", provider_prompt.casefold())
         self.assertEqual(second.remaining_generations, 0)
         with service.database.read() as connection:
             attempts = connection.execute(
@@ -411,7 +430,7 @@ class DemoServiceTests(TestCase):
             [first_text, second_text],
         )
         self.assertEqual(
-            [row["provider_prompt"].split("\n\n", 1)[0] for row in attempts],
+            [row["provider_prompt"] for row in attempts],
             [row["prompt"] for row in attempts],
         )
         self.assertTrue(

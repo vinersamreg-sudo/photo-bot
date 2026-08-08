@@ -14,7 +14,7 @@ MAX update
   -> access/observe guard
   -> dialog state machine
   -> source validation and private storage
-  -> exact Unicode prompt plus deterministic modular preservation guard
+  -> exact Unicode prompt for Gemini; optional deterministic guard for other providers
   -> configured provider router
   -> OpenAI or Google Gemini image edit
   -> original persistence
@@ -34,10 +34,10 @@ delivery failures must not consume the user’s edit allowance.
 - `storage.py`: scoped private paths, validation and safe deletion.
 - `max_transport.py`: Bot API HTTP and polling only.
 - `max_application.py`: product states, messages and callbacks.
-- `direct_prompt.py`: keeps the exact Unicode text received from the product flow
-  as the first prompt segment and appends only deterministic protections for
-  attributes the request does not explicitly change. It performs no translation,
-  artistic expansion or LLM analysis.
+- `direct_prompt.py`: preserves the exact Unicode text received from the product
+  flow. The Gemini path sends that text unchanged; an optional deterministic guard
+  remains available only for other direct-provider paths. It performs no
+  translation, artistic expansion or LLM analysis.
 - `edit_intent.py` and `prompt_builder.py`: preserved legacy prompt layer, selected
   only when direct prompting is disabled.
 - `provider_router.py`: fail-fast selection of `openai`, `gemini` or
