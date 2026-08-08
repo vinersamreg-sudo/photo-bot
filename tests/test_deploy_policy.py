@@ -28,7 +28,8 @@ class DeployPolicyTests(TestCase):
     def test_preserves_runtime_state(self) -> None:
         for protected_path in (".env", "venv/", "data/", "logs/", "temp/"):
             self.assertIn(f"--exclude='{protected_path}'", self.workflow)
-        self.assertIn("--exclude='site/'", self.workflow)
+        self.assertIn("--include='/site/nginx/ravuna.ru.conf'", self.workflow)
+        self.assertIn("--exclude='/site/***'", self.workflow)
 
     def test_operating_flags_preserve_live_state_but_fresh_env_is_fail_closed(self) -> None:
         for key, default in (
@@ -128,6 +129,9 @@ class DeployPolicyTests(TestCase):
         self.assertIn("WHERE version=11", self.workflow)
         self.assertIn('"migration_v11": migration_v11', self.workflow)
         self.assertIn("assert migration_v11", self.workflow)
+        self.assertIn("WHERE version=12", self.workflow)
+        self.assertIn('"migration_v12": migration_v12', self.workflow)
+        self.assertIn("assert migration_v12", self.workflow)
         self.assertIn("sqlite_backup=created", self.workflow)
         self.assertIn("source.backup(backup)", self.workflow)
         self.assertIn("MAX_SINGLE_SCREEN_UI_ENABLED true", self.workflow)

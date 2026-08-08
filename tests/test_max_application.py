@@ -766,6 +766,122 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.messages[-1][1], PHOTO_ACCEPTED_TEXT)
         self.assertTrue(self.store.legal_is_current("u1"))
 
+    def test_two_photo_flow_rejects_third_and_generates_once(self) -> None:
+        self.onboard_to_prompt()
+        first_buttons = self.transport.messages[-1][2]
+        self.assertIn(
+            ("➕ Добавить второе фото", "source:add-second"),
+            [(button.text, button.action) for button in first_buttons],
+        )
+        self.callback("source:add-second")
+        self.assertEqual(self.store.get("u1").pending_action, "second_source")
+        second = self.base / "second-max.png"
+        Image.new("RGB", (240, 320), "red").save(second)
+        self.transport.source = second
+
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/second")
+        )
+
+        dialog = self.store.get("u1")
+        self.assertEqual(dialog.state, "waiting_for_prompt")
+        self.assertEqual(dialog.pending_action, "two_sources")
+        self.assertIn("Фото 1 и Фото 2 приняты", self.transport.messages[-1][1])
+        provider_calls = self.provider.calls
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/third")
+        )
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.transport.messages[-1][1], "Можно использовать максимум 2 фотографии")
+
+        prompt = "Одень меня как на втором фото"
+        self.app.handle(self.event("message_created", text=prompt))
+
+        self.assertEqual(self.provider.calls, provider_calls + 1)
+        with self.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT * FROM generation_attempts ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            version = connection.execute(
+                "SELECT * FROM gallery_versions WHERE attempt_id=?", (attempt["id"],)
+            ).fetchone()
+        self.assertEqual(attempt["prompt"], prompt)
+        self.assertIsNotNone(attempt["secondary_source_path"])
+        self.assertEqual(version["secondary_source_path"], attempt["secondary_source_path"])
+
+    def test_two_photo_pending_payment_resumes_exact_sources_and_prompt(self) -> None:
+        self.onboard_to_prompt()
+        self.callback("source:add-second")
+        second = self.base / "second-pending.png"
+        Image.new("RGB", (240, 320), "red").save(second)
+        self.transport.source = second
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/second")
+        )
+        dialog = self.store.get("u1")
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_generation_credits(
+                connection,
+                user_id=dialog.user_id,
+                delta=-2,
+                reason="test_exhaustion",
+                idempotency_key="test:two-source-exhaustion",
+            )
+        paid_app, payments = self.paid_application()
+        prompt = "Муж меня обнимает"
+        provider_calls = self.provider.calls
+
+        paid_app.handle(self.event("message_created", text=prompt))
+
+        self.assertEqual(self.provider.calls, provider_calls)
+        pending_dialog = self.store.get("u1")
+        with self.database.read() as connection:
+            pending = connection.execute(
+                "SELECT * FROM pending_edit_requests WHERE id=?",
+                (pending_dialog.pending_request_id,),
+            ).fetchone()
+            order = connection.execute(
+                "SELECT * FROM payment_orders WHERE pending_request_id=?",
+                (pending["id"],),
+            ).fetchone()
+        self.assertEqual(pending["prompt"], prompt)
+        self.assertTrue(Path(pending["primary_source_path"]).is_file())
+        self.assertTrue(Path(pending["secondary_source_path"]).is_file())
+        self.assertEqual(order["payment_purpose"], "processing_request")
+        pay_button = self.transport.images[-1][3][0]
+        self.assertRegex(pay_button.action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
+
+        amount = "49.00"
+        signature = hashlib.sha256(
+            (
+                f"{amount}:{order['provider_invoice_id']}:two:"
+                f"Shp_order={order['public_token']}"
+            ).encode()
+        ).hexdigest()
+        webhook = payments.process_webhook(
+            {
+                "OutSum": amount,
+                "InvId": str(order["provider_invoice_id"]),
+                "Shp_order": order["public_token"],
+                "SignatureValue": signature,
+            },
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        self.assertTrue(webhook.accepted)
+        paid_app.notify_continuation_pack_paid(order["id"])
+        paid_app.handle(self.event("message_callback", action="pending:process"))
+
+        self.assertEqual(self.provider.calls, provider_calls + 1)
+        with self.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT * FROM generation_attempts ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(attempt["prompt"], prompt)
+        self.assertEqual(
+            attempt["secondary_source_path"], pending["secondary_source_path"]
+        )
+
     def test_start_works_button_opens_clear_empty_history(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
         provider_calls = self.provider.calls
@@ -819,7 +935,7 @@ class MaxApplicationTests(TestCase):
         new_messages = self.transport.messages[before:]
         self.assertEqual(
             [message[1] for message in new_messages],
-            ["Что хотите изменить?"],
+            [PHOTO_ACCEPTED_TEXT],
         )
         self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
         self.assertEqual(self.provider.calls, 0)
@@ -1005,6 +1121,25 @@ class MaxApplicationTests(TestCase):
         self.assertIn("💳 Купить ещё 2 обработки — 49 ₽", button_texts)
         self.assertIn("Получить оригинал", button_texts)
 
+    def test_zero_balance_start_shows_direct_purchase_and_blocks_stale_upload(self) -> None:
+        self.app, _payments = self.paid_application()
+        self.generate_first()
+        self.clock.advance(2)
+        self.callback("result:repeat")
+        provider_calls = self.provider.calls
+
+        self.app.handle(self.event("message_created", text="/start"))
+
+        menu = self.transport.messages[-1]
+        self.assertIn("У вас закончились обработки.", menu[1])
+        self.assertIn("приобретите пакет Ravuna — 49 ₽", menu[1])
+        buy = menu[2][0]
+        self.assertEqual(buy.text, "Купить пакет — 49 ₽")
+        self.assertRegex(buy.action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
+        self.callback("upload:ready")
+        self.assertEqual(self.store.get("u1").state, "main_menu")
+        self.assertEqual(self.provider.calls, provider_calls)
+
     def test_stale_correction_callback_with_zero_edits_opens_checkout_without_prompt(self) -> None:
         self.generate_first()
         self.clock.advance(2)
@@ -1045,7 +1180,7 @@ class MaxApplicationTests(TestCase):
         self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "main_menu")
         self.callback("upload:ready")
-        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertEqual(self.store.get("u1").state, "main_menu")
         new_source = self.base / "new-source.png"
         Image.new("RGB", (320, 240), "#b42318").save(new_source)
         self.transport.source = new_source
@@ -1096,7 +1231,7 @@ class MaxApplicationTests(TestCase):
             self.assertEqual(pending["prompt"], "Поменять одежду. Улучшить фон.")
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
-                0,
+                2,
             )
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM generation_attempts").fetchone()[0],
@@ -1117,11 +1252,15 @@ class MaxApplicationTests(TestCase):
             )
         self.assertEqual(self.demo.commerce.balance(user_id).available, 0)
 
-        self.callback("package:buy")
-        self.callback("package:buy")
         with self.database.read() as connection:
-            intent = connection.execute("SELECT * FROM payment_intents").fetchone()
-            order = connection.execute("SELECT * FROM payment_orders").fetchone()
+            intent = connection.execute(
+                "SELECT * FROM payment_intents WHERE pending_request_id=?",
+                (dialog.pending_request_id,),
+            ).fetchone()
+            order = connection.execute(
+                "SELECT * FROM payment_orders WHERE pending_request_id=?",
+                (dialog.pending_request_id,),
+            ).fetchone()
             self.assertIsNotNone(intent)
             self.assertEqual(intent["pending_request_id"], dialog.pending_request_id)
             self.assertIsNone(intent["version_id"])
@@ -1129,7 +1268,7 @@ class MaxApplicationTests(TestCase):
             self.assertEqual(order["pending_request_id"], dialog.pending_request_id)
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
-                1,
+                2,
             )
 
         amount = "49.00"
@@ -1204,15 +1343,15 @@ class MaxApplicationTests(TestCase):
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
-                0,
+                1,
             )
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
-                0,
+                1,
             )
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0],
-                0,
+                1,
             )
         offer_message_id = self.transport.messages[-1][4]
         paid_app.handle(self.event("message_callback", action="package:buy"))
@@ -1226,12 +1365,15 @@ class MaxApplicationTests(TestCase):
 
         payment_cards = [
             message for message in self.transport.messages
-            if message[1] == PAYMENT_LINK_TEXT
+            if message[1] == PAYMENT_OFFER_TEXT
             and message[2]
             and message[2][0].text == "Оплатить 49 ₽"
-            and message[2][0].action.startswith("https://")
+            and message[2][0].action.startswith("https://ravuna.ru/p/")
         ]
         self.assertEqual(len(payment_cards), 1)
+        self.assertFalse(
+            any(message[1] == PAYMENT_LINK_TEXT for message in self.transport.messages)
+        )
         self.assertEqual(len(self.transport.messages), message_count)
         self.assertEqual(self.transport.callbacks[-1][1], "Экран уже изменился")
         with self.database.read() as connection:
@@ -1252,7 +1394,61 @@ class MaxApplicationTests(TestCase):
                     """SELECT COUNT(*) FROM payment_attempts
                        WHERE purpose='max_checkout_card'"""
                 ).fetchone()[0],
-                1,
+                0,
+            )
+
+    def test_payment_return_waits_for_resulturl_then_delivers_exact_original(self) -> None:
+        self.generate_first()
+        paid_app, payments = self.paid_application()
+        selected_version = self.store.get("u1").current_version_id
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        with self.database.read() as connection:
+            order = connection.execute("SELECT * FROM payment_orders").fetchone()
+            original = Path(connection.execute(
+                "SELECT original_path FROM gallery_versions WHERE id=?",
+                (selected_version,),
+            ).fetchone()[0])
+        pending_return = replace(
+            self.event("message_created", text="/start"),
+            start_payload=f"pay_{order['public_token']}",
+        )
+        paid_app.handle(pending_return)
+        self.assertEqual(self.transport.messages[-1][1], "Проверяем оплату…")
+        self.assertEqual(
+            self.demo.commerce.entitlement_balance(order["user_id"]).available, 0
+        )
+
+        amount = "49.00"
+        signature = hashlib.sha256(
+            (
+                f"{amount}:{order['provider_invoice_id']}:two:"
+                f"Shp_order={order['public_token']}"
+            ).encode()
+        ).hexdigest()
+        self.assertTrue(payments.process_webhook(
+            {
+                "OutSum": amount,
+                "InvId": str(order["provider_invoice_id"]),
+                "Shp_order": order["public_token"],
+                "SignatureValue": signature,
+            },
+            method="POST",
+            path="/payments/robokassa/result",
+        ).accepted)
+        file_count = len(self.transport.files)
+        confirmed_return = replace(
+            self.event("message_created", text="/start"),
+            start_payload=f"pay_{order['public_token']}",
+        )
+        paid_app.handle(confirmed_return)
+
+        self.assertEqual(len(self.transport.files), file_count + 1)
+        self.assertEqual(self.transport.files[-1][1], original)
+        self.assertEqual(self.store.get("u1").current_version_id, selected_version)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT status FROM payment_orders WHERE id=?", (order["id"],)).fetchone()[0],
+                "delivered",
             )
 
     def test_unlock_offer_reuses_selected_preview_without_creating_payment(self) -> None:
@@ -1288,14 +1484,15 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(
             [(button.text, button.action) for button in offers[0][2]],
             [
-                ("Оплатить 49 ₽", "package:buy"),
+                ("Оплатить 49 ₽", offers[0][2][0].action),
                 ("← Назад", "nav:back:work"),
             ],
         )
         with self.database.read() as connection:
+            self.assertRegex(offers[0][2][0].action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
-                0,
+                1,
             )
 
     def test_back_from_payment_restores_exact_selected_work_without_side_effects(self) -> None:
@@ -1338,7 +1535,7 @@ class MaxApplicationTests(TestCase):
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
-                0,
+                1,
             )
 
     def test_back_from_correction_clears_transient_state_without_generation_or_debit(self) -> None:
@@ -1405,10 +1602,10 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(handled, [True, True])
         payment_cards = [
             message for message in self.transport.messages
-            if message[1] == PAYMENT_LINK_TEXT
+            if message[1] == PAYMENT_OFFER_TEXT
             and message[2]
             and message[2][0].text == "Оплатить 49 ₽"
-            and message[2][0].action.startswith("https://")
+            and message[2][0].action.startswith("https://ravuna.ru/p/")
         ]
         self.assertEqual(len(payment_cards), 1)
         self.assertEqual(
@@ -1474,7 +1671,7 @@ class MaxApplicationTests(TestCase):
                 1,
             )
 
-    def test_owner_sandbox_payment_grants_pack_then_user_selects_original(self) -> None:
+    def test_owner_sandbox_payment_grants_pack_then_delivers_exact_original(self) -> None:
         self.generate_first()
         paid_app, payments = self.paid_application()
         event = self.event("message_callback", action="result:unlock")
@@ -1482,23 +1679,20 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.messages[-1][1], PAYMENT_OFFER_TEXT)
         pay_button = self.transport.messages[-1][2][0]
         self.assertEqual(pay_button.text, "Оплатить 49 ₽")
-        self.assertEqual(pay_button.action, "package:buy")
+        self.assertRegex(pay_button.action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
         self.assertEqual(self.transport.messages[-1][2][-1].text, "← Назад")
         with self.database.read() as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
-                0,
+                1,
             )
-        paid_app.handle(self.event("message_callback", action="package:buy"))
-        self.assertEqual(self.transport.messages[-1][1], PAYMENT_LINK_TEXT)
-        pay_button = self.transport.messages[-1][2][0]
-        self.assertTrue(pay_button.action.startswith("https://auth.robokassa.ru/"))
         with self.database.read() as connection:
             order = connection.execute("SELECT * FROM payment_orders").fetchone()
             original = Path(connection.execute(
                 "SELECT original_path FROM gallery_versions WHERE id=?",
                 (order["version_id"],),
             ).fetchone()[0])
+        self.assertEqual(order["payment_purpose"], "original_download")
         amount = "49.00"
         base = f"{amount}:{order['provider_invoice_id']}:two:Shp_order={order['public_token']}"
         signature = hashlib.sha256(base.encode()).hexdigest()
@@ -1527,158 +1721,17 @@ class MaxApplicationTests(TestCase):
             current_gallery_item_id=None,
             current_version_id=None,
         )
-        paid_message_start = len(self.transport.messages)
+        file_count = len(self.transport.files)
         self.assertTrue(paid_app.notify_continuation_pack_paid(order["id"]))
-        paid_messages = self.transport.messages[paid_message_start:]
-        self.assertEqual(len(paid_messages), 2)
-        self.assertEqual(
-            paid_messages[0][1],
-            "✅ Оплата прошла успешно\n\n"
-            "Ваш оригинал готов к скачиванию.",
-        )
-        self.assertEqual(
-            [button.text for button in paid_messages[0][2]],
-            ["📥 Скачать оригинал", "← Назад"],
-        )
-        self.assertEqual(
-            paid_messages[1][1],
-            "Осталось:\n"
-            "• обработок — 3;\n"
-            "• оригиналов — 1.",
-        )
-        self.assertEqual(
-            [button.text for button in paid_messages[1][2]],
-            [
-                "📷 Другая фотография",
-                "📁 Мои работы",
-                "← Назад",
-            ],
-        )
-        self.assertTrue(all(len(message[2]) <= 3 for message in paid_messages))
-        paid_copy = "\n".join(message[1] for message in paid_messages)
-        self.assertNotIn("После оплаты начисляется", paid_copy)
-        self.assertNotIn("Пакет доступа Ravuna", paid_copy)
-        self.assertNotIn("Что дальше?", paid_copy)
+        self.assertEqual(len(self.transport.files), file_count + 1)
+        self.assertEqual(self.transport.files[-1][1], original)
         paid_dialog = self.store.get("u1")
         self.assertEqual(paid_dialog.current_version_id, intent_version_id)
         self.assertEqual(paid_dialog.current_gallery_item_id, gallery_item_id)
-        self.assertTrue(
-            any(
-                edit[1:] == ("Оплата подтверждена ✅", ())
-                for edit in self.transport.edits
-            )
-        )
         with self.database.read() as connection:
             self.assertEqual(
-                connection.execute(
-                    "SELECT unlock_status FROM gallery_versions WHERE id=?",
-                    (intent_version_id,),
-                ).fetchone()[0],
-                "demo",
-            )
-        with self.database.transaction() as connection:
-            connection.execute(
-                "UPDATE payment_orders SET version_id=? WHERE id=?",
-                (intent_version_id, order["id"]),
-            )
-        self.transport.file_delivery = False
-        paid_app.handle(self.event("message_callback", action="result:unlock"))
-        failed_delivery = self.transport.messages[-1]
-        self.assertEqual(
-            failed_delivery[1],
-            "Не удалось отправить оригинал. Право на скачивание сохранено.",
-        )
-        self.assertEqual(
-            [button.text for button in failed_delivery[2]],
-            [
-                "🔁 Повторить скачивание",
-                "📷 Другая фотография",
-                "📁 Мои работы",
-                "← Назад",
-            ],
-        )
-        with self.database.read() as connection:
-            entitlement = connection.execute(
-                """SELECT status,gallery_version_id FROM unlock_entitlements
-                   WHERE source_payment_order_id=?""",
-                (order["id"],),
-            ).fetchone()
-            self.assertEqual(entitlement["status"], "available")
-            self.assertIsNone(entitlement["gallery_version_id"])
-            self.assertEqual(
-                connection.execute(
-                    "SELECT unlock_status FROM gallery_versions WHERE id=?",
-                    (intent_version_id,),
-                ).fetchone()[0],
-                "demo",
-            )
-        self.transport.file_delivery = True
-        paid_app.handle(self.event("message_callback", action="result:unlock"))
-        self.assertEqual(self.transport.files[-1][1], original)
-        delivered_message = self.transport.messages[-1]
-        self.assertEqual(delivered_message[1], "Оригинал готов ✅")
-        self.assertEqual(
-            [button.text for button in delivered_message[2]],
-            [
-                "📷 Обработать другую фотографию",
-                "📁 Мои работы",
-                "← Назад",
-            ],
-        )
-        self.assertNotIn("Что дальше?", delivered_message[1])
-        self.assertNotIn("Оплат", delivered_message[1])
-        self.assertLessEqual(len(delivered_message[2]), 3)
-        paid_app.handle(self.event("message_callback", action="result:unlock"))
-        self.assertEqual(self.transport.files[-1][1], original)
-        self.assertEqual(self.transport.messages[-1][1], "Оригинал готов ✅")
-        with self.database.read() as connection:
-            self.assertEqual(
-                connection.execute(
-                    "SELECT delivery_count FROM gallery_versions WHERE id=?",
-                    (intent_version_id,),
-                ).fetchone()[0],
-                2,
-            )
-            self.assertEqual(
-                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
-                1,
-            )
-            self.assertEqual(
-                connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0],
-                1,
-            )
-            work_count = connection.execute(
-                "SELECT COUNT(*) FROM gallery_items WHERE user_id=?",
-                (order["user_id"],),
-            ).fetchone()[0]
-        balance_before_new_source = self.demo.commerce.balance(order["user_id"])
-        entitlements_before_new_source = self.demo.commerce.entitlement_balance(
-            order["user_id"]
-        )
-        paid_app.handle(self.event("message_callback", action="new:source"))
-        restarted = self.store.get("u1")
-        self.assertEqual(restarted.state, "waiting_for_source")
-        self.assertIsNone(restarted.current_gallery_item_id)
-        self.assertIsNone(restarted.current_version_id)
-        self.assertIn(
-            "Прикрепите фотографию через скрепку 📎",
-            self.transport.messages[-1][1],
-        )
-        self.assertEqual(
-            self.demo.commerce.balance(order["user_id"]),
-            balance_before_new_source,
-        )
-        self.assertEqual(
-            self.demo.commerce.entitlement_balance(order["user_id"]),
-            entitlements_before_new_source,
-        )
-        with self.database.read() as connection:
-            self.assertEqual(
-                connection.execute(
-                    "SELECT COUNT(*) FROM gallery_items WHERE user_id=?",
-                    (order["user_id"],),
-                ).fetchone()[0],
-                work_count,
+                connection.execute("SELECT status FROM payment_orders WHERE id=?", (order["id"],)).fetchone()[0],
+                "delivered",
             )
 
     def test_true_intent_conflict_is_resolved_without_an_extra_question(self) -> None:

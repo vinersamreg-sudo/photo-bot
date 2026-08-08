@@ -106,6 +106,26 @@ class DemoService:
                 threading.BoundedSemaphore(settings.global_max_concurrent_generations),
             )
 
+    def ensure_user(self, platform: str, platform_user_id: str) -> str:
+        """Create the commerce account without starting an upload session."""
+
+        if not platform.strip() or not platform_user_id.strip():
+            raise InvalidInputError("Platform identity is required")
+        now = self.clock()
+        with self.database.transaction() as connection:
+            user = connection.execute(
+                "SELECT id FROM users WHERE platform=? AND platform_user_id=?",
+                (platform, platform_user_id),
+            ).fetchone()
+            user_id = user["id"] if user else uuid4().hex
+            if user is None:
+                connection.execute(
+                    "INSERT INTO users(id,platform,platform_user_id,created_at) VALUES(?,?,?,?)",
+                    (user_id, platform, platform_user_id, iso(now)),
+                )
+            self.commerce.ensure_initial_grant(connection, user_id)
+        return user_id
+
     def start_session(self, platform: str, platform_user_id: str, source: Path) -> DemoSessionInfo:
         if not platform.strip() or not platform_user_id.strip():
             raise InvalidInputError("Platform identity is required")
@@ -148,6 +168,7 @@ class DemoService:
                 connection.execute(
                     """UPDATE demo_sessions
                        SET source_file_path=?,source_sha256=?,status='active',expires_at=?,
+                           secondary_source_file_path=NULL,secondary_source_sha256=NULL,
                            completed_at=NULL,updated_at=? WHERE id=?""",
                     (
                         str(stored_source),
@@ -196,6 +217,46 @@ class DemoService:
             )
             row = connection.execute("SELECT * FROM demo_sessions WHERE id=?", (session_id,)).fetchone()
             return self._session_info(row)
+
+    def add_secondary_source(self, session_id: str, source: Path) -> Path:
+        """Attach exactly one optional second source to the current gallery work."""
+
+        now = self.clock()
+        with self.database.transaction() as connection:
+            session = connection.execute(
+                """SELECT s.*,i.deleted AS item_deleted
+                   FROM demo_sessions s JOIN gallery_items i ON i.id=s.gallery_item_id
+                   WHERE s.id=? AND i.user_id=s.user_id""",
+                (session_id,),
+            ).fetchone()
+            if session is None or session["status"] != "active" or session["item_deleted"]:
+                raise InvalidInputError("The current source session is unavailable")
+            if session["secondary_source_file_path"]:
+                raise InvalidInputError("Можно использовать максимум 2 фотографии")
+            session_path, digest, _size = self.storage.create_session_secondary(
+                session["user_id"], session_id, source
+            )
+            gallery_path, gallery_digest, _gallery_size = (
+                self.storage.create_gallery_item_secondary_source(
+                    session["user_id"], session["gallery_item_id"], source
+                )
+            )
+            connection.execute(
+                """UPDATE demo_sessions
+                   SET secondary_source_file_path=?,secondary_source_sha256=?,updated_at=?
+                   WHERE id=?""",
+                (str(session_path), digest, iso(now), session_id),
+            )
+            connection.execute(
+                """UPDATE gallery_items
+                   SET secondary_source_path=?,secondary_source_sha256=?,updated_at=?
+                   WHERE id=?""",
+                (
+                    str(gallery_path), gallery_digest, iso(now),
+                    session["gallery_item_id"],
+                ),
+            )
+        return session_path
 
     def resume_session(
         self, platform: str, platform_user_id: str
@@ -246,6 +307,10 @@ class DemoService:
             expires_at=row["expires_at"],
             successful_generations=row["successful_generations"],
             max_generations=row["max_generations"],
+            secondary_source_path=(
+                Path(row["secondary_source_file_path"])
+                if row["secondary_source_file_path"] else None
+            ),
         )
 
     def generate(
@@ -357,6 +422,10 @@ class DemoService:
                         scenario_id=scenario_id,
                     )
                 source_path = Path(session["source_file_path"])
+                secondary_source_path = (
+                    Path(session["secondary_source_file_path"])
+                    if session["secondary_source_file_path"] else None
+                )
                 source_version_id = None
             else:
                 parent_plan = (
@@ -386,6 +455,7 @@ class DemoService:
                     if not parent["original_path"]:
                         raise InvalidInputError("The selected parent original is unavailable")
                     source_path = Path(parent["original_path"])
+                    secondary_source_path = None
                     source_version_id = parent["id"]
                 else:
                     edit_plan = (
@@ -399,11 +469,17 @@ class DemoService:
                         else repeat_edit_plan(parent_plan)
                     )
                     source_path = Path(parent["source_path"])
+                    secondary_source_path = (
+                        Path(parent["secondary_source_path"])
+                        if parent["secondary_source_path"] else None
+                    )
                     source_version_id = parent["source_version_id"]
             if edit_plan.unresolved_ambiguities and not direct_prompt_active:
                 raise IntentAmbiguityError(edit_plan.unresolved_ambiguities)
             if not source_path.is_file():
                 raise InvalidInputError("The selected edit source file is unavailable")
+            if secondary_source_path is not None and not secondary_source_path.is_file():
+                raise InvalidInputError("The second edit source file is unavailable")
             if self.processing_router is None or direct_prompt_active:
                 processing_plan = legacy_processing_plan(
                     self.provider.name, self.provider.model
@@ -523,14 +599,15 @@ class DemoService:
             connection.execute(
                 """INSERT INTO generation_attempts(
                        id,idempotency_key,session_id,user_id,prompt,scenario_id,status,started_at,
-                       provider,model,source_path,input_size_bytes,requested_size,
+                   provider,model,source_path,input_size_bytes,requested_size,
+                       secondary_source_path,
                        requested_quality,output_format,correction,parent_version_id,
                        correction_prompt,effective_prompt,edit_plan_json,provider_prompt,
                        source_version_id,prompt_builder_version,created_at
                        ,selected_mode,mode_reason,mode_confidence,fallback_mode,
                        asset_source_type,asset_id,asset_checksum,mask_strategy,processing_provider,
                        processing_provider_model,processing_pipeline_version,processing_plan_json
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     attempt_id,
                     idempotency_key,
@@ -543,8 +620,12 @@ class DemoService:
                     processing_plan.provider,
                     processing_plan.provider_model,
                     str(source_path),
-                    source_path.stat().st_size,
+                    source_path.stat().st_size + (
+                        secondary_source_path.stat().st_size
+                        if secondary_source_path is not None else 0
+                    ),
                     requested_size,
+                    str(secondary_source_path) if secondary_source_path else None,
                     (
                         "local"
                         if processing_plan.provider.startswith("local-")
@@ -599,13 +680,23 @@ class DemoService:
                         source_path, provider_prompt, context_plan.request
                     )
                 else:
-                    provider_result = (
-                        self.processing_executor.execute(
-                            source_path, provider_prompt, processing_plan
+                    if secondary_source_path is not None:
+                        edit_many = getattr(self.provider, "edit_many", None)
+                        if edit_many is None:
+                            raise InvalidInputError(
+                                "The selected provider does not support two source images"
+                            )
+                        provider_result = edit_many(
+                            (source_path, secondary_source_path), provider_prompt
                         )
-                        if self.processing_executor is not None
-                        else self.provider.edit(source_path, provider_prompt)
-                    )
+                    else:
+                        provider_result = (
+                            self.processing_executor.execute(
+                                source_path, provider_prompt, processing_plan
+                            )
+                            if self.processing_executor is not None
+                            else self.provider.edit(source_path, provider_prompt)
+                        )
             if context_plan.request is not None and provider_result.context_fallback_used:
                 provider_result = replace(provider_result, context_depth=0)
             elif context_plan.request is None and context_plan.fallback:

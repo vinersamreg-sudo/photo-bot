@@ -268,7 +268,10 @@ jobs:
             --exclude='data/' \
             --exclude='logs/' \
             --exclude='temp/' \
-            --exclude='site/' \
+            --include='/site/' \
+            --include='/site/nginx/' \
+            --include='/site/nginx/ravuna.ru.conf' \
+            --exclude='/site/***' \
             -e "ssh -p $SSH_PORT" \
             ./ "$SSH_USER@$SSH_HOST:/opt/photo-bot/"
       - name: Configure OpenAI credential
@@ -643,6 +646,8 @@ jobs:
               done
               test "$RESTARTED" = 1
               ! kill -0 "$OLD_PID" 2>/dev/null
+              sudo -n bash "$ROOT/ops/deploy_nginx_ravuna_payment.sh" \
+                "$ROOT/site/nginx/ravuna.ru.conf"
             else
               rm -f "$ROOT/data/photo-bot.pid"
               if systemctl cat photo-bot.service >/dev/null 2>&1; then
@@ -680,6 +685,9 @@ jobs:
               migration_v11 = bool(connection.execute(
                   "SELECT 1 FROM schema_migrations WHERE version=11"
               ).fetchone())
+              migration_v12 = bool(connection.execute(
+                  "SELECT 1 FROM schema_migrations WHERE version=12"
+              ).fetchone())
               credit_accounts = connection.execute(
                   "SELECT COUNT(*) FROM user_credit_accounts"
               ).fetchone()[0]
@@ -713,6 +721,7 @@ jobs:
           assert migration_v9
           assert migration_v10
           assert migration_v11
+          assert migration_v12
           assert credit_accounts == users
           assert negative_credit_accounts == 0
           assert settings.payment_webhook_listener_enabled is True
@@ -817,6 +826,7 @@ jobs:
               "migration_v9": migration_v9,
               "migration_v10": migration_v10,
               "migration_v11": migration_v11,
+              "migration_v12": migration_v12,
               "credit_accounts": credit_accounts,
               "negative_credit_accounts": negative_credit_accounts,
               "payment_orders_total": payment_orders_total,

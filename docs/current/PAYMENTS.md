@@ -14,30 +14,40 @@
 - Receipt item: “Пакет доступа Ravuna”, quantity 1, sum 49.00, tax `none`.
 - Existing fiscal fields and self-employed receipt configuration must not be
   changed without a separate fiscal review.
-- Static SuccessURL and FailURL are configured in the Robokassa cabinet.
-- Dynamic `SuccessUrl2`/`FailUrl2` fields are not sent by the payment builder.
+- Static SuccessURL and FailURL remain configured in the Robokassa cabinet.
+- Each payment also sends signed dynamic `SuccessUrl2`/`FailUrl2` GET URLs that
+  point to Ravuna's opaque-token browser return endpoints.
 
 ## Authoritative flow
 
-1. Ravuna first shows a payment offer for an explicit completed version or
-   durable pending edit request; no PaymentIntent exists before the pay click.
-2. On “Оплатить 49 ₽”, Ravuna creates/reuses one bounded PaymentIntent and
-   PaymentOrder for that exact target, then shows the signed Robokassa URL.
-3. Robokassa POSTs ResultURL.
-4. Ravuna verifies Password #2 signature, amount, invoice and order state.
-5. One transaction marks the order paid and grants +2 edits and +1 original.
-6. Exactly one sale receipt/audit record is associated with the payment.
-7. The user may consume the original entitlement for an owned version.
+1. Ravuna shows one payment offer for an explicit completed version, durable
+   pending edit request or account top-up. Rendering the offer creates/reuses
+   one target-scoped PaymentIntent and PaymentOrder.
+2. The “Оплатить 49 ₽” button contains only Ravuna's short opaque URL
+   `https://ravuna.ru/p/<opaque-token>`; no long provider URL or intermediate
+   “link ready” screen is shown.
+3. The short endpoint resolves only an active owned order and redirects the
+   browser to its freshly signed Robokassa URL.
+4. Robokassa POSTs ResultURL.
+5. Ravuna verifies Password #2 signature, amount, invoice and order state.
+6. One transaction marks the order paid and grants +2 edits and +1 original.
+7. Exactly one sale receipt/audit record is associated with the payment.
+8. The browser return opens Ravuna in MAX. A return before ResultURL shows
+   “Проверяем оплату…” and does not grant or consume anything.
 
-SuccessURL/FailURL are informational browser pages only. They never call the
-backend, change payment status, grant credits or consume entitlement.
+SuccessURL/FailURL browser handlers only read order state and redirect to MAX.
+They never confirm a payment, change order state, grant credits or consume an
+entitlement. Confirmed `original_download` resumes the exact version and
+delivers its original; confirmed `processing_request` restores the exact saved
+prompt and one or two sources. Missing context fails closed without substituting
+the latest work. A cancelled payment retains the pending context.
 
 ## Signature contracts
 
 Outgoing payment signature uses the established canonical fields:
 
 ```text
-MerchantLogin:OutSum:InvId:Receipt:Password1:Shp_order=...
+MerchantLogin:OutSum:InvId:Receipt:SuccessUrl2:SuccessUrl2Method:FailUrl2:FailUrl2Method:Password1:Shp_order=...
 ```
 
 ResultURL verification uses the Robokassa callback contract and Password #2.

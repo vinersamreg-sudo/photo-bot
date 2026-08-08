@@ -42,6 +42,7 @@ class GalleryItem:
     last_opened_at: Optional[str]
     unlock_status: str
     cover_preview_path: Optional[Path]
+    secondary_source_path: Optional[Path]
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class GalleryVersion:
     provider_context_id: Optional[str]
     context_depth: int
     context_fallback_reason: Optional[str]
+    secondary_source_path: Optional[Path]
 
 
 class GalleryService:
@@ -93,6 +95,7 @@ class GalleryService:
             row["current_best_version_id"], bool(row["favorite"]), bool(row["deleted"]),
             row["folder_id"], row["generation_count"], row["last_opened_at"],
             row["unlock_status"], Path(row["cover_preview_path"]) if row["cover_preview_path"] else None,
+            Path(row["secondary_source_path"]) if row["secondary_source_path"] else None,
         )
 
     @staticmethod
@@ -126,6 +129,7 @@ class GalleryService:
             row["provider_mode"] or "stateless", row["provider_response_id"],
             row["provider_context_id"], int(row["context_depth"] or 0),
             row["context_fallback_reason"],
+            Path(row["secondary_source_path"]) if row["secondary_source_path"] else None,
         )
 
     def create_item(
@@ -254,6 +258,7 @@ class GalleryService:
         connection.execute(
             """INSERT INTO gallery_versions(
                    id,gallery_item_id,attempt_id,version_number,parent_version_id,source_path,
+                   secondary_source_path,
                    prompt,correction_prompt,effective_prompt,provider,model,
                    preview_watermarked_path,original_path,created_at,processing_time_ms,
                    estimated_cost,status,unlock_status,edit_plan_json,provider_prompt,
@@ -268,10 +273,11 @@ class GalleryService:
                    provider_context_fallback_reason,input_version_id,
                    effective_prompt_hash,scene_intent_hash,provider_request_id,
                    provider_usage_json
-                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id, gallery_item_id, attempt_id, number,
-                attempt["parent_version_id"], attempt["source_path"], attempt["prompt"],
+                attempt["parent_version_id"], attempt["source_path"],
+                attempt["secondary_source_path"], attempt["prompt"],
                 attempt["correction_prompt"], attempt["effective_prompt"] or attempt["prompt"],
                 attempt["provider"], attempt["model"], attempt["demo_result_path"],
                 attempt["original_result_path"], attempt["completed_at"] or attempt["created_at"],
@@ -646,12 +652,14 @@ class GalleryService:
             self.storage.delete_private_tree(Path(item["storage_root_path"]))
             for attempt in attempts:
                 connection.execute(
-                    """UPDATE generation_attempts SET source_path='',original_result_path=NULL,
+                    """UPDATE generation_attempts SET source_path='',secondary_source_path=NULL,
+                       original_result_path=NULL,
                        demo_result_path=NULL WHERE id=?""",
                     (attempt["attempt_id"],),
                 )
             connection.execute(
-                """UPDATE demo_sessions SET source_file_path='',status='deleted'
+                """UPDATE demo_sessions SET source_file_path='',secondary_source_file_path=NULL,
+                   status='deleted'
                    WHERE gallery_item_id=?""",
                 (item_id,),
             )

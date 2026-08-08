@@ -66,9 +66,28 @@ def upload_view() -> View:
     )
 
 
-def main_menu() -> View:
+def main_menu(remaining: int | None = None, payment_url: str | None = None) -> View:
+    if remaining == 0:
+        text = (
+            WELCOME_TEXT
+            + "\n\nУ вас закончились обработки.\n"
+            "Чтобы обработать новую фотографию, приобретите пакет Ravuna — 49 ₽."
+        )
+        buttons = (
+            Button("Купить пакет — 49 ₽", payment_url or "package:buy"),
+            Button("📁 Мои работы", "studio:works"),
+            Button("Публичная оферта", "https://ravuna.ru/legal/offer.html"),
+            Button(
+                "Обработка персональных данных",
+                "https://ravuna.ru/legal/personal-data.html",
+            ),
+        )
+        return View(text, buttons)
+    text = WELCOME_TEXT
+    if remaining is not None:
+        text += f"\n\nДоступно обработок: {remaining}"
     return View(
-        WELCOME_TEXT,
+        text,
         (
             Button("📷 Загрузить фотографию", "upload:ready"),
             Button("📁 Мои работы", "studio:works"),
@@ -331,6 +350,9 @@ class MaxDemoAdapter:
                 (self.platform, platform_user_id, 1, 1, 1, 1, 1, iso(utc_now())),
             )
 
+    def ensure_account(self, platform_user_id: str) -> str:
+        return self.service.ensure_user(self.platform, platform_user_id)
+
     def _require_consent(self, platform_user_id: str) -> None:
         with self.database.read() as connection:
             consent = connection.execute(
@@ -391,6 +413,9 @@ class MaxDemoAdapter:
     def resume_demo(self, platform_user_id: str) -> DemoSessionInfo | None:
         self._require_consent(platform_user_id)
         return self.service.resume_session(self.platform, platform_user_id)
+
+    def add_secondary_source(self, session_id: str, source: Path) -> Path:
+        return self.service.add_secondary_source(session_id, source)
 
     def generate(
         self,

@@ -407,7 +407,12 @@ class RavunaSiteTests(unittest.TestCase):
     def test_nginx_serves_only_site_tree(self) -> None:
         nginx = (SITE / "nginx" / "ravuna.ru.conf").read_text(encoding="utf-8")
         self.assertIn("root /opt/ravuna-site/current", nginx)
-        self.assertNotIn("proxy_pass", nginx)
+        self.assertEqual(
+            nginx.count("proxy_pass http://127.0.0.1:8091$request_uri;"), 1
+        )
+        self.assertIn(
+            "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$", nginx
+        )
         self.assertNotIn("/opt/photo-bot", nginx)
 
     # 45
@@ -469,13 +474,15 @@ class RavunaInfrastructureTests(unittest.TestCase):
             self.assertIn(f"/{path}", hrefs)
             self.assertTrue((RAVUNA_PUBLIC / path).is_file())
 
-    def test_ravuna_nginx_is_static_and_secure(self) -> None:
+    def test_ravuna_nginx_is_static_except_for_exact_payment_routes(self) -> None:
         nginx = (SITE / "nginx" / "ravuna.ru.conf").read_text(encoding="utf-8")
         self.assertIn("server_name ravuna.ru www.ravuna.ru", nginx)
         self.assertIn("root /opt/ravuna-site/current", nginx)
         self.assertIn("Content-Security-Policy", nginx)
         self.assertIn("Strict-Transport-Security", nginx)
-        self.assertNotIn("proxy_pass", nginx)
+        self.assertEqual(
+            nginx.count("proxy_pass http://127.0.0.1:8091$request_uri;"), 1
+        )
 
     def test_ravuna_csp_allows_only_its_exact_structured_data(self) -> None:
         html = self.pages["index.html"]

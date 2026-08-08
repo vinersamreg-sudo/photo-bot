@@ -171,22 +171,32 @@ class GeminiImageProvider:
         return f"{configured['image_size']}/{configured['aspect_ratio']}"
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
+        return self.edit_many((source_path,), prompt)
+
+    def edit_many(
+        self, source_paths: tuple[Path, ...], prompt: str
+    ) -> ProviderResult:
         if not prompt.strip():
             raise ValueError("Image providers require a non-empty prompt")
+        if not source_paths or len(source_paths) > 2:
+            raise ValueError("Gemini image edits accept one or two source images")
         started = time.monotonic()
-        mime_type = mimetypes.guess_type(source_path.name)[0] or "image/png"
         request: dict[str, Any] = {
             "model": self.model,
-            "input": [
-                {"type": "text", "text": prompt},
+            "input": [{"type": "text", "text": prompt}],
+        }
+        for source_path in source_paths:
+            mime_type = mimetypes.guess_type(source_path.name)[0] or "image/png"
+            request["input"].append(
                 {
                     "type": "image",
                     "mime_type": mime_type,
                     "data": base64.b64encode(source_path.read_bytes()).decode("ascii"),
-                },
-            ],
-        }
-        response_format = _response_format(self.size, self.output_format, source_path)
+                }
+            )
+        response_format = _response_format(
+            self.size, self.output_format, source_paths[0]
+        )
         if response_format is not None:
             request["response_format"] = response_format
         try:

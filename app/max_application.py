@@ -79,7 +79,7 @@ from app.payments import (
 LOGGER = logging.getLogger(__name__)
 
 PHOTO_ACCEPTED_TEXT = (
-    "Что хотите изменить?"
+    "Фото 1 принято.\n\nЧто хотите изменить?"
 )
 PHOTO_REUSED_TEXT = (
     "Что хотите изменить?"
@@ -113,11 +113,9 @@ PENDING_EDIT_PAYMENT_TEXT = (
     "Чтобы обработать эту фотографию, приобретите пакет Ravuna.\n\n"
     + PAYMENT_OFFER_TEXT
 )
-PAYMENT_LINK_TEXT = (
-    "Ссылка на оплату готова.\n\n"
-    "После оплаты пакет начислится автоматически."
-)
-
+# Kept as a compatibility symbol for older integrations; this screen is no
+# longer rendered in the one-step checkout flow.
+PAYMENT_LINK_TEXT = "Ссылка на оплату готова."
 NAV_WORKS = "navigation:works"
 NAV_WORK = "navigation:work"
 NAV_HISTORY = "navigation:history"
@@ -511,6 +509,13 @@ class MaxApplication:
             self._receive_source(event, dialog)
             return
         if dialog.state == "waiting_for_source":
+            if dialog.pending_action == "second_source":
+                self._send_message(
+                    event.user_id,
+                    "Прикрепите вторую фотографию через скрепку 📎.",
+                    (Button("← Назад", "source:one"),),
+                )
+                return
             if text:
                 self.store.transition(
                     event.user_id,
@@ -540,6 +545,10 @@ class MaxApplication:
             self._show_main(event.user_id, dialog, event.event_key)
 
     def _start(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        return_token = (event.start_payload or "").strip()
+        if return_token.startswith(("pay_", "payfail_")):
+            self._show_payment_return(event, dialog, return_token)
+            return
         relationship_id = None
         referral_code = None
         parsed = parse_start_payload(event.start_payload)
@@ -566,6 +575,57 @@ class MaxApplication:
             )
         self._track("start", session_id=dialog.session_id)
         self._show_main(event.user_id, dialog, event.event_key)
+
+    def _show_payment_return(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, payload: str
+    ) -> None:
+        failed = payload.startswith("payfail_")
+        token = payload.split("_", 1)[1] if "_" in payload else ""
+        try:
+            order = self.payments.order_for_platform_user(token, event.user_id)
+        except (PaymentError, PaymentUnavailable):
+            self._send_message(
+                event.user_id,
+                "Не удалось найти эту оплату.",
+                (Button("← Назад", "nav:back:main"),),
+                screen="payment_return_invalid",
+            )
+            return
+        if failed:
+            self._send_message(
+                event.user_id,
+                "Оплата отменена или не завершена. Фотография и запрос сохранены.",
+                ((Button("Повторить оплату", self.payments.short_payment_url(order)),)
+                 if order.status is PaymentStatus.PENDING else ())
+                + (Button("← Назад", "nav:back:main"),),
+                screen="payment_return_failed",
+            )
+            return
+        if order.status is PaymentStatus.PENDING:
+            self._send_message(
+                event.user_id,
+                "Проверяем оплату…",
+                (
+                    Button("Обновить состояние", f"payment:refresh:{token}"),
+                    Button("← Назад", "nav:back:main"),
+                ),
+                screen="payment_return_pending",
+            )
+            return
+        if order.status in {
+            PaymentStatus.PAID,
+            PaymentStatus.DELIVERY_PENDING,
+            PaymentStatus.DELIVERED,
+            PaymentStatus.PARTIALLY_REFUNDED,
+        }:
+            self.notify_continuation_pack_paid(order.id)
+            return
+        self._send_message(
+            event.user_id,
+            "Оплата не завершена. Начислений не было.",
+            (Button("← Назад", "nav:back:main"),),
+            screen="payment_return_failed",
+        )
 
     def _send_view(self, user_id: str, view: View) -> str:
         return self._send_message(user_id, view.text, view.buttons)
@@ -764,8 +824,23 @@ class MaxApplication:
         self._send_view(user_id, legal_view())
 
     def _show_main(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
+        account_id = self.adapter.ensure_account(user_id)
+        balance = self.demo.commerce.balance(account_id).available
         self._reset_dialog_to_main(user_id, event_key)
-        self._send_view(user_id, main_menu())
+        self.store.update(user_id, user_id=account_id)
+        payment_url = None
+        if balance == 0 and self.settings.payments_enabled:
+            try:
+                order = self.payments.create_order(
+                    account_id,
+                    None,
+                    f"max-main:{event_key}",
+                    account_purchase=True,
+                )
+                payment_url = self.payments.short_payment_url(order)
+            except (PaymentError, PaymentUnavailable):
+                LOGGER.warning("Start payment offer is temporarily unavailable")
+        self._send_view(user_id, main_menu(balance, payment_url))
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
         self.store.transition(
@@ -782,6 +857,12 @@ class MaxApplication:
         )
 
     def _show_upload(self, user_id: str, event_key: str) -> None:
+        account_id = self.adapter.ensure_account(user_id)
+        if self.demo.commerce.balance(account_id).available <= 0:
+            dialog = self.store.get(user_id)
+            if dialog is not None:
+                self._show_main(user_id, dialog, event_key)
+            return
         self._reset_dialog_to_upload(user_id, event_key)
         self._send_view(user_id, upload_view())
 
@@ -955,6 +1036,42 @@ class MaxApplication:
             self._show_share(event, dialog)
         elif action == "package:buy":
             self._buy_continuation_pack(event, dialog)
+        elif action.startswith("payment:refresh:"):
+            self._show_payment_return(
+                event,
+                dialog,
+                f"pay_{action.rsplit(':', 1)[-1]}",
+            )
+        elif action == "source:one":
+            updated = self.store.transition(
+                event.user_id,
+                "waiting_for_prompt",
+                event_key=event.event_key,
+                force=True,
+                pending_action="initial",
+            )
+            self._send_message(
+                event.user_id,
+                "Фото 1 принято. Теперь напишите, что хотите изменить.",
+                (Button("← Назад", "nav:back:main"),),
+                screen="waiting_for_prompt",
+            )
+        elif action == "source:add-second":
+            if not dialog.session_id:
+                raise InvalidInputError("The first source image is unavailable")
+            self.store.transition(
+                event.user_id,
+                "waiting_for_source",
+                event_key=event.event_key,
+                force=True,
+                pending_action="second_source",
+            )
+            self._send_message(
+                event.user_id,
+                "Прикрепите вторую фотографию через скрепку 📎.",
+                (Button("← Назад", "source:one"),),
+                screen="waiting_for_second_source",
+            )
         elif action == "pending:process":
             self._process_paid_pending_request(event, dialog)
         elif action == "package:offer":
@@ -1147,6 +1264,16 @@ class MaxApplication:
         if not event.image_url:
             self._send_message(event.user_id, "Пришлите фотографию 📷")
             return
+        if dialog.pending_action == "two_sources":
+            self._send_message(
+                event.user_id,
+                "Можно использовать максимум 2 фотографии",
+                (Button("← Назад", "nav:back:main"),),
+            )
+            return
+        if dialog.pending_action == "second_source":
+            self._receive_secondary_source(event, dialog)
+            return
         destination = self.settings.temp_dir / f"max-{event.message_id or event.event_key}.upload"
         try:
             try:
@@ -1239,8 +1366,50 @@ class MaxApplication:
                 self._send_message(
                     event.user_id,
                     PHOTO_ACCEPTED_TEXT,
-                    (Button("← Назад", "nav:back:main"),),
+                    (
+                        Button("Продолжить с одним фото", "source:one"),
+                        Button("➕ Добавить второе фото", "source:add-second"),
+                        Button("← Назад", "nav:back:main"),
+                    ),
                 )
+
+    def _receive_secondary_source(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        if not event.image_url or not dialog.session_id:
+            raise InvalidInputError("The second source image is unavailable")
+        destination = (
+            self.settings.temp_dir
+            / f"max-secondary-{event.message_id or event.event_key}.upload"
+        )
+        try:
+            self.transport.download_image(
+                event.image_url,
+                destination,
+                self.settings.max_source_file_size_mb * 1024 * 1024,
+            )
+            self.adapter.add_secondary_source(dialog.session_id, destination)
+        except MaxTransportError as exc:
+            if exc.kind == "media_too_large":
+                raise ImageTooLargeError(
+                    "Source image exceeds the allowed limit"
+                ) from exc
+            raise
+        finally:
+            destination.unlink(missing_ok=True)
+        self.store.transition(
+            event.user_id,
+            "waiting_for_prompt",
+            event_key=event.event_key,
+            force=True,
+            pending_action="two_sources",
+        )
+        self._send_message(
+            event.user_id,
+            "Фото 1 и Фото 2 приняты.\n\nТеперь напишите один запрос для обработки.",
+            (Button("← Назад", "nav:back:main"),),
+            screen="waiting_for_prompt",
+        )
 
     def _session_is_usable(self, session_id: str) -> bool:
         with self.database.read() as connection:
@@ -1702,23 +1871,36 @@ class MaxApplication:
                 (dialog.session_id,),
             ).fetchone()
             request_id = existing["id"] if existing else uuid4().hex
+            item = connection.execute(
+                """SELECT original_source_path,secondary_source_path
+                   FROM gallery_items WHERE id=? AND user_id=?""",
+                (dialog.current_gallery_item_id, dialog.user_id),
+            ).fetchone()
+            if item is None:
+                raise AssetUnavailableError("Pending edit source is unavailable")
             if existing is None:
                 connection.execute(
                     """INSERT INTO pending_edit_requests(
                            id,platform_user_id,user_id,session_id,gallery_item_id,
-                           prompt,status,created_at,updated_at
-                       ) VALUES(?,?,?,?,?,?,'awaiting_payment',?,?)""",
+                           prompt,primary_source_path,secondary_source_path,
+                           status,created_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,?,?, 'awaiting_payment',?,?)""",
                     (
                         request_id, event.user_id, dialog.user_id,
                         dialog.session_id, dialog.current_gallery_item_id,
-                        prompt, now, now,
+                        prompt, item["original_source_path"],
+                        item["secondary_source_path"], now, now,
                     ),
                 )
             elif existing["status"] not in {"paid", "processing", "completed"}:
                 connection.execute(
                     """UPDATE pending_edit_requests
-                       SET prompt=?,status='awaiting_payment',updated_at=? WHERE id=?""",
-                    (prompt, now, request_id),
+                       SET prompt=?,primary_source_path=?,secondary_source_path=?,
+                           status='awaiting_payment',updated_at=? WHERE id=?""",
+                    (
+                        prompt, item["original_source_path"],
+                        item["secondary_source_path"], now, request_id,
+                    ),
                 )
             source = connection.execute(
                 """SELECT i.original_source_path
@@ -1742,12 +1924,22 @@ class MaxApplication:
             current_version_id=None,
             status_message_id=None,
         )
+        try:
+            order = self.payments.create_order(
+                dialog.user_id,
+                None,
+                f"max:{event.event_key}",
+                pending_request_id=request_id,
+            )
+            payment_url = self.payments.short_payment_url(order)
+        except (PaymentError, PaymentUnavailable):
+            payment_url = "package:buy"
         self._send_image(
             event.user_id,
             source_path,
             PENDING_EDIT_PAYMENT_TEXT,
             (
-                Button("Оплатить 49 ₽", "package:buy"),
+                Button("Оплатить 49 ₽", payment_url),
                 Button("← Назад", "nav:back:main"),
             ),
             screen="pending_payment_offer",
@@ -1780,6 +1972,20 @@ class MaxApplication:
                 "UPDATE pending_edit_requests SET status='processing',updated_at=? WHERE id=?",
                 (self.demo.clock().isoformat(), dialog.pending_request_id),
             )
+            connection.execute(
+                """UPDATE demo_sessions
+                   SET source_file_path=?,secondary_source_file_path=?,gallery_item_id=?,
+                       updated_at=?
+                   WHERE id=? AND user_id=?""",
+                (
+                    pending["primary_source_path"],
+                    pending["secondary_source_path"],
+                    pending["gallery_item_id"],
+                    self.demo.clock().isoformat(),
+                    pending["session_id"],
+                    pending["user_id"],
+                ),
+            )
         updated = self.store.transition(
             event.user_id,
             "confirmation",
@@ -1798,7 +2004,7 @@ class MaxApplication:
     def _show_continuation_pack_offer(
         self, event: MaxIncomingEvent, dialog: MaxDialog
     ) -> None:
-        """Show the selected result before checkout without creating an order."""
+        """Show the selected result with its direct, idempotent checkout link."""
 
         current = self.store.get(event.user_id) or dialog
         if current.pending_action == "checkout":
@@ -1823,8 +2029,17 @@ class MaxApplication:
             pending_prompt=None,
             pending_action="checkout",
         )
+        try:
+            order = self.payments.create_order(
+                dialog.user_id,
+                dialog.current_version_id,
+                f"max:{event.event_key}",
+            )
+            payment_url = self.payments.short_payment_url(order)
+        except (PaymentError, PaymentUnavailable):
+            payment_url = "package:buy"
         offer_buttons = (
-            Button("Оплатить 49 ₽", "package:buy"),
+            Button("Оплатить 49 ₽", payment_url),
             Button("← Назад", "nav:back:work"),
         )
         if self.settings.max_single_screen_ui_enabled and dialog.current_version_id:
@@ -1859,6 +2074,7 @@ class MaxApplication:
         with self._checkout_lock:
             current = self.store.get(event.user_id) or dialog
             if current.pending_action != "checkout":
+                self._show_main(event.user_id, current, event.event_key)
                 return
             if not self.settings.payments_enabled:
                 self._send_message(
@@ -1919,26 +2135,14 @@ class MaxApplication:
                 idempotency_key=f"payment-start:{order.id}",
                 user_id=current.user_id,
             )
-            if self._payment_card_was_sent(order.id):
-                self.store.update(event.user_id, pending_action=NAV_PAYMENT_LINK)
-                return
-            payment_message_id = self._send_message(
-                event.user_id,
-                PAYMENT_LINK_TEXT,
-                (
-                    Button("Оплатить 49 ₽", order.payment_url or "package:buy"),
-                    Button(
-                        "← Назад",
-                        "nav:back:main" if pending_request_id else "nav:back:work",
-                    ),
-                ),
-            )
-            self._mark_payment_card_sent(
-                order.id,
-                order.payment_url or "",
-                payment_message_id,
-            )
-            self.store.update(event.user_id, pending_action=NAV_PAYMENT_LINK)
+            # Compatibility path for an old callback: render the same paywall,
+            # never a second "link ready" screen.
+            if pending_request_id:
+                self._show_pending_edit_offer(
+                    event, current, current.pending_prompt or ""
+                )
+            else:
+                self._show_continuation_pack_offer(event, current)
 
     def _paid_order_exists(self, user_id: str, version_id: str) -> bool:
         with self.database.read() as connection:
@@ -2020,7 +2224,7 @@ class MaxApplication:
 
         with self.database.read() as connection:
             row = connection.execute(
-                """SELECT o.user_id,u.platform_user_id,
+                """SELECT o.user_id,o.status,o.payment_purpose,u.platform_user_id,
                           COALESCE(i.version_id,o.version_id) AS target_version_id,
                           v.gallery_item_id,
                           COALESCE(i.pending_request_id,o.pending_request_id) AS pending_request_id,
@@ -2083,6 +2287,31 @@ class MaxApplication:
                 user_id=row["user_id"],
             )
             return True
+        if row["payment_purpose"] == "account_topup":
+            self.store.transition(
+                row["platform_user_id"],
+                "main_menu",
+                force=True,
+                user_id=row["user_id"],
+                session_id=None,
+                current_gallery_item_id=None,
+                current_version_id=None,
+                pending_prompt=None,
+                pending_action=None,
+                pending_request_id=None,
+                status_message_id=None,
+            )
+            menu = main_menu(balance.available)
+            self._send_view(
+                row["platform_user_id"],
+                View(
+                    "✅ Оплата прошла успешно\n\n"
+                    f"Доступно обработок: {balance.available}\n\n"
+                    + menu.text,
+                    menu.buttons,
+                ),
+            )
+            return True
         if not row["target_version_id"] or not row["gallery_item_id"]:
             raise PaymentError("Paid version target is incomplete")
         self.store.update(
@@ -2091,6 +2320,14 @@ class MaxApplication:
             current_gallery_item_id=row["gallery_item_id"],
             current_version_id=row["target_version_id"],
         )
+        if row["status"] != PaymentStatus.DELIVERED.value:
+            self.attribution.record_event(
+                row["platform_user_id"],
+                "payment_success",
+                idempotency_key=f"payment-success:{order_id}",
+                user_id=row["user_id"],
+            )
+            return self.deliver_paid_original(order_id)
         actions = paid_actions()
         if self.settings.max_single_screen_ui_enabled:
             self._send_message(
@@ -2149,16 +2386,33 @@ class MaxApplication:
             current_gallery_item_id=row["gallery_item_id"],
             current_version_id=row["target_version_id"],
         )
-        original = self.payments.original_for_order(order_id, row["user_id"])
+        reservation = self.demo.commerce.reserve_unlock_delivery(
+            row["user_id"], row["target_version_id"]
+        )
         try:
-            delivered = self._send_file(
+            delivered = bool(self._send_file(
                 row["platform_user_id"],
-                original,
+                reservation.original_path,
                 "Оригинал без водяного знака.",
                 (),
-            )
+            ))
         except MaxTransportError:
             delivered = False
+        if not delivered and not reservation.already_unlocked and reservation.entitlement_id:
+            self.demo.commerce.release_unlock_delivery(
+                row["user_id"], row["target_version_id"], reservation.entitlement_id
+            )
+        if delivered and not reservation.already_unlocked and reservation.entitlement_id:
+            self.demo.commerce.commit_unlock_delivery(
+                row["user_id"], row["target_version_id"], reservation.entitlement_id
+            )
+        if delivered:
+            with self.database.transaction() as connection:
+                connection.execute(
+                    """UPDATE gallery_versions SET delivery_count=delivery_count+1,
+                       last_delivered_at=? WHERE id=?""",
+                    (self.demo.clock().isoformat(), row["target_version_id"]),
+                )
         self.payments.mark_delivery(
             order_id,
             delivered=delivered,
@@ -2166,9 +2420,12 @@ class MaxApplication:
         )
         if delivered:
             try:
+                balance = self.demo.commerce.balance(row["user_id"])
                 self._send_message(
                     row["platform_user_id"],
-                    "Оригинал готов ✅",
+                    "✅ Оплата прошла успешно\n\n"
+                    "Оригинал отправлен.\n\n"
+                    f"Доступно обработок: {balance.available}",
                     delivered_actions(),
                 )
             except MaxTransportError:

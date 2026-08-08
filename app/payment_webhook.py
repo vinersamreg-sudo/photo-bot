@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import parse_qsl, urlsplit
@@ -50,8 +51,103 @@ class PaymentWebhookServer:
             def log_message(self, format: str, *args: object) -> None:
                 LOGGER.info("Payment webhook request completed")
 
+            def _empty(self, status: int, *, location: str | None = None) -> None:
+                self.send_response(status)
+                if location:
+                    self.send_header("Location", location)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def _page(
+                self,
+                status: int,
+                title: str,
+                message: str,
+                *,
+                refresh_url: str | None = None,
+                refresh_seconds: int = 2,
+            ) -> None:
+                refresh = (
+                    f'<meta http-equiv="refresh" content="{refresh_seconds};url={escape(refresh_url, quote=True)}">'
+                    if refresh_url else ""
+                )
+                action = (
+                    f'<p><a href="{escape(refresh_url, quote=True)}">Обновить состояние</a></p>'
+                    if refresh_url else ""
+                )
+                body = (
+                    "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                    f"{refresh}<title>{escape(title)}</title></head><body>"
+                    f"<main><h1>{escape(title)}</h1><p>{escape(message)}</p>{action}</main>"
+                    "</body></html>"
+                ).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _max_url(self, token: str, *, failed: bool = False) -> str:
+                separator = "&" if "?" in owner.service.settings.max_bot_url else "?"
+                prefix = "payfail_" if failed else "pay_"
+                return f"{owner.service.settings.max_bot_url}{separator}start={prefix}{token}"
+
+            def _handle_browser(self, parsed) -> bool:
+                path = parsed.path.rstrip("/")
+                routes = (
+                    ("/p/", "checkout"),
+                    ("/payment/success/", "success"),
+                    ("/payment/fail/", "fail"),
+                )
+                route = next(((prefix, kind) for prefix, kind in routes if path.startswith(prefix)), None)
+                if route is None:
+                    return False
+                if self.command != "GET":
+                    self._empty(405)
+                    return True
+                prefix, kind = route
+                token = path[len(prefix):]
+                if "/" in token:
+                    self._page(404, "Ссылка недоступна", "Проверьте ссылку и попробуйте снова.")
+                    return True
+                try:
+                    order = owner.service.order_by_public_token(token)
+                    if kind == "checkout":
+                        self._empty(303, location=owner.service.payment_redirect_url(token))
+                        return True
+                except (PaymentError, PaymentUnavailable):
+                    self._page(404, "Ссылка недоступна", "Срок действия ссылки истёк или она неверна.")
+                    return True
+                if kind == "fail":
+                    self._empty(303, location=self._max_url(token, failed=True))
+                    return True
+                if order.status.value in {
+                    "paid", "delivery_pending", "delivered", "partially_refunded"
+                }:
+                    self._empty(303, location=self._max_url(token))
+                    return True
+                if order.status.value in {"failed", "cancelled", "expired", "refunded"}:
+                    self._empty(303, location=self._max_url(token, failed=True))
+                    return True
+                self._page(
+                    200,
+                    "Проверяем оплату…",
+                    "Подтверждение от Robokassa ещё не получено.",
+                    refresh_url=path,
+                )
+                return True
+
             def _handle(self) -> None:
                 parsed = urlsplit(self.path)
+                if self._handle_browser(parsed):
+                    return
                 if parsed.path != owner.path:
                     self.send_error(404)
                     return

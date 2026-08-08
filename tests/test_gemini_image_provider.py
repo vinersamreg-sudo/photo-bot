@@ -85,6 +85,33 @@ class GeminiImageProviderTests(TestCase):
         self.assertEqual(result.provider_model, "gemini-3.1-flash-image")
         self.assertEqual(result.request_id, "google-request-1")
 
+    def test_two_sources_are_sent_in_order_with_one_unchanged_prompt(self) -> None:
+        second = Path(self.temp.name) / "second.png"
+        Image.new("RGB", (800, 1200), "red").save(second)
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(
+                200,
+                json={"output_image": {"data": base64.b64encode(self.image_bytes).decode("ascii")}},
+            )
+
+        provider = GeminiImageProvider(
+            httpx.Client(
+                base_url="https://generativelanguage.googleapis.com",
+                transport=httpx.MockTransport(handler),
+            ),
+            "gemini-3-pro-image",
+        )
+        prompt = "Одень меня как на втором фото"
+
+        provider.edit_many((self.source, second), prompt)
+
+        self.assertEqual(captured["input"][0], {"type": "text", "text": prompt})
+        self.assertEqual([part["type"] for part in captured["input"]], ["text", "image", "image"])
+        self.assertNotIn("system_instruction", captured)
+
     def test_text_only_provider_refusal_maps_to_policy_error(self) -> None:
         client = httpx.Client(
             base_url="https://generativelanguage.googleapis.com",

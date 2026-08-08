@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Mapping, Protocol
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -115,6 +116,7 @@ class PaymentIntent:
     amount_minor: int
     currency: str
     status: PaymentStatus
+    purpose: str
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,7 @@ class PaymentOrder:
     product_code: str = PRODUCT_CODE
     generation_credit_quantity: int = GENERATION_CREDITS_PER_PACK
     unlock_entitlement_quantity: int = UNLOCK_ENTITLEMENTS_PER_PACK
+    purpose: str = "original_download"
 
 
 @dataclass(frozen=True)
@@ -261,6 +264,7 @@ def _row_order(row: Mapping[str, object], payment_url: str | None = None) -> Pay
         product_code=str(row["product_code"]),
         generation_credit_quantity=int(row["generation_credit_quantity"]),
         unlock_entitlement_quantity=int(row["unlock_entitlement_quantity"]),
+        purpose=str(row["payment_purpose"]),
     )
 
 
@@ -345,6 +349,70 @@ class PaymentService:
             raise PaymentError("Payment order was not found")
         return _row_order(row)
 
+    def order_by_public_token(self, public_token: str) -> PaymentOrder:
+        """Resolve an opaque browser token without changing payment state."""
+
+        token = public_token.strip()
+        if len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token):
+            raise PaymentError("Payment link is invalid")
+        with self.database.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM payment_orders WHERE public_token=?", (token,)
+            ).fetchone()
+        if row is None:
+            raise PaymentError("Payment order was not found")
+        return _row_order(row)
+
+    def order_for_platform_user(
+        self, public_token: str, platform_user_id: str
+    ) -> PaymentOrder:
+        """Resolve a return-to-bot token only for the account that owns it."""
+
+        order = self.order_by_public_token(public_token)
+        with self.database.read() as connection:
+            owned = connection.execute(
+                """SELECT 1 FROM payment_orders o
+                   JOIN users u ON u.id=o.user_id
+                   WHERE o.id=? AND u.platform='max' AND u.platform_user_id=?""",
+                (order.id, platform_user_id),
+            ).fetchone()
+        if owned is None:
+            raise PaymentError("Payment order was not found")
+        return order
+
+    def _public_origin(self) -> str:
+        parsed = urlsplit(self.settings.payment_success_url)
+        if parsed.scheme == "https" and parsed.netloc:
+            return f"https://{parsed.netloc}"
+        return "https://ravuna.ru"
+
+    def short_payment_url(self, order: PaymentOrder) -> str:
+        return f"{self._public_origin()}/p/{order.public_token}"
+
+    def _provider_payment_url(self, order: PaymentOrder) -> str:
+        provider = self._require_provider()
+        origin = self._public_origin()
+        request = RobokassaPaymentRequest(
+            invoice_id=order.provider_invoice_id,
+            amount_minor=order.amount_minor,
+            description=USER_PRODUCT_NAME,
+            public_token=order.public_token,
+            expires_at=order.expires_at,
+            receipt_name=self.settings.payment_receipt_item_name,
+            receipt_tax=self.settings.payment_receipt_tax,
+            success_url=f"{origin}/payment/success/{order.public_token}",
+            fail_url=f"{origin}/payment/fail/{order.public_token}",
+        )
+        return provider.payment_link(request)
+
+    def payment_redirect_url(self, public_token: str) -> str:
+        """Return the signed provider URL for an existing active order only."""
+
+        order = self.order_by_public_token(public_token)
+        if order.status is not PaymentStatus.PENDING or self.clock() >= order.expires_at:
+            raise PaymentError("Payment link is no longer active")
+        return self._provider_payment_url(order)
+
     def create_order(
         self,
         user_id: str,
@@ -352,6 +420,7 @@ class PaymentService:
         idempotency_key: str,
         *,
         pending_request_id: str | None = None,
+        account_purchase: bool = False,
     ) -> PaymentOrder:
         """Create a package order; the selected version is context, not an unlock target."""
 
@@ -360,12 +429,25 @@ class PaymentService:
             raise PaymentError("Payment idempotency key is required")
         if self.settings.continuation_pack_price_rub * 100 != PRICE_MINOR:
             raise PaymentError("Continuation pack price must be exactly 49 RUB")
-        if bool(version_id) == bool(pending_request_id):
+        if sum(bool(value) for value in (version_id, pending_request_id, account_purchase)) != 1:
             raise PaymentError("Exactly one payment target is required")
         now = self.clock()
+        purpose = (
+            "processing_request" if pending_request_id
+            else "account_topup" if account_purchase
+            else "original_download"
+        )
         expires_at = now + timedelta(minutes=self.settings.payment_order_ttl_minutes)
         with self.database.transaction() as connection:
-            if pending_request_id:
+            if account_purchase:
+                user = connection.execute(
+                    "SELECT id FROM users WHERE id=?", (user_id,)
+                ).fetchone()
+                if user is None:
+                    raise PaymentError("Ravuna account was not found")
+                attempt_id = None
+                item_id = None
+            elif pending_request_id:
                 pending = connection.execute(
                     """SELECT r.id,r.user_id,r.session_id,r.gallery_item_id,r.status
                        FROM pending_edit_requests r
@@ -409,11 +491,13 @@ class PaymentService:
                 if (
                     replay["user_id"] != user_id
                     or replay["product_code"] != PRODUCT_CODE
+                    or replay["payment_purpose"] != purpose
                     or (replay["pending_request_id"] or None) != pending_request_id
                     or (
-                        pending_request_id is None
+                        not account_purchase and pending_request_id is None
                         and replay["version_id"] != version_id
                     )
+                    or (account_purchase and (replay["version_id"] or replay["pending_request_id"]))
                 ):
                     raise PaymentError("Payment idempotency key conflict")
                 order = _row_order(replay)
@@ -426,18 +510,28 @@ class PaymentService:
                         PaymentStatus.PENDING.value, _iso(now),
                     ),
                 )
-                existing = connection.execute(
-                    """SELECT * FROM payment_orders
-                       WHERE user_id=? AND product_code=? AND status='pending' AND expires_at>=?
-                         AND ((? IS NOT NULL AND pending_request_id=?)
-                              OR (? IS NOT NULL AND pending_request_id IS NULL AND version_id=?))
-                       ORDER BY created_at DESC LIMIT 1""",
-                    (
-                        user_id, PRODUCT_CODE, _iso(now),
-                        pending_request_id, pending_request_id,
-                        version_id, version_id,
-                    ),
-                ).fetchone()
+                if account_purchase:
+                    existing = connection.execute(
+                        """SELECT * FROM payment_orders
+                           WHERE user_id=? AND product_code=? AND status='pending'
+                             AND expires_at>=? AND pending_request_id IS NULL
+                             AND COALESCE(version_id,'')=''
+                           ORDER BY created_at DESC LIMIT 1""",
+                        (user_id, PRODUCT_CODE, _iso(now)),
+                    ).fetchone()
+                else:
+                    existing = connection.execute(
+                        """SELECT * FROM payment_orders
+                           WHERE user_id=? AND product_code=? AND status='pending' AND expires_at>=?
+                             AND ((? IS NOT NULL AND pending_request_id=?)
+                                  OR (? IS NOT NULL AND pending_request_id IS NULL AND version_id=?))
+                           ORDER BY created_at DESC LIMIT 1""",
+                        (
+                            user_id, PRODUCT_CODE, _iso(now),
+                            pending_request_id, pending_request_id,
+                            version_id, version_id,
+                        ),
+                    ).fetchone()
                 if existing is not None:
                     order = _row_order(existing)
                 else:
@@ -458,14 +552,15 @@ class PaymentService:
                     connection.execute(
                         """INSERT INTO payment_intents(
                                id,attempt_id,pending_request_id,idempotency_key,amount_rub,status,created_at,
-                               version_id,user_id,provider,currency,updated_at,expires_at,product_code
-                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               version_id,user_id,provider,currency,updated_at,expires_at,product_code,
+                               payment_purpose
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             intent_id, attempt_id, pending_request_id, idempotency_key,
                             self.settings.continuation_pack_price_rub,
                             PaymentStatus.PENDING.value, _iso(now), version_id, user_id,
                             provider.name, self.settings.payment_currency, _iso(now),
-                            _iso(expires_at), PRODUCT_CODE,
+                            _iso(expires_at), PRODUCT_CODE, purpose,
                         ),
                     )
                     invoice_id = _next_provider_invoice_id(connection, now)
@@ -476,8 +571,9 @@ class PaymentService:
                                id,public_token,intent_id,attempt_id,version_id,user_id,provider,
                                merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
                                created_at,updated_at,expires_at,product_code,
-                               generation_credit_quantity,unlock_entitlement_quantity,pending_request_id
-                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               generation_credit_quantity,unlock_entitlement_quantity,pending_request_id,
+                               payment_purpose
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             order_id, public_token, intent_id, attempt_id or "", version_id or "", user_id,
                             provider.name,
@@ -486,7 +582,7 @@ class PaymentService:
                             PaymentStatus.PENDING.value,
                             self.settings.payment_receipt_item_name, _iso(now), _iso(now),
                             _iso(expires_at), PRODUCT_CODE, GENERATION_CREDITS_PER_PACK,
-                            UNLOCK_ENTITLEMENTS_PER_PACK, pending_request_id,
+                            UNLOCK_ENTITLEMENTS_PER_PACK, pending_request_id, purpose,
                         ),
                     )
                     receipt_id = uuid4().hex
@@ -543,6 +639,7 @@ class PaymentService:
                         product_code=PRODUCT_CODE,
                         generation_credit_quantity=GENERATION_CREDITS_PER_PACK,
                         unlock_entitlement_quantity=UNLOCK_ENTITLEMENTS_PER_PACK,
+                        purpose=purpose,
                     )
             if pending_request_id:
                 connection.execute(
@@ -550,16 +647,7 @@ class PaymentService:
                        SET payment_order_id=?,updated_at=? WHERE id=?""",
                     (order.id, _iso(now), pending_request_id),
                 )
-        request = RobokassaPaymentRequest(
-            invoice_id=order.provider_invoice_id,
-            amount_minor=order.amount_minor,
-            description=USER_PRODUCT_NAME,
-            public_token=order.public_token,
-            expires_at=order.expires_at,
-            receipt_name=self.settings.payment_receipt_item_name,
-            receipt_tax=self.settings.payment_receipt_tax,
-        )
-        payment_url = provider.payment_link(request)
+        payment_url = self._provider_payment_url(order)
         attempt_key = hashlib.sha256(
             f"link:{order.id}:{idempotency_key}".encode("utf-8")
         ).hexdigest()

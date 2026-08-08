@@ -31,6 +31,8 @@ class RobokassaPaymentRequest:
     expires_at: datetime
     receipt_name: str
     receipt_tax: str
+    success_url: str = ""
+    fail_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -161,13 +163,23 @@ class RobokassaProvider:
         ).strftime("%Y-%m-%dT%H:%M")
         receipt_encoded = quote(self._receipt(request), safe="")
         shp = {"Shp_order": request.public_token}
-        base = ":".join((
+        signature_parts = [
             self.merchant_login,
             amount_text(request.amount_minor),
             str(request.invoice_id),
             receipt_encoded,
-            self.password1,
-        )) + self._shp(shp)
+        ]
+        if bool(request.success_url) != bool(request.fail_url):
+            raise ValueError("Robokassa return URLs must be configured together")
+        if request.success_url:
+            signature_parts.extend((
+                quote(request.success_url, safe=""),
+                "GET",
+                quote(request.fail_url, safe=""),
+                "GET",
+            ))
+        signature_parts.append(self.password1)
+        base = ":".join(signature_parts) + self._shp(shp)
         params: dict[str, str] = {
             "MerchantLogin": self.merchant_login,
             "OutSum": amount_text(request.amount_minor),
@@ -184,6 +196,13 @@ class RobokassaProvider:
         }
         if self.mode == "sandbox":
             params["IsTest"] = "1"
+        if request.success_url:
+            params.update({
+                "SuccessUrl2": request.success_url,
+                "SuccessUrl2Method": "GET",
+                "FailUrl2": request.fail_url,
+                "FailUrl2Method": "GET",
+            })
         return f"{self.payment_url}?{urlencode(params)}"
 
     def parse_notification(self, values: Mapping[str, str]) -> RobokassaNotification:

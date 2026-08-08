@@ -7,15 +7,16 @@ The primary MAX flow is intentionally compact:
 1. `/start` shows the complete main menu with examples, a photo-processing
    action, «Мои работы» and legal links.
 2. Only after the user chooses photo processing does Ravuna show the upload
-   instruction and enter the photo-waiting state. The user then sends an image,
-   preferably with the instruction in its caption.
+   instruction and enter the photo-waiting state. The user sends one source and
+   may add exactly one more before entering the instruction.
 3. Ravuna produces one watermarked preview with direct actions.
 4. User corrects/repeats, opens works/history, or requests the original.
 5. If no original entitlement exists, Ravuna shows one compact 49 ₽ package
-   screen without creating a PaymentIntent.
-6. PaymentIntent and the Robokassa link are created/reused only after the user
-   presses “Оплатить 49 ₽”; the link screen does not repeat the package copy.
-7. After ResultURL confirms payment, download is the primary action.
+   screen and creates/reuses its exact target-scoped PaymentIntent.
+6. “Оплатить 49 ₽” opens Ravuna's opaque short URL and then Robokassa directly;
+   there is no second link screen and no long URL in message text.
+7. ResultURL remains the only payment confirmation. Browser return either shows
+   “Проверяем оплату…” or resumes the exact confirmed purchase context.
 
 If a new photo and prompt arrive with no edits available, Ravuna stores them as
 a pending request and shows that photo with an exhausted-balance notice plus the
@@ -55,6 +56,21 @@ pending request; a previous or latest completed work is never used as fallback.
 - Do not add a separate “Фото принято” screen when the caption is sufficient.
 - Invalid or unsupported media receives a concrete recovery instruction.
 - `/start` clears stale dialog binding but not gallery/payment history.
+- The main screen shows `Доступно обработок: N`. At zero it shows the exhausted
+  balance explanation and a direct package purchase button; stale upload state
+  cannot call the image provider.
+
+## Source input
+
+- One edit accepts one or two source images and consumes one edit after normal
+  successful processing and delivery.
+- After the first source, Ravuna offers “Продолжить с одной фотографией” and
+  “Добавить вторую фотографию”. A third source is rejected with
+  “Можно использовать максимум 2 фотографии”.
+- The provider receives the unchanged prompt followed by source image 1 and,
+  when present, source image 2. Ravuna does not infer semantic roles for them.
+- Both private sources and their lineage survive a zero-balance pending request
+  and exact post-payment resume; unfinished sources do not appear in works.
 
 ## Result state
 
@@ -112,7 +128,9 @@ server ResultURL confirms payment.
 
 ## Post-payment state
 
-- First action: download the original for the selected version.
+- A confirmed original purchase automatically delivers the original for the
+  exact selected version; a processing purchase resumes the exact durable
+  pending prompt and one or two source images.
 - Show current edit/original balances briefly.
 - Do not force a return through “Мои работы” to obtain the paid original.
 - Repeated download of an already unlocked version remains understandable and

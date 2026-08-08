@@ -149,3 +149,4 @@ class DemoSessionInfo:
     expires_at: str
     successful_generations: int
     max_generations: int
+    secondary_source_path: Path | None = None

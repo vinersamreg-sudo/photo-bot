@@ -86,11 +86,14 @@ class ReferralTests(TestCase):
         self.referrals.link_user("new-max", "invitee")
         self.add_success()
         before = self.commerce.balance("inviter").available
+        invitee_before = self.commerce.balance("invitee").available
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             rewards = list(pool.map(lambda _value: self.referrals.reward_first_success("invitee"), range(2)))
 
         self.assertEqual(sum(reward is not None for reward in rewards), 1)
+        self.assertEqual(self.commerce.balance("invitee").available, invitee_before)
+        self.assertEqual(self.commerce.entitlement_balance("invitee").available, 0)
         self.assertEqual(self.commerce.balance("inviter").available, before + 2)
         self.assertEqual(self.commerce.entitlement_balance("inviter").available, 0)
         with self.database.read() as connection:

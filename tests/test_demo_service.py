@@ -65,6 +65,18 @@ class RecordingProvider(FakeImageProvider):
         return super().edit(source_path, prompt)
 
 
+class MultiSourceRecordingProvider(FakeImageProvider):
+    def __init__(self, fail=None) -> None:
+        super().__init__(fail=fail)
+        self.sources: tuple[Path, ...] = ()
+        self.prompt = ""
+
+    def edit_many(self, source_paths: tuple[Path, ...], prompt: str):
+        self.sources = source_paths
+        self.prompt = prompt
+        return super().edit_many(source_paths, prompt)
+
+
 class DemoServiceTests(TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -128,6 +140,52 @@ class DemoServiceTests(TestCase):
                 ).fetchone()[0],
                 2,
             )
+
+    def test_two_sources_use_one_provider_call_one_credit_and_preserve_lineage(self) -> None:
+        provider = MultiSourceRecordingProvider()
+        service = self.service(provider=provider)
+        session = service.start_session("max", "two-source-user", self.source)
+        second = self.base / "second.png"
+        Image.new("RGB", (500, 700), "red").save(second)
+        stored_second = service.add_secondary_source(session.session_id, second)
+
+        result = service.generate(
+            session.session_id,
+            "Одень меня как на втором фото",
+            "two-source-attempt",
+        )
+
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(provider.sources, (session.source_path, stored_second))
+        self.assertTrue(provider.prompt.startswith("Одень меня как на втором фото"))
+        self.assertEqual(result.remaining_generations, 1)
+        with service.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT * FROM generation_attempts WHERE id=?", (result.attempt_id,)
+            ).fetchone()
+            version = connection.execute(
+                "SELECT * FROM gallery_versions WHERE attempt_id=?", (result.attempt_id,)
+            ).fetchone()
+            self.assertEqual(attempt["secondary_source_path"], str(stored_second))
+            self.assertEqual(version["secondary_source_path"], str(stored_second))
+
+    def test_two_source_failure_and_third_source_do_not_consume_credit(self) -> None:
+        provider = MultiSourceRecordingProvider(
+            fail=ProviderUnavailableError("offline")
+        )
+        service = self.service(provider=provider)
+        session = service.start_session("max", "two-source-failure", self.source)
+        second = self.base / "second-failure.png"
+        Image.new("RGB", (400, 400), "red").save(second)
+        service.add_secondary_source(session.session_id, second)
+        with self.assertRaisesRegex(InvalidInputError, "максимум 2"):
+            service.add_secondary_source(session.session_id, second)
+
+        with self.assertRaises(ProviderUnavailableError):
+            service.generate(session.session_id, "Сделай коллаж", "two-fail")
+
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(service.commerce.balance(session.user_id).available, 2)
 
     def test_same_source_reupload_reactivates_expired_session_without_new_quota(self) -> None:
         settings = replace(self.settings, demo_session_ttl_minutes=1)

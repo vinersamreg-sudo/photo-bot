@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
 from PIL import Image
@@ -123,10 +123,12 @@ class PaymentTests(TestCase):
         self.assertEqual(query["ExpirationDate"], ["2026-07-19T11:30"])
         self.assertEqual(query["Shp_order"], [order.public_token])
         self.assertEqual(query["Description"], ["Пакет доступа Ravuna"])
-        self.assertNotIn("SuccessUrl2", query)
-        self.assertNotIn("SuccessUrl2Method", query)
-        self.assertNotIn("FailUrl2", query)
-        self.assertNotIn("FailUrl2Method", query)
+        success_url = f"https://ravuna.ru/payment/success/{order.public_token}"
+        fail_url = f"https://ravuna.ru/payment/fail/{order.public_token}"
+        self.assertEqual(query["SuccessUrl2"], [success_url])
+        self.assertEqual(query["SuccessUrl2Method"], ["GET"])
+        self.assertEqual(query["FailUrl2"], [fail_url])
+        self.assertEqual(query["FailUrl2Method"], ["GET"])
         self.assertIn("Receipt", query)
         receipt_once_encoded = query["Receipt"][0]
         receipt_text = unquote(receipt_once_encoded)
@@ -160,7 +162,8 @@ class PaymentTests(TestCase):
         self.assertEqual(receipt["items"][0]["name"], "Пакет доступа Ravuna")
         expected_signature_base = (
             f"ravuna-test:49.00:{order.provider_invoice_id}:"
-            f"{receipt_once_encoded}:"
+            f"{receipt_once_encoded}:{quote(success_url, safe='')}:GET:"
+            f"{quote(fail_url, safe='')}:GET:"
             f"password-one:Shp_order={order.public_token}"
         )
         self.assertEqual(
@@ -191,6 +194,35 @@ class PaymentTests(TestCase):
         self.assertNotIn("password-one", order.payment_url)
         again = self.service.create_order(self.user_id, self.versions[0]["id"], "event-2")
         self.assertEqual(again.id, order.id)
+
+    def test_account_checkout_is_purpose_scoped_and_uses_only_opaque_short_url(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "account-topup",
+            account_purchase=True,
+        )
+        replay = self.service.create_order(
+            self.user_id,
+            None,
+            "account-topup-reopen",
+            account_purchase=True,
+        )
+
+        self.assertEqual(replay.id, order.id)
+        self.assertEqual(order.purpose, "account_topup")
+        short = self.service.short_payment_url(order)
+        self.assertEqual(short, f"https://ravuna.ru/p/{order.public_token}")
+        self.assertNotIn(order.id, short)
+        self.assertNotIn(self.user_id, short)
+        self.assertNotIn("SignatureValue", short)
+        with self.database.read() as connection:
+            intent = connection.execute(
+                "SELECT * FROM payment_intents WHERE id=?", (order.intent_id,)
+            ).fetchone()
+        self.assertEqual(intent["payment_purpose"], "account_topup")
+        self.assertIsNone(intent["version_id"])
+        self.assertIsNone(intent["pending_request_id"])
 
     def test_payment_link_rejects_timezone_naive_expiration(self) -> None:
         provider = RobokassaProvider(
@@ -479,7 +511,7 @@ class PaymentTests(TestCase):
         self.assertTrue(all("SignatureValue" not in payload for payload in safe_payloads))
         self.assertNotEqual(source_hash, "203.0.113.10")
 
-    def test_migration_v8_and_commercial_metrics_are_privacy_safe(self) -> None:
+    def test_current_payment_migrations_and_metrics_are_privacy_safe(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
         self.service.process_webhook(
             self.signed_callback(order), method="POST",
@@ -507,7 +539,21 @@ class PaymentTests(TestCase):
             migration = connection.execute(
                 "SELECT name FROM schema_migrations WHERE version=8"
             ).fetchone()
+            context_migration = connection.execute(
+                "SELECT name FROM schema_migrations WHERE version=12"
+            ).fetchone()
+            intent_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(payment_intents)")
+            }
+            order_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(payment_orders)")
+            }
         self.assertEqual(migration[0], "version_scoped_commercial_payments")
+        self.assertEqual(
+            context_migration[0], "multi_source_edits_and_payment_return_context"
+        )
+        self.assertIn("payment_purpose", intent_columns)
+        self.assertIn("payment_purpose", order_columns)
 
     def test_delivery_failure_does_not_undo_payment_and_redelivery_works(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
@@ -731,6 +777,11 @@ class PaymentTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.text, f"OK{order.provider_invoice_id}")
         self.assertEqual(delivered, [order.id])
+        returned = httpx.get(
+            f"http://127.0.0.1:{server.bound_port}/payment/success/{order.public_token}"
+        )
+        self.assertEqual(returned.status_code, 303)
+        self.assertIn(f"pay_{order.public_token}", returned.headers["location"])
         duplicate = httpx.post(
             f"http://127.0.0.1:{server.bound_port}/payments/robokassa/result",
             data=self.signed_callback(order),
@@ -962,6 +1013,18 @@ class PaymentTests(TestCase):
         server.start()
         self.addCleanup(server.stop)
         base = f"http://127.0.0.1:{server.bound_port}"
+        short = httpx.get(f"{base}/p/{order.public_token}")
+        self.assertEqual(short.status_code, 303)
+        self.assertEqual(short.headers["location"], order.payment_url)
+        pending_return = httpx.get(
+            f"{base}/payment/success/{order.public_token}"
+        )
+        self.assertEqual(pending_return.status_code, 200)
+        self.assertIn("Проверяем оплату", pending_return.text)
+        failed_return = httpx.get(f"{base}/payment/fail/{order.public_token}")
+        self.assertEqual(failed_return.status_code, 303)
+        self.assertIn(f"payfail_{order.public_token}", failed_return.headers["location"])
+        self.assertEqual(httpx.get(f"{base}/p/{'0' * 32}").status_code, 404)
         self.assertEqual(
             httpx.get(f"{base}/payment-success.html").status_code,
             404,

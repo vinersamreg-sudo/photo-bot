@@ -35,6 +35,7 @@ class ImageProvider(Protocol):
     model: str
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult: ...
+    def edit_many(self, source_paths: tuple[Path, ...], prompt: str) -> ProviderResult: ...
 
 
 def _validate_provider_prompt(prompt: str) -> None:
@@ -370,11 +371,18 @@ class FakeImageProvider:
         self.calls = 0
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
+        return self.edit_many((source_path,), prompt)
+
+    def edit_many(
+        self, source_paths: tuple[Path, ...], prompt: str
+    ) -> ProviderResult:
         _validate_provider_prompt(prompt)
+        if not source_paths or len(source_paths) > 2:
+            raise ValueError("Fake provider accepts one or two source images")
         self.calls += 1
         if self.fail:
             raise self.fail
-        with Image.open(source_path) as opened:
+        with Image.open(source_paths[0]) as opened:
             image = opened.convert("RGB")
         overlay = Image.new("RGBA", image.size, self.color)
         overlay.putalpha(45)

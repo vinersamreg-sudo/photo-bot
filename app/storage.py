@@ -70,6 +70,20 @@ class PrivateStorage:
             pass
         return destination, digest, size
 
+    def create_session_secondary(
+        self, user_id: str, session_id: str, source: Path
+    ) -> tuple[Path, str, int]:
+        digest, extension, size = self.validate_source(source)
+        root = self.session_root(user_id, session_id)
+        self._secure_directory(root / "source")
+        destination = root / "source" / f"source-2{extension}"
+        shutil.copyfile(source, destination)
+        try:
+            destination.chmod(0o600)
+        except OSError:
+            pass
+        return destination, digest, size
+
     def session_root(self, user_id: str, session_id: str) -> Path:
         return self.users_dir / user_id / "demo_sessions" / session_id
 
@@ -91,6 +105,20 @@ class PrivateStorage:
         ):
             self._secure_directory(directory)
         destination = root / "source" / f"source{extension}"
+        shutil.copyfile(source, destination)
+        try:
+            destination.chmod(0o600)
+        except OSError:
+            pass
+        return destination, digest, size
+
+    def create_gallery_item_secondary_source(
+        self, user_id: str, gallery_item_id: str, source: Path
+    ) -> tuple[Path, str, int]:
+        digest, extension, size = self.validate_source(source)
+        root = self.gallery_item_root(user_id, gallery_item_id)
+        self._secure_directory(root / "source")
+        destination = root / "source" / f"source-2{extension}"
         shutil.copyfile(source, destination)
         try:
             destination.chmod(0o600)
