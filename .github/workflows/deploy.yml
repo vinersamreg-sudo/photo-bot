@@ -92,6 +92,18 @@ jobs:
         run: |
           python scripts/scan_secrets.py
           python scripts/check_asset_licenses.py
+      - name: Validate Ravuna nginx candidate with nginx
+        run: |
+          CERT_DIR="$RUNNER_TEMP/ravuna-nginx-cert"
+          install -d "$CERT_DIR"
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -keyout "$CERT_DIR/privkey.pem" \
+            -out "$CERT_DIR/fullchain.pem" \
+            -subj '/CN=ravuna.ru' >/dev/null 2>&1
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE/site/nginx/ravuna.ru.conf:/etc/nginx/conf.d/ravuna.conf:ro" \
+            --volume "$CERT_DIR:/etc/letsencrypt/live/ravuna.ru:ro" \
+            nginx:1.27-alpine nginx -t
       - name: Run fast pull-request profiles
         if: github.event_name == 'pull_request'
         env:

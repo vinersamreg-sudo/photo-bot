@@ -43,6 +43,12 @@ class DeployPolicyTests(TestCase):
         self.assertIn("Require preinstalled Ravuna payment routes", self.workflow)
         self.assertIn("https://ravuna.ru/p/00000000000000000000000000000000", self.workflow)
         self.assertIn("RavunaPaymentWebhook", self.workflow)
+        self.assertIn("Validate Ravuna nginx candidate with nginx", self.workflow)
+        self.assertIn("nginx:1.27-alpine nginx -t", self.workflow)
+        self.assertIn(
+            'location ~ "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$" {',
+            script,
+        )
 
     def test_operating_flags_preserve_live_state_but_fresh_env_is_fail_closed(self) -> None:
         for key, default in (

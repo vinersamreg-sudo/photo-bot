@@ -411,7 +411,8 @@ class RavunaSiteTests(unittest.TestCase):
             nginx.count("proxy_pass http://127.0.0.1:8091$request_uri;"), 1
         )
         self.assertIn(
-            "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$", nginx
+            'location ~ "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$" {',
+            nginx,
         )
         self.assertNotIn("/opt/photo-bot", nginx)
 

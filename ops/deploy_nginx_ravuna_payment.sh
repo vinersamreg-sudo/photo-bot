@@ -23,7 +23,8 @@ if [ ! -f "$ACTIVE" ] || [ "$(readlink -f "$ENABLED")" != "$ACTIVE" ]; then
   exit 1
 fi
 grep -F 'proxy_pass http://127.0.0.1:8091$request_uri;' "$CANDIDATE" >/dev/null
-grep -F '^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$' "$CANDIDATE" >/dev/null
+grep -F 'location ~ "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$" {' \
+  "$CANDIDATE" >/dev/null
 
 cp "$ACTIVE" "$BACKUP"
 rollback() {
