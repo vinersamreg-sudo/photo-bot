@@ -25,7 +25,7 @@ from app.domain import (
 )
 from app.edit_intent import EditPlan
 from app.image_provider import FakeImageProvider
-from app.max_adapter import Button
+from app.max_adapter import Button, result_actions
 from app.max_application import (
     CORRECTION_REQUEST_TEXT,
     MaxApplication,
@@ -315,9 +315,18 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         upload = self.transport.messages[-1]
         self.assertIn("Прикрепите фотографию через скрепку 📎", upload[1])
+        self.assertIn("до 2 фотографий для одной обработки", upload[1])
+        self.assertIn("вправе его использовать", upload[1])
         self.assertEqual(
             [(button.text, button.action) for button in upload[2]],
-            [("← Назад", "nav:back:main")],
+            [
+                ("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
+                (
+                    "🔐 Обработка персональных данных",
+                    "https://ravuna.ru/legal/personal-data.html",
+                ),
+                ("← Назад", "nav:back:main"),
+            ],
         )
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/source")
@@ -439,6 +448,10 @@ class MaxApplicationTests(TestCase):
         active = self.app.ui.current("u1")
         processing_message_id = self.transport.messages[-1][4]
         self.assertEqual(self.transport.messages[-1][1], PROCESSING_TEXT)
+        self.assertIn(
+            "Обрабатываю фотографию", self.transport.messages[-1][1]
+        )
+        self.assertIn("около 1 минуты", self.transport.messages[-1][1])
         self.assertEqual(
             self.transport.deletes,
             [self.transport.messages[0][4], processing_message_id],
@@ -446,7 +459,7 @@ class MaxApplicationTests(TestCase):
         self.assertNotIn("mid-2", self.transport.deletes)
         self.assertEqual(active.message_id, "image-1")
         self.assertNotEqual(processing_message_id, active.message_id)
-        self.assertEqual(self.transport.images[-1][2], "Готово")
+        self.assertEqual(self.transport.images[-1][2], result_actions(1).text)
         self.assertEqual(
             self.demo.commerce.balance(self.store.get("u1").user_id).available,
             1,
@@ -670,7 +683,7 @@ class MaxApplicationTests(TestCase):
         self.assertIn(processing_message_id, self.transport.deletes)
         self.assertNotIn(correction_event.message_id, self.transport.deletes)
         self.assertEqual(len(self.transport.image_edits), image_edits_before)
-        self.assertEqual(self.transport.images[-1][2], "Готово")
+        self.assertEqual(self.transport.images[-1][2], result_actions(0).text)
 
     def test_single_screen_gallery_page_switch_changes_sheet_and_mapping(self) -> None:
         self.enable_single_screen()
@@ -779,6 +792,10 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(self.provider.calls, 0)
 
+        balance_before = self.demo.commerce.balance(
+            self.store.get("u1").user_id
+        ).available
+        provider_calls = self.provider.calls
         self.callback("upload:ready")
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
         self.assertIn(
@@ -787,7 +804,19 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(
             [(button.text, button.action) for button in self.transport.messages[-1][2]],
-            [("← Назад", "nav:back:main")],
+            [
+                ("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
+                (
+                    "🔐 Обработка персональных данных",
+                    "https://ravuna.ru/legal/personal-data.html",
+                ),
+                ("← Назад", "nav:back:main"),
+            ],
+        )
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(
+            self.demo.commerce.balance(self.store.get("u1").user_id).available,
+            balance_before,
         )
 
         invalid = self.base / "invalid.bin"
@@ -1132,18 +1161,26 @@ class MaxApplicationTests(TestCase):
         self.assertTrue(delivered_path.is_file())
         self.assertEqual(
             self.transport.images[-1][2],
-            "Готово",
+            "Готово ✨\n"
+            "Хотите ещё 2 обработки бесплатно?\n"
+            "Пригласите друга — бонус начислится после его первой обработки.",
         )
         self.assertEqual(
             [button.text for button in self.transport.images[-1][3]],
             [
-                "Получить оригинал",
-                "📤 Поделиться результатом",
-                "Исправить",
-                "Другой вариант",
-                "История версий",
+                "⬇️ Получить оригинал",
+                "✏️ Исправить",
+                "📷 Другое фото",
+                "🎁 Пригласить друга — получить +2 обработки",
+                "⭐ Оценить",
+                "💬 Отзыв о Ravuna",
+                "📁 Мои работы",
                 "← Назад",
             ],
+        )
+        self.assertEqual(
+            [button.row for button in self.transport.images[-1][3]],
+            [0, 1, 1, 2, 3, 3, 4, 5],
         )
         self.assertEqual(self.transport.edits[-1][1], "✨ Готово")
         with self.database.read() as connection:
@@ -1163,6 +1200,37 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
+    def test_result_other_photo_reuses_existing_upload_flow(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        provider_calls = self.provider.calls
+
+        self.callback("new:source")
+
+        dialog = self.store.get("u1")
+        self.assertEqual(dialog.state, "waiting_for_source")
+        self.assertEqual(dialog.pending_action, "initial")
+        self.assertIsNone(dialog.session_id)
+        self.assertIsNone(dialog.current_version_id)
+        self.assertIn("Загрузите другое фото", self.transport.edits[-1][1])
+        self.assertIn("до 2 фотографий", self.transport.edits[-1][1])
+        self.assertIn("вправе его использовать", self.transport.edits[-1][1])
+        self.assertEqual(
+            [
+                (button.text, parse_versioned_action(button.action)[1])
+                for button in self.transport.edits[-1][2]
+            ],
+            [
+                ("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
+                (
+                    "🔐 Обработка персональных данных",
+                    "https://ravuna.ru/legal/personal-data.html",
+                ),
+                ("← Назад", "nav:back:main"),
+            ],
+        )
+        self.assertEqual(self.provider.calls, provider_calls)
+
     def test_zero_remaining_edits_replaces_edit_actions_with_purchase_offer(self) -> None:
         self.generate_first()
 
@@ -1174,9 +1242,9 @@ class MaxApplicationTests(TestCase):
         buttons = self.transport.images[-1][3]
         button_texts = [button.text for button in buttons]
         self.assertNotIn("Исправить", button_texts)
-        self.assertNotIn("Другой вариант", button_texts)
-        self.assertIn("💳 Купить ещё 2 обработки — 49 ₽", button_texts)
-        self.assertIn("Получить оригинал", button_texts)
+        self.assertNotIn("📷 Другое фото", button_texts)
+        self.assertIn("💳 Купить 2 обработки — 49 ₽", button_texts)
+        self.assertIn("⬇️ Получить оригинал", button_texts)
 
     def test_zero_balance_start_shows_direct_purchase_and_blocks_stale_upload(self) -> None:
         self.app, _payments = self.paid_application()
@@ -1868,6 +1936,112 @@ class MaxApplicationTests(TestCase):
         self.assertIsNone(row["reason_category"])
         self.assertEqual(self.transport.callbacks[-1][1], "Экран уже изменился")
 
+    def test_result_rating_saves_five_stars_without_provider_call(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        provider_calls = self.provider.calls
+        current = self.store.get("u1")
+
+        self.callback("result:rate")
+
+        rating_screen = self.transport.image_edits[-1]
+        self.assertEqual(rating_screen[2], "Как вам результат?")
+        self.assertEqual(
+            [button.text for button in rating_screen[3]],
+            ["1 ⭐", "2 ⭐", "3 ⭐", "4 ⭐", "5 ⭐", "← Назад"],
+        )
+
+        self.callback("result:rating:5")
+
+        self.assertEqual(
+            self.transport.image_edits[-1][2],
+            "Спасибо! Рады, что вам понравилось 😊",
+        )
+        with self.database.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM user_feedback WHERE feedback_type='rating'"
+            ).fetchone()
+        self.assertEqual(row["user_id"], current.user_id)
+        self.assertEqual(row["version_id"], current.current_version_id)
+        self.assertEqual(row["rating"], 5)
+        self.assertIsNotNone(row["created_at"])
+        self.assertEqual(self.provider.calls, provider_calls)
+
+    def test_low_rating_comment_and_general_feedback_are_saved_safely(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        provider_calls = self.provider.calls
+        current = self.store.get("u1")
+
+        self.callback("result:rate")
+        self.callback("result:rating:2")
+
+        low_result = self.transport.image_edits[-1]
+        self.assertIn("Спасибо за честную оценку", low_result[2])
+        self.assertIn(
+            "💬 Написать комментарий",
+            [button.text for button in low_result[3]],
+        )
+
+        self.callback("result:feedback:comment")
+        self.assertIn(
+            "мы читаем все предложения", self.transport.image_edits[-1][2]
+        )
+        self.app.handle(
+            self.event(
+                "message_created",
+                text="Добавьте более понятную кнопку возврата.",
+            )
+        )
+
+        with self.database.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM user_feedback"
+            ).fetchall()
+        feedback = {row["feedback_type"]: row for row in rows}
+        self.assertEqual(set(feedback), {"rating", "comment"})
+        self.assertEqual(feedback["rating"]["rating"], 2)
+        self.assertEqual(
+            feedback["comment"]["message"],
+            "Добавьте более понятную кнопку возврата.",
+        )
+        self.assertEqual(feedback["comment"]["user_id"], current.user_id)
+        self.assertEqual(
+            feedback["comment"]["version_id"], current.current_version_id
+        )
+        self.assertIsNotNone(feedback["comment"]["created_at"])
+        self.assertEqual(self.store.get("u1").pending_action, "navigation:feedback")
+        self.assertEqual(
+            self.transport.images[-1][2],
+            "Спасибо! Мы получили ваше сообщение 🙏",
+        )
+        self.assertEqual(self.provider.calls, provider_calls)
+
+    def test_result_general_feedback_entry_uses_same_safe_storage(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        provider_calls = self.provider.calls
+
+        self.callback("result:feedback")
+
+        self.assertIn(
+            "Есть идея, проблема", self.transport.image_edits[-1][2]
+        )
+        self.assertEqual(
+            [button.text for button in self.transport.image_edits[-1][3]],
+            ["← Назад"],
+        )
+        self.app.handle(
+            self.event("message_created", text="Хочу больше примеров обработки.")
+        )
+
+        with self.database.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM user_feedback WHERE feedback_type='comment'"
+            ).fetchone()
+        self.assertEqual(row["message"], "Хочу больше примеров обработки.")
+        self.assertEqual(self.provider.calls, provider_calls)
+
     def test_gallery_navigation_clears_abandoned_correction_state(self) -> None:
         self.generate_first()
         item_id = self.store.get("u1").current_gallery_item_id
@@ -1941,7 +2115,9 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.images[-1][2], "Текущая версия")
         self.assertEqual(self.transport.images[-1][3], ())
         self.assertEqual(self.transport.messages[-1][1], CORRECTION_REQUEST_TEXT)
-        self.assertEqual(self.transport.edits[-1], ("image-1", "Готово", ()))
+        self.assertEqual(
+            self.transport.edits[-1], ("image-1", result_actions(1).text, ())
+        )
         self.clock.advance(2)
         self.app.handle(self.event("message_created", text="Сделай лицо естественнее"))
         second = self.store.get("u1").current_version_id

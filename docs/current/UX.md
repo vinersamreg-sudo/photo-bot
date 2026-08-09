@@ -52,7 +52,11 @@ pending request; a previous or latest completed work is never used as fallback.
   active bot screen and sends a new complete start screen below the user action.
   Callback navigation then continues to edit that new screen in place.
 - The explicit photo-processing action replaces the active screen with the
-  upload instruction, enters the photo-waiting state and provides “← Назад”.
+  upload instruction, enters the photo-waiting state and provides the existing
+  public-offer and personal-data links plus “← Назад”. The screen reminds the
+  user that one edit accepts up to two photos, requires the right to use them
+  and sends them to the configured AI provider only for processing. The same
+  notice and links appear before “📷 Другое фото”.
 - “← Назад” clears the transient upload state and restores the complete main
   menu in place without calling an image provider.
 - Caption and photo in one message are supported.
@@ -86,8 +90,14 @@ pending request; a previous or latest completed work is never used as fallback.
 - The processing text is temporary. A finished watermarked preview is sent as a
   new native image message, adopted as the active UI message, and only then is
   the processing message deleted. Subsequent callback navigation continues
-  edit-in-place. The result and selected-work screens include
-  “📤 Поделиться результатом”.
+  edit-in-place. The result card leads with the original action, groups
+  “✏️ Исправить” and “📷 Другое фото” in one row, then shows the referral CTA.
+  The inviter receives two bonus edits only after the invitee's first successful
+  edit. “📷 Другое фото” reuses the existing one/two-source upload flow.
+- The result screen groups “⭐ Оценить” and “💬 Отзыв о Ravuna” in one row. A
+  1–5 rating and an optional text comment are stored
+  with the internal user id, selected version and UTC timestamp. Feedback input
+  never enters processing, calls an image provider or changes credits.
 
 ## Works and versions
 

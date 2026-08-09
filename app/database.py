@@ -270,6 +270,24 @@ CREATE TABLE IF NOT EXISTS version_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_user_updated
 ON version_feedback(user_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS user_feedback (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    version_id TEXT NOT NULL REFERENCES gallery_versions(id) ON DELETE CASCADE,
+    feedback_type TEXT NOT NULL CHECK(feedback_type IN ('rating','comment')),
+    rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+    message TEXT CHECK(message IS NULL OR length(message) <= 2000),
+    created_at TEXT NOT NULL,
+    CHECK(
+        (feedback_type='rating' AND rating IS NOT NULL AND message IS NULL)
+        OR
+        (feedback_type='comment' AND rating IS NULL AND length(trim(message)) > 0)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_user_feedback_created
+ON user_feedback(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_feedback_user_created
+ON user_feedback(user_id, created_at DESC);
 """
 
 
@@ -1156,6 +1174,17 @@ class Database:
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(12,?,?)",
                     (
                         "multi_source_edits_and_payment_return_context",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+            feedback_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=13"
+            ).fetchone()
+            if feedback_migration is None:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(13,?,?)",
+                    (
+                        "result_rating_and_user_feedback",
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )

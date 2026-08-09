@@ -340,6 +340,37 @@ class GalleryService:
                 (version_id, user_id, sentiment, reason_category, now, now),
             )
 
+    def record_rating(self, user_id: str, version_id: str, rating: int) -> str:
+        if rating not in {1, 2, 3, 4, 5}:
+            raise InvalidInputError("Rating must be between 1 and 5")
+        feedback_id = uuid4().hex
+        with self.database.transaction() as connection:
+            self._require_version(connection, user_id, version_id)
+            connection.execute(
+                """INSERT INTO user_feedback(
+                       id,user_id,version_id,feedback_type,rating,message,created_at
+                   ) VALUES(?,?,?,'rating',?,NULL,?)""",
+                (feedback_id, user_id, version_id, rating, _iso(self.clock())),
+            )
+        return feedback_id
+
+    def record_feedback_message(
+        self, user_id: str, version_id: str, message: str
+    ) -> str:
+        normalized = message.strip()
+        if not normalized or len(normalized) > 2000:
+            raise InvalidInputError("Feedback must contain 1 to 2000 characters")
+        feedback_id = uuid4().hex
+        with self.database.transaction() as connection:
+            self._require_version(connection, user_id, version_id)
+            connection.execute(
+                """INSERT INTO user_feedback(
+                       id,user_id,version_id,feedback_type,rating,message,created_at
+                   ) VALUES(?,?,?,'comment',NULL,?,?)""",
+                (feedback_id, user_id, version_id, normalized, _iso(self.clock())),
+            )
+        return feedback_id
+
     def list_versions(self, user_id: str, item_id: str) -> list[GalleryVersion]:
         with self.database.read() as connection:
             self._require_item(connection, user_id, item_id, include_deleted=True)

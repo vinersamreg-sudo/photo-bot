@@ -23,9 +23,23 @@ WELCOME_TEXT = (
     "• сделать фото на памятник"
 )
 
+UPLOAD_LEGAL_NOTICE = (
+    "🔒 Прикрепляя фото, вы подтверждаете, что вправе его использовать и "
+    "дали необходимые согласия на обработку изображения. Фото передаётся "
+    "AI-провайдеру только для выполнения обработки."
+)
+
 UPLOAD_INSTRUCTION_TEXT = (
     "Прикрепите фотографию через скрепку 📎 и в подписи напишите, "
-    "что хотите изменить."
+    "что хотите изменить.\n\n"
+    "Можно загрузить до 2 фотографий для одной обработки.\n\n"
+    + UPLOAD_LEGAL_NOTICE
+)
+
+NEW_SOURCE_INSTRUCTION_TEXT = (
+    "📷 Загрузите другое фото для обработки.\n\n"
+    "Можно отправить до 2 фотографий и написать, что нужно изменить.\n\n"
+    + UPLOAD_LEGAL_NOTICE
 )
 
 LEGAL_TEXT = (
@@ -49,6 +63,22 @@ class View:
     buttons: tuple[Button, ...]
 
 
+def upload_legal_buttons() -> tuple[Button, ...]:
+    return (
+        Button(
+            "📄 Публичная оферта",
+            "https://ravuna.ru/legal/offer.html",
+            0,
+        ),
+        Button(
+            "🔐 Обработка персональных данных",
+            "https://ravuna.ru/legal/personal-data.html",
+            0,
+        ),
+        Button("← Назад", "nav:back:main", 1),
+    )
+
+
 class MaxTransport(Protocol):
     def send_image(
         self,
@@ -62,7 +92,14 @@ class MaxTransport(Protocol):
 def upload_view() -> View:
     return View(
         UPLOAD_INSTRUCTION_TEXT,
-        (Button("← Назад", "nav:back:main"),),
+        upload_legal_buttons(),
+    )
+
+
+def new_source_view() -> View:
+    return View(
+        NEW_SOURCE_INSTRUCTION_TEXT,
+        upload_legal_buttons(),
     )
 
 
@@ -209,26 +246,43 @@ def studio_menu_contract() -> View:
 
 
 def result_actions(remaining: int) -> View:
+    text = (
+        "Готово ✨\n"
+        "Хотите ещё 2 обработки бесплатно?\n"
+        "Пригласите друга — бонус начислится после его первой обработки."
+    )
     if remaining <= 0:
         return View(
-            "Готово",
+            text,
             (
-                Button("Получить оригинал", "result:unlock"),
-                Button("📤 Поделиться результатом", "result:share"),
-                Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
-                Button("История версий", "work:history"),
-                Button("← Назад", "studio:works"),
+                Button("⬇️ Получить оригинал", "result:unlock", 0),
+                Button("💳 Купить 2 обработки — 49 ₽", "package:offer", 1),
+                Button(
+                    "🎁 Пригласить друга — получить +2 обработки",
+                    "result:share",
+                    2,
+                ),
+                Button("⭐ Оценить", "result:rate", 3),
+                Button("💬 Отзыв о Ravuna", "result:feedback", 3),
+                Button("📁 Мои работы", "studio:works", 4),
+                Button("← Назад", "nav:back:main", 5),
             ),
         )
     return View(
-        "Готово",
+        text,
         (
-            Button("Получить оригинал", "result:unlock"),
-            Button("📤 Поделиться результатом", "result:share"),
-            Button("Исправить", "result:correct"),
-            Button("Другой вариант", "result:repeat"),
-            Button("История версий", "work:history"),
-            Button("← Назад", "studio:works"),
+            Button("⬇️ Получить оригинал", "result:unlock", 0),
+            Button("✏️ Исправить", "result:correct", 1),
+            Button("📷 Другое фото", "new:source", 1),
+            Button(
+                "🎁 Пригласить друга — получить +2 обработки",
+                "result:share",
+                2,
+            ),
+            Button("⭐ Оценить", "result:rate", 3),
+            Button("💬 Отзыв о Ravuna", "result:feedback", 3),
+            Button("📁 Мои работы", "studio:works", 4),
+            Button("← Назад", "nav:back:main", 5),
         ),
     )
 
@@ -273,7 +327,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
     if remaining <= 0:
         return (
             Button("⬇ Получить оригинал", "result:unlock"),
-            Button("📤 Поделиться результатом", "result:share"),
+            Button("🎁 Поделиться и получить бонус", "result:share"),
             Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
             Button("История версий", "work:history"),
             Button("Ещё", "work:more"),
@@ -281,7 +335,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
         )
     return (
         Button("⬇ Получить оригинал", "result:unlock"),
-        Button("📤 Поделиться результатом", "result:share"),
+        Button("🎁 Поделиться и получить бонус", "result:share"),
         Button("✏️ Исправить", "result:correct"),
         Button("🎲 Другой вариант", "result:repeat"),
         Button("История версий", "work:history"),

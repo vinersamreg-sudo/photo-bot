@@ -52,6 +52,7 @@ from app.max_adapter import (
     legal_details_view,
     legal_view,
     main_menu,
+    new_source_view,
     paid_actions,
     photoshoot_catalog,
     result_actions,
@@ -84,7 +85,10 @@ PHOTO_ACCEPTED_TEXT = (
 PHOTO_REUSED_TEXT = (
     "Что хотите изменить?"
 )
-PROCESSING_TEXT = "Обрабатываю фотографию…"
+PROCESSING_TEXT = (
+    "⏳ Обрабатываю фотографию… Обычно это занимает около 1 минуты. "
+    "Пожалуйста, не закрывайте чат."
+)
 UNLOCK_PLACEHOLDER = (
     "Получение оригинала пока недоступно — идёт закрытое тестирование.\n\n"
     "Работа сохранена в «Моих работах»."
@@ -126,6 +130,15 @@ NAV_IDEAS = "navigation:ideas"
 NAV_IDEA_CATEGORY = "navigation:idea-category"
 NAV_PAYMENT_LINK = "checkout:link"
 NAV_SHARE = "navigation:share"
+NAV_RATING = "navigation:rating"
+NAV_FEEDBACK = "navigation:feedback"
+NAV_FEEDBACK_COMMENT = "feedback:comment"
+
+RATING_PROMPT_TEXT = "Как вам результат?"
+FEEDBACK_PROMPT_TEXT = (
+    "Есть идея, проблема или что-то можно сделать удобнее?\n\n"
+    "Напишите сообщение — мы читаем все предложения и улучшаем Ravuna."
+)
 
 
 def _version_word(count: int) -> str:
@@ -507,6 +520,9 @@ class MaxApplication:
         if event.image_url:
             self._receive_source(event, dialog)
             return
+        if text and dialog.pending_action == NAV_FEEDBACK_COMMENT:
+            self._receive_feedback_comment(event, dialog, text)
+            return
         if dialog.state == "waiting_for_source":
             if dialog.pending_action == "second_source":
                 self._send_message(
@@ -855,7 +871,9 @@ class MaxApplication:
             status_message_id=None,
         )
 
-    def _show_upload(self, user_id: str, event_key: str) -> None:
+    def _show_upload(
+        self, user_id: str, event_key: str, *, view: Optional[View] = None
+    ) -> None:
         account_id = self.adapter.ensure_account(user_id)
         if self.demo.commerce.balance(account_id).available <= 0:
             dialog = self.store.get(user_id)
@@ -863,7 +881,7 @@ class MaxApplication:
                 self._show_main(user_id, dialog, event_key)
             return
         self._reset_dialog_to_upload(user_id, event_key)
-        self._send_view(user_id, upload_view())
+        self._send_view(user_id, view or upload_view())
 
     def _reset_dialog_to_upload(self, user_id: str, event_key: str) -> None:
         self.store.transition(
@@ -941,8 +959,13 @@ class MaxApplication:
         if action == "menu":
             self._show_main(event.user_id, dialog, event.event_key)
             return
-        if action in {"upload:ready", "new:source"}:
+        if action == "upload:ready":
             self._show_upload(event.user_id, event.event_key)
+            return
+        if action == "new:source":
+            self._show_upload(
+                event.user_id, event.event_key, view=new_source_view()
+            )
             return
         if action == "settings":
             if dialog.pending_action != NAV_SETTINGS:
@@ -1033,6 +1056,16 @@ class MaxApplication:
             self._unlock_or_deliver(event, dialog)
         elif action == "result:share":
             self._show_share(event, dialog)
+        elif action == "result:rate":
+            self._show_rating(event, dialog)
+        elif action.startswith("result:rating:"):
+            try:
+                rating = int(action.rsplit(":", 1)[1])
+            except ValueError:
+                return
+            self._record_rating(event, dialog, rating)
+        elif action in {"result:feedback", "result:feedback:comment"}:
+            self._show_feedback_prompt(event, dialog)
         elif action == "package:buy":
             self._buy_continuation_pack(event, dialog)
         elif action.startswith("payment:refresh:"):
@@ -1534,6 +1567,120 @@ class MaxApplication:
             gallery_item_id=dialog.current_gallery_item_id,
         )
 
+    def _show_rating(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No current version for rating")
+        self.store.update(
+            event.user_id,
+            pending_prompt=None,
+            pending_action=NAV_RATING,
+        )
+        self._send_image(
+            event.user_id,
+            self._selected_preview_path(dialog),
+            RATING_PROMPT_TEXT,
+            tuple(
+                Button(f"{rating} ⭐", f"result:rating:{rating}", 0)
+                for rating in range(1, 6)
+            )
+            + (Button("← Назад", "nav:back:work", 1),),
+            screen="rating",
+            context={
+                "gallery_item_id": dialog.current_gallery_item_id,
+                "version_id": dialog.current_version_id,
+            },
+        )
+
+    def _record_rating(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, rating: int
+    ) -> None:
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No current version for rating")
+        self.gallery.record_rating(dialog.user_id, dialog.current_version_id, rating)
+        sentiment = "positive" if rating >= 4 else "negative"
+        self._track(
+            f"feedback_{sentiment}",
+            session_id=dialog.session_id,
+            gallery_item_id=dialog.current_gallery_item_id,
+            value_integer=rating,
+        )
+        self.store.update(
+            event.user_id,
+            pending_prompt=None,
+            pending_action=NAV_FEEDBACK,
+        )
+        if rating >= 4:
+            text = "Спасибо! Рады, что вам понравилось 😊"
+            buttons = (Button("← Назад", "nav:back:work"),)
+        else:
+            text = (
+                "Спасибо за честную оценку 🙏\n"
+                "Расскажите, что можно улучшить."
+            )
+            buttons = (
+                Button("💬 Написать комментарий", "result:feedback:comment"),
+                Button("← Назад", "nav:back:work"),
+            )
+        self._send_image(
+            event.user_id,
+            self._selected_preview_path(dialog),
+            text,
+            buttons,
+            screen="rating_result",
+            context={
+                "gallery_item_id": dialog.current_gallery_item_id,
+                "version_id": dialog.current_version_id,
+                "rating": rating,
+            },
+        )
+
+    def _show_feedback_prompt(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No current version for feedback")
+        self.store.update(
+            event.user_id,
+            pending_prompt=None,
+            pending_action=NAV_FEEDBACK_COMMENT,
+        )
+        self._send_image(
+            event.user_id,
+            self._selected_preview_path(dialog),
+            FEEDBACK_PROMPT_TEXT,
+            (Button("← Назад", "nav:back:work"),),
+            screen="feedback_prompt",
+            context={
+                "gallery_item_id": dialog.current_gallery_item_id,
+                "version_id": dialog.current_version_id,
+            },
+        )
+
+    def _receive_feedback_comment(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, text: str
+    ) -> None:
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No current version for feedback")
+        self.gallery.record_feedback_message(
+            dialog.user_id, dialog.current_version_id, text
+        )
+        self.store.update(
+            event.user_id,
+            pending_prompt=None,
+            pending_action=NAV_FEEDBACK,
+        )
+        self._send_image(
+            event.user_id,
+            self._selected_preview_path(dialog),
+            "Спасибо! Мы получили ваше сообщение 🙏",
+            (Button("← Назад", "nav:back:work"),),
+            screen="feedback_saved",
+            context={
+                "gallery_item_id": dialog.current_gallery_item_id,
+                "version_id": dialog.current_version_id,
+            },
+        )
+
     def _generate(
         self,
         event: MaxIncomingEvent,
@@ -1776,7 +1923,8 @@ class MaxApplication:
             self._selected_preview_path(dialog),
             "📤 Поделиться Ravuna\n\n"
             "Скопируйте приглашение и отправьте его другу в любом чате MAX.\n"
-            "После его первой успешной обработки вы получите бонус.\n\n"
+            "После его первой успешной обработки вы получите "
+            "2 бесплатные обработки.\n\n"
             "Чтобы отправить и фотографию, используйте стандартную функцию "
             "«Переслать» у сообщения с результатом.",
             (

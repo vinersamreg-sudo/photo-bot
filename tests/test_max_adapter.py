@@ -19,6 +19,7 @@ from app.max_adapter import (
     legal_details_view,
     legal_view,
     main_menu,
+    new_source_view,
     paid_actions,
     photoshoot_catalog,
     result_actions,
@@ -53,6 +54,13 @@ class MaxAdapterTests(TestCase):
                 "Обработка персональных данных",
             ],
         )
+        self.assertEqual(
+            [button.action for button in menu.buttons[-2:]],
+            [
+                "https://ravuna.ru/legal/offer.html",
+                "https://ravuna.ru/legal/personal-data.html",
+            ],
+        )
         self.assertNotIn("GPT", menu.text + " ".join(button.text for button in menu.buttons))
         self.assertGreaterEqual(len(scenario_catalog().buttons), 12)
         self.assertEqual(len(SCENARIO_CATEGORIES), 12)
@@ -76,32 +84,63 @@ class MaxAdapterTests(TestCase):
         self.assertIn("• улучшить качество", WELCOME_TEXT)
         upload = upload_view()
         self.assertIn("Прикрепите фотографию через скрепку 📎", upload.text)
+        self.assertIn("до 2 фотографий для одной обработки", upload.text)
+        self.assertIn("вправе его использовать", upload.text)
+        self.assertIn("AI-провайдеру только для выполнения обработки", upload.text)
         self.assertEqual(
             [(button.text, button.action) for button in upload.buttons],
-            [("← Назад", "nav:back:main")],
+            [
+                ("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
+                (
+                    "🔐 Обработка персональных данных",
+                    "https://ravuna.ru/legal/personal-data.html",
+                ),
+                ("← Назад", "nav:back:main"),
+            ],
         )
-        self.assertEqual(result_actions(4).text, "Готово")
-        self.assertEqual(result_actions(0).text, "Готово")
+        self.assertEqual([button.row for button in upload.buttons], [0, 0, 1])
+        new_source = new_source_view()
+        self.assertIn("Загрузите другое фото", new_source.text)
+        self.assertIn("до 2 фотографий", new_source.text)
+        self.assertIn("вправе его использовать", new_source.text)
+        self.assertEqual(
+            [(button.text, button.action) for button in new_source.buttons],
+            [(button.text, button.action) for button in upload.buttons],
+        )
+        self.assertIn("Хотите ещё 2 обработки бесплатно?", result_actions(4).text)
+        self.assertIn("2 обработки бесплатно", result_actions(0).text)
         self.assertEqual(
             [button.text for button in result_actions(4).buttons],
             [
-                "Получить оригинал",
-                "📤 Поделиться результатом",
-                "Исправить",
-                "Другой вариант",
-                "История версий",
+                "⬇️ Получить оригинал",
+                "✏️ Исправить",
+                "📷 Другое фото",
+                "🎁 Пригласить друга — получить +2 обработки",
+                "⭐ Оценить",
+                "💬 Отзыв о Ravuna",
+                "📁 Мои работы",
                 "← Назад",
             ],
+        )
+        self.assertEqual(
+            [button.row for button in result_actions(4).buttons],
+            [0, 1, 1, 2, 3, 3, 4, 5],
         )
         self.assertEqual(
             [button.text for button in result_actions(0).buttons],
             [
-                "Получить оригинал",
-                "📤 Поделиться результатом",
-                "💳 Купить ещё 2 обработки — 49 ₽",
-                "История версий",
+                "⬇️ Получить оригинал",
+                "💳 Купить 2 обработки — 49 ₽",
+                "🎁 Пригласить друга — получить +2 обработки",
+                "⭐ Оценить",
+                "💬 Отзыв о Ravuna",
+                "📁 Мои работы",
                 "← Назад",
             ],
+        )
+        self.assertEqual(
+            [button.row for button in result_actions(0).buttons],
+            [0, 1, 2, 3, 3, 4, 5],
         )
         self.assertEqual(
             [button.text for button in paid_actions()],
@@ -134,7 +173,7 @@ class MaxAdapterTests(TestCase):
             [button.text for button in gallery_item_actions(0)],
             [
                 "⬇ Получить оригинал",
-                "📤 Поделиться результатом",
+                "🎁 Поделиться и получить бонус",
                 "💳 Купить ещё 2 обработки — 49 ₽",
                 "История версий",
                 "Ещё",
@@ -154,6 +193,7 @@ class MaxAdapterTests(TestCase):
             ideas_catalog(),
             scenario_catalog(),
             studio_menu_contract(),
+            new_source_view(),
             result_actions(1),
             result_actions(0),
             delete_confirmation_view(),
