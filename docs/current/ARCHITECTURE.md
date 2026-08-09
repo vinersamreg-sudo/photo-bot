@@ -38,6 +38,9 @@ delivery failures must not consume the user’s edit allowance.
   flow. The Gemini path sends that text unchanged; an optional deterministic guard
   remains available only for other direct-provider paths. It performs no
   translation, artistic expansion or LLM analysis.
+  `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED` and
+  `IMAGE_FACE_PRESERVE_GUARD_ENABLED` are compatibility flags for other paths and
+  have no effect on the Gemini/Nano Banana provider prompt.
 - `edit_intent.py` and `prompt_builder.py`: preserved legacy prompt layer, selected
   only when direct prompting is disabled.
 - `provider_router.py`: fail-fast selection of `openai`, `gemini` or
@@ -87,6 +90,8 @@ delivery failures must not consume the user’s edit allowance.
 - Failures do not debit edit allowance.
 - Production state is preserved across ordinary deploys.
 - Fresh installs are fail-closed.
+- Gemini/Nano Banana receives the exact original Unicode prompt; Ravuna does not
+  add identity, face, pose, composition or other hidden preservation text.
 
 See [UX](UX.md), [Payments](PAYMENTS.md), [Production](PRODUCTION.md) and
 [Security](SECURITY.md).

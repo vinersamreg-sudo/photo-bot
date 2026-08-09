@@ -20,6 +20,7 @@ PAID_STATES = {
     PaymentStatus.REFUND_PENDING.value,
     PaymentStatus.PARTIALLY_REFUNDED.value,
 }
+ECONOMICALLY_PAID_STATES = (*sorted(PAID_STATES), PaymentStatus.REFUNDED.value)
 
 
 def mask_reference(value: object, *, prefix: str = "ref") -> str | None:
@@ -185,6 +186,140 @@ def payment_reconcile(database: Database, invoice: int | None = None) -> dict[st
         "checked": len(orders),
         "mismatch_count": sum(1 for order in orders if not order["consistent"]),
         "orders": orders,
+    }
+
+
+def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
+    """Return an aggregate, read-only payment consistency report without PII."""
+
+    paid_placeholders = ",".join("?" for _ in ECONOMICALLY_PAID_STATES)
+    with database.read() as connection:
+        orders_by_status = {
+            str(row["status"]): int(row["count"])
+            for row in connection.execute(
+                "SELECT status,COUNT(*) AS count FROM payment_orders GROUP BY status"
+            ).fetchall()
+        }
+        paid_orders = int(connection.execute(
+            f"SELECT COUNT(*) FROM payment_orders WHERE status IN ({paid_placeholders})",
+            ECONOMICALLY_PAID_STATES,
+        ).fetchone()[0])
+        package_grants = int(connection.execute(
+            "SELECT COUNT(*) FROM continuation_pack_grants"
+        ).fetchone()[0])
+        original_entitlements = int(connection.execute(
+            "SELECT COUNT(*) FROM unlock_entitlements WHERE source_payment_order_id IS NOT NULL"
+        ).fetchone()[0])
+        receipts = int(connection.execute(
+            "SELECT COUNT(*) FROM payment_receipts WHERE receipt_type='payment'"
+        ).fetchone()[0])
+        duplicate_callbacks = int(connection.execute(
+            """SELECT COUNT(*) FROM payment_audit
+               WHERE event_type='duplicate_callback_accepted'"""
+        ).fetchone()[0])
+        rejected_callbacks = int(connection.execute(
+            "SELECT COUNT(*) FROM payment_events WHERE status='rejected'"
+        ).fetchone()[0])
+        rejected_callbacks_recent = int(connection.execute(
+            """SELECT COUNT(*) FROM payment_events
+               WHERE status='rejected'
+                 AND datetime(received_at)>=datetime('now','-24 hours')"""
+        ).fetchone()[0])
+        expired_pending = int(connection.execute(
+            """SELECT COUNT(*) FROM payment_orders
+               WHERE status='pending' AND datetime(expires_at)<datetime('now')"""
+        ).fetchone()[0])
+        paid_without_grant = int(connection.execute(
+            f"""SELECT COUNT(*) FROM payment_orders o
+                WHERE o.product_code=? AND o.status IN ({paid_placeholders})
+                  AND NOT EXISTS(
+                      SELECT 1 FROM continuation_pack_grants g
+                      WHERE g.payment_order_id=o.id
+                  )""",
+            (PRODUCT_CODE, *ECONOMICALLY_PAID_STATES),
+        ).fetchone()[0])
+        grant_without_paid_order = int(connection.execute(
+            f"""SELECT COUNT(*) FROM continuation_pack_grants g
+                LEFT JOIN payment_orders o ON o.id=g.payment_order_id
+                WHERE o.id IS NULL OR o.status NOT IN ({paid_placeholders})""",
+            ECONOMICALLY_PAID_STATES,
+        ).fetchone()[0])
+        original_entitlement_mismatches = int(connection.execute(
+            """SELECT COUNT(*) FROM continuation_pack_grants g
+               LEFT JOIN unlock_entitlements e ON e.id=g.entitlement_id
+               LEFT JOIN payment_orders o ON o.id=g.payment_order_id
+               WHERE e.id IS NULL
+                  OR e.source_payment_order_id<>g.payment_order_id
+                  OR e.user_id<>g.user_id
+                  OR o.user_id<>g.user_id
+                  OR g.unlock_entitlement_quantity<>1"""
+        ).fetchone()[0])
+        receipt_mismatches = int(connection.execute(
+            f"""SELECT COUNT(*) FROM payment_orders o
+                LEFT JOIN payment_receipts r
+                  ON r.order_id=o.id AND r.receipt_type='payment'
+                WHERE o.status IN ({paid_placeholders})
+                  AND (r.id IS NULL OR r.amount_minor<>o.amount_minor)""",
+            ECONOMICALLY_PAID_STATES,
+        ).fetchone()[0])
+        duplicate_effects = int(connection.execute(
+            """SELECT COALESCE(SUM(extra),0) FROM (
+                   SELECT COUNT(*)-1 AS extra FROM continuation_pack_grants
+                   GROUP BY payment_order_id HAVING COUNT(*)>1
+                   UNION ALL
+                   SELECT COUNT(*)-1 AS extra FROM unlock_entitlements
+                   GROUP BY source_payment_order_id HAVING COUNT(*)>1
+                   UNION ALL
+                   SELECT COUNT(*)-1 AS extra FROM payment_receipts
+                   WHERE receipt_type='payment'
+                   GROUP BY order_id HAVING COUNT(*)>1
+                   UNION ALL
+                   SELECT COUNT(*)-1 AS extra FROM generation_credit_lots
+                   WHERE source_payment_order_id IS NOT NULL
+                   GROUP BY source_payment_order_id HAVING COUNT(*)>1
+               )"""
+        ).fetchone()[0])
+        failed_original_delivery = int(connection.execute(
+            "SELECT COUNT(*) FROM payment_orders WHERE status='delivery_pending'"
+        ).fetchone()[0])
+        delayed_callbacks = int(connection.execute(
+            """SELECT COUNT(*) FROM payment_orders
+               WHERE paid_at IS NOT NULL
+                 AND datetime(paid_at)>datetime(expires_at)"""
+        ).fetchone()[0])
+
+    hard_failures = (
+        paid_without_grant
+        + grant_without_paid_order
+        + original_entitlement_mismatches
+        + receipt_mismatches
+        + duplicate_effects
+    )
+    warnings = (
+        expired_pending
+        + failed_original_delivery
+        + rejected_callbacks_recent
+    )
+    return {
+        "scope": "aggregate_local_ledger",
+        "payment_orders_by_status": orders_by_status,
+        "paid_orders": paid_orders,
+        "package_grants": package_grants,
+        "original_entitlements": original_entitlements,
+        "receipts": receipts,
+        "duplicate_callback_evidence": duplicate_callbacks,
+        "rejected_callbacks": rejected_callbacks,
+        "rejected_callbacks_recent": rejected_callbacks_recent,
+        "expired_pending": expired_pending,
+        "paid_without_grant": paid_without_grant,
+        "grant_without_paid_order": grant_without_paid_order,
+        "original_entitlement_mismatches": original_entitlement_mismatches,
+        "receipt_mismatches": receipt_mismatches,
+        "duplicate_effects": duplicate_effects,
+        "failed_original_delivery": failed_original_delivery,
+        "delayed_callback_evidence": delayed_callbacks,
+        "status": "CRITICAL" if hard_failures else "WARNING" if warnings else "OK",
+        "read_only": True,
     }
 
 

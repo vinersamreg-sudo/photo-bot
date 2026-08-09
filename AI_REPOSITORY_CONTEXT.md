@@ -30,10 +30,11 @@ Robokassa
 - Runtime/CLI: `app/main.py`.
 - Settings: `app/config.py`.
 - MAX: `app/max_application.py`, `app/max_transport.py`.
-- Editing: `app/direct_prompt.py` preserves the Unicode user text and appends a
-  deterministic modular subject guard; `app/provider_router.py`,
+- Editing: `app/direct_prompt.py` sends the exact original Unicode user text to
+  Gemini without a guard, translation or expansion; `app/provider_router.py`,
   `app/gemini_image_provider.py`, `app/image_provider.py` execute the request.
-  The preserved legacy layer is `app/edit_intent.py` plus `app/prompt_builder.py`.
+  Deterministic guards may remain for non-Gemini paths. The preserved legacy
+  layer is `app/edit_intent.py` plus `app/prompt_builder.py`.
 - State: `app/database.py`, `app/storage.py`, `app/gallery.py`.
 - Commercial: `app/commerce.py`, `app/payments.py`, `app/robokassa.py`,
   `app/payment_webhook.py`.
@@ -71,6 +72,8 @@ Robokassa
 - Payment callbacks, credits, entitlements and receipts remain idempotent.
 - No original before entitlement consumption; preview is watermarked.
 - Failed provider/delivery work does not consume edit allowance.
+- Gemini/Nano Banana receives the exact user prompt; preservation flags must not
+  inject hidden instructions into that provider path.
 - Tests restore the exact pre-test runtime state, including public access.
 - Never expose secrets, platform IDs, prompts, images or private paths in output.
 - Never shut down the laptop without a direct command in the current task.

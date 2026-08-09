@@ -754,6 +754,35 @@ ON attribution_events(source,created_at DESC);
 """
 
 
+class ReadOnlyDatabase:
+    """Open an existing SQLite database without initialization or write access."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def connect(self) -> sqlite3.Connection:
+        uri = f"{self.path.resolve().as_uri()}?mode=ro"
+        connection = sqlite3.connect(
+            uri,
+            uri=True,
+            timeout=30,
+            isolation_level=None,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 30000")
+        return connection
+
+    @contextmanager
+    def read(self) -> Iterator[sqlite3.Connection]:
+        connection = self.connect()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path

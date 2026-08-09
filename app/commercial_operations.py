@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.database import Database
+from app.database import Database, ReadOnlyDatabase
 from app.maintenance import _referenced_private_files
 from app.operations import collect_launch_status
 
@@ -131,6 +131,15 @@ def backup_status(settings: Settings) -> dict[str, Any]:
         "latest": _json(settings.backup_dir_path / "latest.json"),
         "restore": _json(settings.backup_dir_path / "restore_status.json"),
         "offsite": _json(settings.backup_dir_path / "offsite_status.json"),
+        "recovery_latest": _json(
+            settings.backup_dir_path / "latest_recovery.json"
+        ),
+        "recovery_restore": _json(
+            settings.backup_dir_path / "recovery_restore_status.json"
+        ),
+        "recovery_offsite": _json(
+            settings.backup_dir_path / "recovery_offsite_status.json"
+        ),
     }
 
 
@@ -322,7 +331,7 @@ def cost_status(settings: Settings, database: Database) -> dict[str, Any]:
 
 
 def health_report(settings: Settings, *, online: bool) -> dict[str, Any]:
-    database = Database(settings.database_path)
+    database = ReadOnlyDatabase(settings.database_path)
     return {
         "launch": collect_launch_status(settings, online=online),
         "pilot": pilot_status(settings, database),

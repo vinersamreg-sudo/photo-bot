@@ -8,7 +8,12 @@ from unittest import TestCase
 
 from app.config import Settings
 from app.database import Database
-from app.main import _print_operator, build_parser, run_payment_show
+from app.main import (
+    _print_operator,
+    build_parser,
+    run_payment_reconciliation_report,
+    run_payment_show,
+)
 from app.payment_admin import (
     payment_expiration_reconcile,
     pilot_report,
@@ -233,3 +238,14 @@ class PaymentAdminTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             settings = Settings("", "fake", "test", Path(directory))
             self.assertNotEqual(run_payment_show(settings, 999, "json"), 0)
+
+    def test_missing_database_reconciliation_fails_without_traceback_or_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings("", "fake", "test", Path(directory))
+            with self.assertLogs("app.main", level="ERROR") as captured:
+                result = run_payment_reconciliation_report(settings, "json")
+            self.assertEqual(result, 2)
+            self.assertFalse(settings.database_path.exists())
+            rendered = "\n".join(captured.output)
+            self.assertIn("OperationalError", rendered)
+            self.assertNotIn(str(settings.database_path), rendered)

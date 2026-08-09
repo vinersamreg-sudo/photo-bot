@@ -72,7 +72,8 @@ For migrations, storage layout, retention or original delivery changes:
 
 - require T3;
 - verify a fresh encrypted backup;
-- prove restore when the risk warrants it;
+- verify both the SQLite artifact and encrypted DB + private-storage recovery bundle;
+- prove restore in a separate synthetic/temporary root when the risk warrants it;
 - test migrations from the supported prior schema;
 - verify no negative credits, duplicate entitlements or stale processing;
 - verify orphan candidates before and after.

@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
-from app.database import Database
+from app.database import Database, ReadOnlyDatabase
 from app.openai_client import check_openai_connection, create_openai_client
 
 
@@ -248,7 +248,7 @@ def _owner_e2e_status(settings: Settings, database: Database) -> dict[str, Any]:
 
 
 def collect_launch_status(settings: Settings, *, online: bool = True) -> dict[str, Any]:
-    database = Database(settings.database_path)
+    database = ReadOnlyDatabase(settings.database_path)
     with database.read() as connection:
         quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
         migration = connection.execute(

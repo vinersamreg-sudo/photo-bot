@@ -27,7 +27,7 @@ from app.openai_client import (
     check_openai_connection,
     create_openai_client,
 )
-from app.database import Database
+from app.database import Database, ReadOnlyDatabase
 from app.domain import DemoError
 from app.image_service import build_demo_service
 from app.stats import collect_demo_stats
@@ -52,6 +52,7 @@ from app.payment_admin import (
     mask_reference,
     payment_expiration_reconcile,
     payment_reconcile,
+    payment_reconciliation_summary,
     payment_show,
     pilot_report,
     robokassa_health,
@@ -703,6 +704,67 @@ def run_backup_mark_offsite(settings: Settings, backup: str, provider: str) -> i
     return 0
 
 
+def run_recovery_create(settings: Settings, passphrase_stdin: bool) -> int:
+    try:
+        report = _backup_manager(settings).create_recovery_bundle(
+            _passphrase_from_stdin(passphrase_stdin)
+        )
+    except BackupError as exc:
+        LOGGER.error("Recovery bundle creation failed: %s", exc)
+        return 1
+    except (OSError, sqlite3.Error) as exc:
+        LOGGER.error(
+            "Recovery bundle creation failed safely (error_type=%s)",
+            type(exc).__name__,
+        )
+        return 1
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def run_recovery_restore_test(
+    settings: Settings,
+    backup: str,
+    passphrase_stdin: bool,
+    restore_root: str | None,
+) -> int:
+    try:
+        report = _backup_manager(settings).restore_recovery_bundle(
+            Path(backup),
+            _passphrase_from_stdin(passphrase_stdin),
+            restore_root=Path(restore_root) if restore_root else None,
+        )
+    except BackupError as exc:
+        LOGGER.error("Recovery restore test failed: %s", exc)
+        return 1
+    except (OSError, sqlite3.Error) as exc:
+        LOGGER.error(
+            "Recovery restore test failed safely (error_type=%s)",
+            type(exc).__name__,
+        )
+        return 1
+    print(json.dumps(report, sort_keys=True))
+    return 0 if report.get("overall") == "PASS" else 1
+
+
+def run_recovery_mark_offsite(
+    settings: Settings, backup: str, provider: str
+) -> int:
+    try:
+        report = _backup_manager(settings).mark_recovery_offsite(backup, provider)
+    except BackupError as exc:
+        LOGGER.error("Off-site recovery mark failed: %s", exc)
+        return 1
+    except OSError as exc:
+        LOGGER.error(
+            "Off-site recovery mark failed safely (error_type=%s)",
+            type(exc).__name__,
+        )
+        return 1
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
 def run_maintenance_command(settings: Settings, execute: bool) -> int:
     try:
         report = run_maintenance(settings, execute=execute)
@@ -741,7 +803,7 @@ def run_provider_context_cleanup(settings: Settings, execute: bool) -> int:
 def run_ai_inspect(settings: Settings, attempt_id: str) -> int:
     """Print provider intent without platform identity, paths or credentials."""
 
-    database = Database(settings.database_path)
+    database = ReadOnlyDatabase(settings.database_path)
     with database.read() as connection:
         row = connection.execute(
             "SELECT * FROM generation_attempts WHERE id=?", (attempt_id,)
@@ -783,7 +845,7 @@ def run_status_report(
     online: bool = False,
     output_format: str = "json",
 ) -> int:
-    database = Database(settings.database_path)
+    database = ReadOnlyDatabase(settings.database_path)
     collectors = {
         "pilot-status": lambda: pilot_status(settings, database),
         "pilot-report": lambda: pilot_report(settings, database),
@@ -1011,9 +1073,15 @@ def run_refund_history(
 
 def run_payment_show(settings: Settings, invoice: int, output_format: str) -> int:
     try:
-        report = payment_show(Database(settings.database_path), invoice)
+        report = payment_show(ReadOnlyDatabase(settings.database_path), invoice)
     except PaymentError as exc:
         LOGGER.error("Payment order unavailable: %s", exc)
+        return 2
+    except sqlite3.Error as exc:
+        LOGGER.error(
+            "Payment order unavailable safely (error_type=%s)",
+            type(exc).__name__,
+        )
         return 2
     _print_operator(report, output_format)
     return 0 if report["consistent"] else 4
@@ -1023,12 +1091,35 @@ def run_payment_reconcile(
     settings: Settings, invoice: int | None, output_format: str
 ) -> int:
     try:
-        report = payment_reconcile(Database(settings.database_path), invoice)
+        report = payment_reconcile(ReadOnlyDatabase(settings.database_path), invoice)
     except PaymentError as exc:
         LOGGER.error("Payment reconciliation failed: %s", exc)
         return 2
+    except sqlite3.Error as exc:
+        LOGGER.error(
+            "Payment reconciliation unavailable safely (error_type=%s)",
+            type(exc).__name__,
+        )
+        return 2
     _print_operator(report, output_format)
     return 0 if report["mismatch_count"] == 0 else 4
+
+
+def run_payment_reconciliation_report(
+    settings: Settings, output_format: str
+) -> int:
+    try:
+        report = payment_reconciliation_summary(
+            ReadOnlyDatabase(settings.database_path)
+        )
+    except sqlite3.Error as exc:
+        LOGGER.error(
+            "Payment reconciliation unavailable safely (error_type=%s)",
+            type(exc).__name__,
+        )
+        return 2
+    _print_operator(report, output_format)
+    return {"OK": 0, "WARNING": 1, "CRITICAL": 2}[str(report["status"])]
 
 
 def run_payment_expiration_reconcile(
@@ -1181,6 +1272,15 @@ def build_parser() -> argparse.ArgumentParser:
     backup_offsite = subparsers.add_parser("backup-mark-offsite")
     backup_offsite.add_argument("--backup", required=True)
     backup_offsite.add_argument("--provider", required=True)
+    recovery_create = subparsers.add_parser("recovery-create")
+    recovery_create.add_argument("--passphrase-stdin", action="store_true")
+    recovery_restore = subparsers.add_parser("recovery-restore-test")
+    recovery_restore.add_argument("--backup", required=True)
+    recovery_restore.add_argument("--restore-root")
+    recovery_restore.add_argument("--passphrase-stdin", action="store_true")
+    recovery_offsite = subparsers.add_parser("recovery-mark-offsite")
+    recovery_offsite.add_argument("--backup", required=True)
+    recovery_offsite.add_argument("--provider", required=True)
     launch_status = subparsers.add_parser("launch-status")
     launch_status.add_argument("--strict", action="store_true")
     for command in (
@@ -1239,6 +1339,10 @@ def build_parser() -> argparse.ArgumentParser:
     payment_reconcile_parser = subparsers.add_parser("payment-reconcile")
     payment_reconcile_parser.add_argument("--invoice", type=int)
     add_format(payment_reconcile_parser)
+    payment_reconciliation_parser = subparsers.add_parser(
+        "payment-reconciliation"
+    )
+    add_format(payment_reconciliation_parser)
     expiration_reconcile_parser = subparsers.add_parser(
         "payment-expiration-reconcile"
     )
@@ -1308,6 +1412,14 @@ def main(argv: list[str] | None = None) -> int:
         return run_backup_restore_test(settings, args.backup, args.passphrase_stdin)
     if args.command == "backup-mark-offsite":
         return run_backup_mark_offsite(settings, args.backup, args.provider)
+    if args.command == "recovery-create":
+        return run_recovery_create(settings, args.passphrase_stdin)
+    if args.command == "recovery-restore-test":
+        return run_recovery_restore_test(
+            settings, args.backup, args.passphrase_stdin, args.restore_root
+        )
+    if args.command == "recovery-mark-offsite":
+        return run_recovery_mark_offsite(settings, args.backup, args.provider)
     if args.command == "launch-status":
         return print_launch_status(settings, strict=args.strict)
     if args.command == "growth-status":
@@ -1368,6 +1480,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_payment_show(settings, args.invoice, args.format)
     if args.command == "payment-reconcile":
         return run_payment_reconcile(settings, args.invoice, args.format)
+    if args.command == "payment-reconciliation":
+        return run_payment_reconciliation_report(settings, args.format)
     if args.command == "payment-expiration-reconcile":
         return run_payment_expiration_reconcile(
             settings, apply=args.apply, output_format=args.format

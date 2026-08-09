@@ -38,6 +38,10 @@ IMAGE_FACE_PRESERVE_GUARD_ENABLED=true
 PILOT_USER_LIMIT=0
 ```
 
+The preservation flags remain set for compatibility and rollback. On the active
+Gemini/Nano Banana path they do not alter the provider prompt: it is the exact
+original Unicode text supplied by the user.
+
 `GEMINI_API_KEY` must be configured as a secret; operator output reports only
 whether it is present, never its value. OpenAI remains configured as a manual
 rollback provider and is not an automatic fallback.

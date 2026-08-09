@@ -4,7 +4,8 @@
 
 ```text
 MAX user -> MAX API -> Ravuna VPS -> private SQLite/storage
-                              -> OpenAI (photo + technical edit prompt)
+                              -> Gemini (photo + exact user prompt)
+                              -> OpenAI only when manually selected
 Robokassa -> signed ResultURL -> payment/ledger records
 Ravuna VPS -> MAX API -> preview/original delivery
 ```
@@ -44,6 +45,8 @@ Ravuna does not receive full bank-card details.
 - Original delivery requires ownership plus an available/consumed entitlement.
 - Watermarked preview and original are distinct stored artifacts.
 - Logs and reports must not contain images, raw prompts or platform identifiers.
+- Gemini prompt passthrough must not be weakened by hidden preservation text;
+  prompt privacy is enforced by excluding raw prompts from telemetry and reports.
 
 ## Payment security
 

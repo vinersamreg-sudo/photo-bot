@@ -13,13 +13,15 @@ not authorization to implement.
 
 ### Production monitoring and recovery
 
-- Add an external alert channel for existing P0/P1 monitoring signals.
-- Periodically prove encrypted backup restore and off-site recovery evidence.
-- Exercise a documented VPS-loss recovery drill without customer data.
+- Select and approve an external alert destination, configure
+  `RAVUNA_ALERT_WEBHOOK_URL`, then perform one bounded alert-delivery test.
+- Periodically exercise the encrypted recovery bundle on an isolated host and
+  retain off-site evidence; synthetic local restore is the minimum recurring gate.
 
 ### Commercial reconciliation
 
-- Continue comparing Robokassa payouts/receipts with internal paid orders.
+- Continue comparing Robokassa cabinet payouts with the aggregate internal
+  `payment-reconciliation` report; payout data remains an external owner check.
 - Record actual variable costs and refund/support reserve for reliable margin.
 - Keep delayed-callback and failed-original-delivery recovery evidence current.
 

@@ -14,8 +14,12 @@ from PIL import Image
 from app.config import Settings
 from app.commercial_operations import cost_status, payment_status
 from app.commerce import RECEIPT_ITEM_NAME, USER_PRODUCT_NAME
-from app.payment_admin import payment_reconcile, payment_show
-from app.database import Database
+from app.payment_admin import (
+    payment_reconcile,
+    payment_reconciliation_summary,
+    payment_show,
+)
+from app.database import Database, ReadOnlyDatabase
 from app.demo_service import DemoService
 from app.image_provider import FakeImageProvider
 from app.payments import (
@@ -111,6 +115,62 @@ class PaymentTests(TestCase):
             "Shp_order": token,
             "PaymentMethod": "BankCard",
         }
+
+    def test_aggregate_reconciliation_detects_mismatch_without_mutation(self) -> None:
+        order = self.service.create_order(
+            self.user_id, self.versions[0]["id"], "reconciliation"
+        )
+        self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        before_sha = hashlib.sha256(
+            self.settings.database_path.read_bytes()
+        ).hexdigest()
+        read_only = ReadOnlyDatabase(self.settings.database_path)
+        with read_only.read() as connection:
+            self.assertEqual(connection.execute("PRAGMA query_only").fetchone()[0], 1)
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute("CREATE TABLE forbidden_write(id INTEGER)")
+        healthy = payment_reconciliation_summary(read_only)
+        repeated = payment_reconciliation_summary(read_only)
+        after_sha = hashlib.sha256(
+            self.settings.database_path.read_bytes()
+        ).hexdigest()
+        self.assertEqual(after_sha, before_sha)
+        self.assertEqual(healthy, repeated)
+        self.assertEqual(healthy["status"], "OK")
+        self.assertEqual(healthy["paid_orders"], 1)
+        self.assertEqual(healthy["package_grants"], 1)
+        self.assertEqual(healthy["original_entitlements"], 1)
+        self.assertEqual(healthy["receipts"], 1)
+        self.assertEqual(healthy["duplicate_callback_evidence"], 1)
+        self.assertEqual(healthy["duplicate_effects"], 0)
+        with self.database.transaction() as connection:
+            connection.execute(
+                "DELETE FROM continuation_pack_grants WHERE payment_order_id=?",
+                (order.id,),
+            )
+        broken = payment_reconciliation_summary(self.database)
+        self.assertEqual(broken["status"], "CRITICAL")
+        self.assertEqual(broken["paid_without_grant"], 1)
+        rendered = json.dumps(broken)
+        self.assertNotIn(self.user_id, rendered)
+        self.assertNotIn(order.id, rendered)
+
+    def test_read_only_database_does_not_create_a_missing_database(self) -> None:
+        missing = self.base / "missing" / "photo_bot.sqlite3"
+        with self.assertRaises(sqlite3.OperationalError):
+            with ReadOnlyDatabase(missing).read():
+                pass
+        self.assertFalse(missing.exists())
+        self.assertFalse(missing.parent.exists())
 
     def test_payment_link_uses_test_mode_receipt_and_bound_order_token(self) -> None:
         order = self.service.create_order(self.user_id, self.versions[0]["id"], "event-1")
