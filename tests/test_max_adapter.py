@@ -48,10 +48,9 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(
             [button.text for button in menu.buttons],
             [
-                "📷 Загрузить фотографию",
                 "📁 Мои работы",
-                "Публичная оферта",
-                "Обработка персональных данных",
+                "📄 Публичная оферта",
+                "🔐 Обработка персональных данных",
             ],
         )
         self.assertEqual(
@@ -80,8 +79,11 @@ class MaxAdapterTests(TestCase):
             ],
         )
         self.assertIn("Что хотите сделать с фотографией?", WELCOME_TEXT)
+        self.assertIn("прикрепите фотографию через скрепку внизу чата", WELCOME_TEXT)
+        self.assertIn("до 2 фотографий для одной обработки", WELCOME_TEXT)
         self.assertIn("• поменять одежду", WELCOME_TEXT)
         self.assertIn("• улучшить качество", WELCOME_TEXT)
+        self.assertNotIn("upload:ready", [button.action for button in menu.buttons])
         upload = upload_view()
         self.assertIn("Прикрепите фотографию через скрепку 📎", upload.text)
         self.assertIn("до 2 фотографий для одной обработки", upload.text)
@@ -101,6 +103,7 @@ class MaxAdapterTests(TestCase):
         self.assertEqual([button.row for button in upload.buttons], [0, 0, 1])
         new_source = new_source_view()
         self.assertIn("Загрузите другое фото", new_source.text)
+        self.assertIn("Прикрепите фотографию через скрепку 📎", new_source.text)
         self.assertIn("до 2 фотографий", new_source.text)
         self.assertIn("вправе его использовать", new_source.text)
         self.assertEqual(

@@ -305,10 +305,9 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(
             [button.text for button in menu[2]],
             [
-                "📷 Загрузить фотографию",
                 "📁 Мои работы",
-                "Публичная оферта",
-                "Обработка персональных данных",
+                "📄 Публичная оферта",
+                "🔐 Обработка персональных данных",
             ],
         )
         self.callback("upload:ready")
@@ -768,23 +767,24 @@ class MaxApplicationTests(TestCase):
         start_message = self.transport.messages[-1]
         self.assertIn("Что хотите сделать с фотографией?", start_message[1])
         self.assertIn("Примеры:", start_message[1])
+        self.assertIn("прикрепите фотографию через скрепку внизу чата", start_message[1])
+        self.assertIn("до 2 фотографий для одной обработки", start_message[1])
         self.assertNotIn("Фото принято", start_message[1])
         self.assertEqual(
             [(button.text, button.action) for button in start_message[2]],
             [
-                ("📷 Загрузить фотографию", "upload:ready"),
                 ("📁 Мои работы", "studio:works"),
                 (
-                    "Публичная оферта",
+                    "📄 Публичная оферта",
                     "https://ravuna.ru/legal/offer.html",
                 ),
                 (
-                    "Обработка персональных данных",
+                    "🔐 Обработка персональных данных",
                     "https://ravuna.ru/legal/personal-data.html",
                 ),
             ],
         )
-        self.assertTrue(
+        self.assertFalse(
             any(button.action == "upload:ready" for button in start_message[2])
         )
         self.assertFalse(
@@ -1106,9 +1106,13 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.demo.commerce.balance(self.store.get("u1").user_id).available, 0)
         self.assertEqual(self.provider.calls, calls_before + 1)
 
-    def test_image_outside_waiting_for_source_is_saved_and_not_silently_ignored(self) -> None:
-        self.app.handle(self.event("bot_started"))
+    def test_image_sent_directly_after_start_is_saved_without_upload_callback(self) -> None:
+        self.app.handle(self.event("message_created", text="/start"))
         self.assertEqual(self.store.get("u1").state, "main_menu")
+        self.assertNotIn(
+            "upload:ready",
+            [button.action for button in self.transport.messages[-1][2]],
+        )
 
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/preloaded")
@@ -1213,6 +1217,7 @@ class MaxApplicationTests(TestCase):
         self.assertIsNone(dialog.session_id)
         self.assertIsNone(dialog.current_version_id)
         self.assertIn("Загрузите другое фото", self.transport.edits[-1][1])
+        self.assertIn("Прикрепите фотографию через скрепку 📎", self.transport.edits[-1][1])
         self.assertIn("до 2 фотографий", self.transport.edits[-1][1])
         self.assertIn("вправе его использовать", self.transport.edits[-1][1])
         self.assertEqual(

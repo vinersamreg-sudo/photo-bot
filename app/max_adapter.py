@@ -14,7 +14,9 @@ from app.scenarios import SCENARIOS
 
 WELCOME_TEXT = (
     "Что хотите сделать с фотографией?\n\n"
-    "Загрузите фотографию и сразу напишите, что нужно сделать.\n\n"
+    "📎 Чтобы начать, прикрепите фотографию через скрепку внизу чата "
+    "и в подписи напишите, что нужно изменить.\n\n"
+    "Можно загрузить до 2 фотографий для одной обработки.\n\n"
     "Примеры:\n"
     "• убрать фон\n"
     "• поменять одежду\n"
@@ -38,7 +40,9 @@ UPLOAD_INSTRUCTION_TEXT = (
 
 NEW_SOURCE_INSTRUCTION_TEXT = (
     "📷 Загрузите другое фото для обработки.\n\n"
-    "Можно отправить до 2 фотографий и написать, что нужно изменить.\n\n"
+    "Прикрепите фотографию через скрепку 📎 и в подписи напишите, "
+    "что нужно изменить.\n\n"
+    "Можно загрузить до 2 фотографий для одной обработки.\n\n"
     + UPLOAD_LEGAL_NOTICE
 )
 
@@ -113,9 +117,9 @@ def main_menu(remaining: int | None = None, payment_url: str | None = None) -> V
         buttons = (
             Button("Купить пакет — 49 ₽", payment_url or "package:buy"),
             Button("📁 Мои работы", "studio:works"),
-            Button("Публичная оферта", "https://ravuna.ru/legal/offer.html"),
+            Button("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
             Button(
-                "Обработка персональных данных",
+                "🔐 Обработка персональных данных",
                 "https://ravuna.ru/legal/personal-data.html",
             ),
         )
@@ -126,14 +130,13 @@ def main_menu(remaining: int | None = None, payment_url: str | None = None) -> V
     return View(
         text,
         (
-            Button("📷 Загрузить фотографию", "upload:ready"),
             Button("📁 Мои работы", "studio:works"),
             Button(
-                "Публичная оферта",
+                "📄 Публичная оферта",
                 "https://ravuna.ru/legal/offer.html",
             ),
             Button(
-                "Обработка персональных данных",
+                "🔐 Обработка персональных данных",
                 "https://ravuna.ru/legal/personal-data.html",
             ),
         ),

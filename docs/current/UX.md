@@ -4,11 +4,11 @@
 
 The primary MAX flow is intentionally compact:
 
-1. `/start` shows the complete main menu with examples, a photo-processing
-   action, «Мои работы» and legal links.
-2. Only after the user chooses photo processing does Ravuna show the upload
-   instruction and enter the photo-waiting state. The user sends one source and
-   may add exactly one more before entering the instruction.
+1. `/start` shows the complete main menu with examples, a direct paperclip
+   upload instruction, «Мои работы» and legal links. It does not show an upload
+   callback button because MAX cannot open the attachment picker from it.
+2. The user may attach the first source directly from the main screen and may
+   add exactly one more before entering the instruction.
 3. Ravuna produces one watermarked preview with direct actions.
 4. User corrects/repeats, opens works/history, or requests the original.
 5. If no original entitlement exists, Ravuna shows one compact 49 ₽ package
@@ -51,12 +51,14 @@ pending request; a previous or latest completed work is never used as fallback.
 - An explicit `/start`, start text or `bot_started`/deeplink retires the previous
   active bot screen and sends a new complete start screen below the user action.
   Callback navigation then continues to edit that new screen in place.
-- The explicit photo-processing action replaces the active screen with the
-  upload instruction, enters the photo-waiting state and provides the existing
-  public-offer and personal-data links plus “← Назад”. The screen reminds the
-  user that one edit accepts up to two photos, requires the right to use them
-  and sends them to the configured AI provider only for processing. The same
-  notice and links appear before “📷 Другое фото”.
+- The main screen tells the user to attach a photo through the paperclip and
+  accepts that photo without a preliminary callback. It keeps «Мои работы»,
+  public-offer and personal-data links, but has no misleading upload button.
+- “📷 Другое фото” enters the photo-waiting state and shows the paperclip
+  instruction, the existing public-offer and personal-data links plus
+  “← Назад”. The screen reminds the user that one edit accepts up to two photos,
+  requires the right to use them and sends them to the configured AI provider
+  only for processing.
 - “← Назад” clears the transient upload state and restores the complete main
   menu in place without calling an image provider.
 - Caption and photo in one message are supported.
