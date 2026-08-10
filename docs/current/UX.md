@@ -43,6 +43,14 @@ pending request; a previous or latest completed work is never used as fallback.
 - A completed asynchronous edit updates the UI only while its processing
   revision is current. Otherwise the result remains available in «Моих работах»
   and a short service notification may be sent.
+- A finished result is chat history, not a disposable navigation shell. Starting
+  another photo, correction, repeat, works list or `/start` from that result
+  sends a new active message below it. The previous result is neither edited nor
+  deleted; callbacks on the new active message continue edit-in-place.
+- Original delivery keeps the watermarked result and the delivered file as
+  immutable chat history. Its confirmation/actions are posted below the file as
+  a new active message; starting another photo posts the upload instruction below
+  that confirmation.
 
 ## Start state
 

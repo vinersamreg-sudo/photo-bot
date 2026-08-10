@@ -184,6 +184,33 @@ class MaxUiShellTests(TestCase):
         self.assertEqual(self.shell.current("u1").message_id, progress.message_id)
         self.assertGreater(progress.revision, menu.revision)
 
+    def test_new_message_preserves_previous_screen_as_history(self) -> None:
+        result = self.shell.render(
+            "u1",
+            text="Готово",
+            buttons=(Button("Другое фото", "new:source"),),
+            screen="result_ready",
+            image=self.image,
+        )
+
+        retired = self.shell.begin_new_message("u1", chat_id="chat-1")
+        upload = self.shell.render(
+            "u1",
+            text="Прикрепите фотографию",
+            buttons=(Button("Назад", "menu"),),
+            screen="waiting_for_source",
+        )
+
+        self.assertTrue(retired.applied)
+        self.assertEqual(self.transport.deletes, [])
+        self.assertEqual(self.transport.edits, [])
+        self.assertEqual(self.transport.image_edits, [])
+        self.assertEqual(len(self.transport.image_sends), 1)
+        self.assertEqual(len(self.transport.sends), 1)
+        self.assertNotEqual(upload.message_id, result.message_id)
+        self.assertEqual(self.shell.current("u1").message_id, upload.message_id)
+        self.assertGreater(upload.revision, result.revision)
+
     def test_clipboard_payload_is_not_versioned(self) -> None:
         payload = "Приглашение Юникод\nhttps://max.ru/bot?start=ref_opaque"
 

@@ -131,7 +131,11 @@ class MaxUiShell:
         return self._session(row) if row else None
 
     def begin_user_input(
-        self, platform_user_id: str, *, chat_id: Optional[str] = None
+        self,
+        platform_user_id: str,
+        *,
+        chat_id: Optional[str] = None,
+        preserve_previous_message: bool = False,
     ) -> RenderResult:
         """Retire the old bot screen before rendering below a new user message."""
 
@@ -153,7 +157,7 @@ class MaxUiShell:
                 (chat_id, revision, _now(), platform_user_id),
             )
 
-        if previous_message_id:
+        if previous_message_id and not preserve_previous_message:
             try:
                 self.transport.delete_message(previous_message_id)
             except MaxTransportError:
@@ -166,8 +170,20 @@ class MaxUiShell:
                     )
                 except MaxTransportError:
                     pass
+        if previous_message_id:
             self.keyboards.clear_keyboard(platform_user_id, previous_message_id)
         return RenderResult(True, None, revision)
+
+    def begin_new_message(
+        self, platform_user_id: str, *, chat_id: Optional[str] = None
+    ) -> RenderResult:
+        """Start a new active screen while preserving the previous message as history."""
+
+        return self.begin_user_input(
+            platform_user_id,
+            chat_id=chat_id,
+            preserve_previous_message=True,
+        )
 
     def callback_is_current(
         self, platform_user_id: str, message_id: Optional[str], revision: Optional[int]

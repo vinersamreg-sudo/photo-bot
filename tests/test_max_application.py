@@ -73,6 +73,7 @@ class FakeMaxTransport:
         self.fail_next_message = False
         self.fail_next_edit = False
         self.on_send_message = None
+        self.timeline = []
 
     def send_message(self, user_id, text, buttons=(), **kwargs):
         if self.fail_next_message:
@@ -82,6 +83,7 @@ class FakeMaxTransport:
             self.on_send_message(text)
         message_id = f"sent-{len(self.messages) + 1}"
         self.messages.append((user_id, text, tuple(buttons), kwargs, message_id))
+        self.timeline.append(("send_message", message_id))
         return message_id
 
     def edit_message(self, message_id, text, buttons=(), **_kwargs):
@@ -89,6 +91,7 @@ class FakeMaxTransport:
             self.fail_next_edit = False
             raise MaxTransportError("fake edit failure")
         self.edits.append((message_id, text, tuple(buttons)))
+        self.timeline.append(("edit_message", message_id))
 
     def edit_image(self, message_id, image, caption, buttons, **_kwargs):
         if self.fail_next_edit:
@@ -97,9 +100,11 @@ class FakeMaxTransport:
         self.image_edits.append(
             (message_id, Path(image), caption, tuple(buttons))
         )
+        self.timeline.append(("edit_image", message_id))
 
     def delete_message(self, message_id):
         self.deletes.append(message_id)
+        self.timeline.append(("delete_message", message_id))
 
     def answer_callback(self, callback_id, notification):
         self.callbacks.append((callback_id, notification))
@@ -113,13 +118,17 @@ class FakeMaxTransport:
         self.images.append((user_id, Path(image), caption, tuple(buttons)))
         if not self.image_delivery:
             return None
-        return f"image-{len(self.images)}"
+        message_id = f"image-{len(self.images)}"
+        self.timeline.append(("send_image", message_id))
+        return message_id
 
     def send_file(self, user_id, file_path, caption, buttons):
         self.files.append((user_id, Path(file_path), caption, tuple(buttons)))
         if not self.file_delivery:
             return None
-        return f"file-{len(self.files)}"
+        message_id = f"file-{len(self.files)}"
+        self.timeline.append(("send_file", message_id))
+        return message_id
 
 
 class MaxApplicationTests(TestCase):
@@ -639,13 +648,17 @@ class MaxApplicationTests(TestCase):
     def test_single_screen_gallery_number_opens_correct_work_in_place(self) -> None:
         self.enable_single_screen()
         self.generate_first()
-        active_message = self.app.ui.current("u1").message_id
+        result_message = self.app.ui.current("u1").message_id
+        deletes_before = list(self.transport.deletes)
 
         self.callback("studio:works")
 
-        sheet_edit = self.transport.image_edits[-1]
+        works_message = self.app.ui.current("u1").message_id
+        sheet = self.transport.images[-1]
+        self.assertNotEqual(works_message, result_message)
+        self.assertEqual(self.transport.deletes, deletes_before)
         number_button = next(
-            button for button in sheet_edit[3] if button.text == "Открыть 1"
+            button for button in sheet[3] if button.text == "Открыть 1"
         )
         _revision, action = parse_versioned_action(number_button.action)
         expected_item = action.rsplit(":", 1)[1]
@@ -654,14 +667,18 @@ class MaxApplicationTests(TestCase):
         dialog = self.store.get("u1")
         self.assertEqual(dialog.current_gallery_item_id, expected_item)
         self.assertEqual(dialog.pending_action, NAV_WORK)
-        self.assertEqual(self.app.ui.current("u1").message_id, active_message)
+        self.assertEqual(self.app.ui.current("u1").message_id, works_message)
         self.assertEqual(len(self.transport.messages), 2)
 
     def test_single_screen_correction_creates_new_progress_after_user_text(self) -> None:
         self.enable_single_screen()
         self.generate_first()
+        result_message = self.app.ui.current("u1").message_id
+        deletes_before = list(self.transport.deletes)
         self.callback("result:correct")
         old_active = self.app.ui.current("u1").message_id
+        self.assertNotEqual(old_active, result_message)
+        self.assertEqual(self.transport.deletes, deletes_before)
         messages_before = len(self.transport.messages)
         image_edits_before = len(self.transport.image_edits)
         self.clock.advance(2)
@@ -679,6 +696,7 @@ class MaxApplicationTests(TestCase):
         self.assertNotEqual(processing_message_id, active.message_id)
         self.assertNotEqual(active.message_id, old_active)
         self.assertIn(old_active, self.transport.deletes)
+        self.assertNotIn(result_message, self.transport.deletes)
         self.assertIn(processing_message_id, self.transport.deletes)
         self.assertNotIn(correction_event.message_id, self.transport.deletes)
         self.assertEqual(len(self.transport.image_edits), image_edits_before)
@@ -725,11 +743,11 @@ class MaxApplicationTests(TestCase):
                 )
 
         self.callback("studio:works")
-        first_edit = self.transport.image_edits[-1]
-        first_sheet = first_edit[1].read_bytes()
+        first_send = self.transport.images[-1]
+        first_sheet = first_send[1].read_bytes()
         first_ids = {
             parse_versioned_action(button.action)[1].rsplit(":", 1)[1]
-            for button in first_edit[3]
+            for button in first_send[3]
             if button.text.startswith("Открыть ")
         }
         self.callback("works:page:2")
@@ -740,7 +758,7 @@ class MaxApplicationTests(TestCase):
             if button.text.startswith("Открыть ")
         }
 
-        self.assertNotEqual(first_edit[1], second_edit[1])
+        self.assertNotEqual(first_send[1], second_edit[1])
         self.assertNotEqual(first_sheet, second_edit[1].read_bytes())
         self.assertTrue(first_ids.isdisjoint(second_ids))
         open_second = next(
@@ -1204,26 +1222,100 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
-    def test_result_other_photo_reuses_existing_upload_flow(self) -> None:
+    def test_result_other_photo_posts_new_active_message(self) -> None:
         self.enable_single_screen()
         self.generate_first()
+        result_message = self.app.ui.current("u1").message_id
         provider_calls = self.provider.calls
+        message_count = len(self.transport.messages)
+        edits_before = len(self.transport.edits)
+        image_edits_before = len(self.transport.image_edits)
+        deletes_before = list(self.transport.deletes)
+
+        self.callback("new:source")
+
+        active = self.app.ui.current("u1")
+        self.assertEqual(len(self.transport.messages), message_count + 1)
+        self.assertEqual(active.message_id, self.transport.messages[-1][4])
+        self.assertNotEqual(active.message_id, result_message)
+        self.assertEqual(len(self.transport.edits), edits_before)
+        self.assertEqual(len(self.transport.image_edits), image_edits_before)
+        self.assertEqual(self.transport.deletes, deletes_before)
+        self.assertNotIn(result_message, self.transport.deletes)
+        self.assertEqual(self.store.get("u1").state, "waiting_for_source")
+        self.assertIn("Загрузите другое фото", self.transport.messages[-1][1])
+        self.assertEqual(self.provider.calls, provider_calls)
+
+        self.callback("nav:back:main")
+        self.assertEqual(self.app.ui.current("u1").message_id, active.message_id)
+        self.assertEqual(self.transport.edits[-1][0], active.message_id)
+
+    def test_result_original_then_other_photo_posts_new_active_message(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        dialog = self.store.get("u1")
+        result_message = self.app.ui.current("u1").message_id
+        message_count_before_unlock = len(self.transport.messages)
+        edits_before_unlock = len(self.transport.edits)
+        image_edits_before_unlock = len(self.transport.image_edits)
+        deletes_before_unlock = list(self.transport.deletes)
+        timeline_before_unlock = len(self.transport.timeline)
+        with self.database.transaction() as connection:
+            self.demo.commerce.grant_continuation_pack(
+                connection,
+                user_id=dialog.user_id,
+                payment_order_id="test-result-history-order",
+                payment_intent_id="test-result-history-intent",
+            )
+        self.callback("result:unlock")
+        self.assertTrue(self.transport.files)
+        original_message = f"file-{len(self.transport.files)}"
+        confirmation_message = self.app.ui.current("u1").message_id
+        self.assertNotEqual(confirmation_message, result_message)
+        self.assertEqual(len(self.transport.messages), message_count_before_unlock + 1)
+        self.assertEqual(len(self.transport.edits), edits_before_unlock)
+        self.assertEqual(len(self.transport.image_edits), image_edits_before_unlock)
+        self.assertEqual(self.transport.deletes, deletes_before_unlock)
+        self.assertEqual(
+            self.transport.timeline[timeline_before_unlock:],
+            [
+                ("send_file", original_message),
+                ("send_message", confirmation_message),
+            ],
+        )
+
+        provider_calls = self.provider.calls
+        message_count = len(self.transport.messages)
+        edits_before = len(self.transport.edits)
+        image_edits_before = len(self.transport.image_edits)
+        deletes_before = list(self.transport.deletes)
 
         self.callback("new:source")
 
         dialog = self.store.get("u1")
+        active = self.app.ui.current("u1")
+        self.assertEqual(len(self.transport.messages), message_count + 1)
+        self.assertEqual(active.message_id, self.transport.messages[-1][4])
+        self.assertNotEqual(active.message_id, confirmation_message)
+        self.assertEqual(len(self.transport.edits), edits_before)
+        self.assertEqual(len(self.transport.image_edits), image_edits_before)
+        self.assertEqual(self.transport.deletes, deletes_before)
+        self.assertNotIn(result_message, self.transport.deletes)
+        self.assertNotIn(original_message, self.transport.deletes)
+        self.assertEqual(self.transport.timeline[-1], ("send_message", active.message_id))
         self.assertEqual(dialog.state, "waiting_for_source")
         self.assertEqual(dialog.pending_action, "initial")
         self.assertIsNone(dialog.session_id)
         self.assertIsNone(dialog.current_version_id)
-        self.assertIn("Загрузите другое фото", self.transport.edits[-1][1])
-        self.assertIn("Прикрепите фотографию через скрепку 📎", self.transport.edits[-1][1])
-        self.assertIn("до 2 фотографий", self.transport.edits[-1][1])
-        self.assertIn("вправе его использовать", self.transport.edits[-1][1])
+        upload_message = self.transport.messages[-1]
+        self.assertIn("Загрузите другое фото", upload_message[1])
+        self.assertIn("Прикрепите фотографию через скрепку 📎", upload_message[1])
+        self.assertIn("до 2 фотографий", upload_message[1])
+        self.assertIn("вправе его использовать", upload_message[1])
         self.assertEqual(
             [
                 (button.text, parse_versioned_action(button.action)[1])
-                for button in self.transport.edits[-1][2]
+                for button in upload_message[2]
             ],
             [
                 ("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
@@ -1235,6 +1327,63 @@ class MaxApplicationTests(TestCase):
             ],
         )
         self.assertEqual(self.provider.calls, provider_calls)
+
+        self.callback("nav:back:main")
+        self.assertEqual(self.app.ui.current("u1").message_id, active.message_id)
+        self.assertEqual(self.transport.edits[-1][0], active.message_id)
+        mutated_history_ids = {
+            message_id
+            for operation, message_id in self.transport.timeline
+            if operation in {"edit_message", "edit_image", "delete_message"}
+        }
+        self.assertNotIn(result_message, mutated_history_ids)
+        self.assertNotIn(original_message, mutated_history_ids)
+
+    def test_start_and_direct_reupload_after_result_preserve_result_message(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        result_message = self.app.ui.current("u1").message_id
+        deletes_before = list(self.transport.deletes)
+        image_edits_before = len(self.transport.image_edits)
+
+        self.app.handle(self.event("message_created", text="/start"))
+
+        start_message = self.app.ui.current("u1").message_id
+        self.assertNotEqual(start_message, result_message)
+        self.assertNotIn(result_message, self.transport.deletes)
+        self.assertEqual(self.transport.deletes, deletes_before)
+        self.assertEqual(len(self.transport.image_edits), image_edits_before)
+
+        second = self.base / "direct-reupload.png"
+        Image.new("RGB", (240, 320), "#7697a8").save(second)
+        self.transport.source = second
+        self.app.handle(
+            self.event("message_created", image_url="https://iu.oneme.ru/direct-reupload")
+        )
+
+        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertNotEqual(self.app.ui.current("u1").message_id, start_message)
+        self.assertNotIn(result_message, self.transport.deletes)
+
+    def test_repeat_from_result_preserves_previous_result_message(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        result_message = self.app.ui.current("u1").message_id
+        deletes_before = list(self.transport.deletes)
+        image_edits_before = len(self.transport.image_edits)
+        self.clock.advance(2)
+
+        self.callback("result:repeat")
+
+        self.assertEqual(self.provider.calls, 2)
+        self.assertNotEqual(self.app.ui.current("u1").message_id, result_message)
+        self.assertNotIn(result_message, self.transport.deletes)
+        self.assertEqual(
+            [message_id for message_id in self.transport.deletes if message_id == result_message],
+            [],
+        )
+        self.assertEqual(len(self.transport.image_edits), image_edits_before)
+        self.assertGreater(len(self.transport.deletes), len(deletes_before))
 
     def test_zero_remaining_edits_replaces_edit_actions_with_purchase_offer(self) -> None:
         self.generate_first()
