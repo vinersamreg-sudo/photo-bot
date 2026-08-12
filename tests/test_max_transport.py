@@ -36,6 +36,31 @@ class MaxTransportTests(TestCase):
         self.assertEqual(message.user_id, "42")
         self.assertEqual(message.chat_id, "77")
         self.assertEqual(message.image_url, "https://iu.oneme.ru/image")
+        self.assertEqual(message.image_urls, ("https://iu.oneme.ru/image",))
+        self.assertEqual(message.image_attachment_count, 1)
+
+        two_images = parse_update({
+            "update_type": "message_created",
+            "timestamp": 10,
+            "message": {
+                "sender": {"user_id": 42},
+                "recipient": {"chat_id": 77},
+                "body": {
+                    "mid": "mid-two-images",
+                    "text": "exact prompt",
+                    "attachments": [
+                        {"type": "image", "payload": {"url": "https://iu.oneme.ru/one"}},
+                        {"type": "image", "payload": {"url": "https://iu.oneme.ru/two"}},
+                    ],
+                },
+            },
+        })
+        self.assertEqual(
+            two_images.image_urls,
+            ("https://iu.oneme.ru/one", "https://iu.oneme.ru/two"),
+        )
+        self.assertEqual(two_images.image_attachment_count, 2)
+        self.assertEqual(two_images.image_url, "https://iu.oneme.ru/one")
 
         callback = parse_update({
             "update_type": "message_callback",

@@ -52,6 +52,8 @@ class MaxIncomingEvent:
     message_id: Optional[str] = None
     text: Optional[str] = None
     image_url: Optional[str] = None
+    image_urls: tuple[str, ...] = ()
+    image_attachment_count: int = 0
     callback_id: Optional[str] = None
     callback_payload: Optional[str] = None
     start_payload: Optional[str] = None
@@ -94,12 +96,14 @@ def parse_update(update: dict[str, Any]) -> Optional[MaxIncomingEvent]:
         message_id = _string_id(body.get("mid"))
         if not user_id or not message_id:
             return None
-        image_url = None
+        image_urls: list[str] = []
+        image_attachment_count = 0
         for attachment in body.get("attachments") or []:
             if attachment.get("type") == "image":
+                image_attachment_count += 1
                 image_url = (attachment.get("payload") or {}).get("url")
-                if image_url:
-                    break
+                if image_url and len(image_urls) < 2:
+                    image_urls.append(str(image_url))
         return MaxIncomingEvent(
             event_type,
             f"message:{message_id}",
@@ -108,7 +112,9 @@ def parse_update(update: dict[str, Any]) -> Optional[MaxIncomingEvent]:
             timestamp,
             message_id=message_id,
             text=body.get("text"),
-            image_url=image_url,
+            image_url=image_urls[0] if image_urls else None,
+            image_urls=tuple(image_urls),
+            image_attachment_count=image_attachment_count,
         )
 
     if event_type == "message_callback":

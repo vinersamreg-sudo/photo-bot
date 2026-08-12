@@ -40,7 +40,7 @@ from app.max_application import (
     PROCESSING_TEXT,
 )
 from app.max_conversation import MaxConversationStore
-from app.max_transport import MaxIncomingEvent, MaxTransportError
+from app.max_transport import MaxIncomingEvent, MaxTransportError, parse_update
 from app.max_ui_shell import parse_versioned_action
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
@@ -74,6 +74,9 @@ class FakeMaxTransport:
         self.fail_next_edit = False
         self.on_send_message = None
         self.timeline = []
+        self.sources_by_url = {}
+        self.failed_download_urls = set()
+        self.downloaded_urls = []
 
     def send_message(self, user_id, text, buttons=(), **kwargs):
         if self.fail_next_message:
@@ -109,9 +112,12 @@ class FakeMaxTransport:
     def answer_callback(self, callback_id, notification):
         self.callbacks.append((callback_id, notification))
 
-    def download_image(self, _url, destination, _max_bytes):
+    def download_image(self, url, destination, _max_bytes):
+        self.downloaded_urls.append(url)
+        if url in self.failed_download_urls:
+            raise MaxTransportError("fake download failure")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(self.source, destination)
+        shutil.copyfile(self.sources_by_url.get(url, self.source), destination)
         return destination
 
     def send_image(self, user_id, image, caption, buttons, **_kwargs):
@@ -154,6 +160,16 @@ class MaxApplicationTests(TestCase):
             self.settings.max_source_file_size_mb * 1024 * 1024,
         )
         self.provider = FakeImageProvider()
+        self.provider.prompts = []
+        self.provider.source_batches = []
+        original_edit_many = self.provider.edit_many
+
+        def record_edit_many(source_paths, prompt):
+            self.provider.source_batches.append(tuple(source_paths))
+            self.provider.prompts.append(prompt)
+            return original_edit_many(source_paths, prompt)
+
+        self.provider.edit_many = record_edit_many
         self.demo = DemoService(
             self.settings,
             self.database,
@@ -169,7 +185,10 @@ class MaxApplicationTests(TestCase):
         )
         self.sequence = 0
 
-    def event(self, event_type, *, text=None, image_url=None, action=None):
+    def event(
+        self, event_type, *, text=None, image_url=None, image_urls=(),
+        image_attachment_count=0, action=None,
+    ):
         self.sequence += 1
         key = (
             f"callback:cb-{self.sequence}"
@@ -195,6 +214,8 @@ class MaxApplicationTests(TestCase):
                 else None
             ),
             image_url=image_url,
+            image_urls=tuple(image_urls),
+            image_attachment_count=image_attachment_count,
             callback_id=f"cb-{self.sequence}" if event_type == "message_callback" else None,
             callback_payload=action,
         )
@@ -912,6 +933,157 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(attempt["prompt"], prompt)
         self.assertIsNotNone(attempt["secondary_source_path"])
         self.assertEqual(version["secondary_source_path"], attempt["secondary_source_path"])
+
+    def test_raw_max_update_with_two_images_reaches_edit_many_once(self) -> None:
+        prompt = "На фото 1 добавь мужчину из фото 2"
+        direct_settings = replace(
+            self.settings,
+            image_direct_prompt_enabled=True,
+            image_subject_preserve_guard_enabled=False,
+        )
+        self.app.settings = direct_settings
+        self.demo.settings = direct_settings
+        first_url = "https://iu.oneme.ru/one-message-first"
+        second_url = "https://iu.oneme.ru/one-message-second"
+        second = self.base / "one-message-second.png"
+        Image.new("RGB", (240, 320), "red").save(second)
+        self.transport.sources_by_url = {
+            first_url: self.source,
+            second_url: second,
+        }
+        event = parse_update(
+            {
+                "update_type": "message_created",
+                "timestamp": 10,
+                "message": {
+                    "sender": {"user_id": "u1"},
+                    "recipient": {"chat_id": "c1"},
+                    "body": {
+                        "mid": "raw-two-images",
+                        "text": prompt,
+                        "attachments": [
+                            {"type": "image", "payload": {"url": first_url}},
+                            {"type": "image", "payload": {"url": second_url}},
+                        ],
+                    },
+                },
+            }
+        )
+
+        self.assertTrue(self.app.handle(event))
+
+        self.assertEqual(self.transport.downloaded_urls, [first_url, second_url])
+        self.assertEqual(self.provider.calls, 1)
+        self.assertEqual(self.provider.prompts, [prompt])
+        self.assertEqual(len(self.provider.source_batches), 1)
+        self.assertEqual(len(self.provider.source_batches[0]), 2)
+        with self.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT * FROM generation_attempts ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(attempt["prompt"], prompt)
+        self.assertIsNotNone(attempt["secondary_source_path"])
+        self.assertEqual(
+            self.demo.commerce.balance(self.store.get("u1").user_id).available,
+            1,
+        )
+
+    def test_raw_max_update_with_one_image_keeps_existing_flow(self) -> None:
+        image_url = "https://iu.oneme.ru/one-message-only"
+        event = parse_update(
+            {
+                "update_type": "message_created",
+                "timestamp": 10,
+                "message": {
+                    "sender": {"user_id": "u1"},
+                    "recipient": {"chat_id": "c1"},
+                    "body": {
+                        "mid": "raw-one-image",
+                        "text": "Улучши фото",
+                        "attachments": [
+                            {"type": "image", "payload": {"url": image_url}},
+                        ],
+                    },
+                },
+            }
+        )
+
+        self.assertTrue(self.app.handle(event))
+
+        self.assertEqual(self.transport.downloaded_urls, [image_url])
+        self.assertEqual(self.provider.calls, 1)
+        with self.database.read() as connection:
+            attempt = connection.execute(
+                "SELECT prompt,secondary_source_path FROM generation_attempts"
+            ).fetchone()
+        self.assertEqual(attempt["prompt"], "Улучши фото")
+        self.assertIsNone(attempt["secondary_source_path"])
+
+    def test_raw_max_update_with_more_than_two_images_is_rejected(self) -> None:
+        event = parse_update(
+            {
+                "update_type": "message_created",
+                "timestamp": 11,
+                "message": {
+                    "sender": {"user_id": "u1"},
+                    "recipient": {"chat_id": "c1"},
+                    "body": {
+                        "mid": "raw-three-images",
+                        "text": "prompt",
+                        "attachments": [
+                            {"type": "image", "payload": {"url": f"https://iu.oneme.ru/{index}"}}
+                            for index in range(3)
+                        ],
+                    },
+                },
+            }
+        )
+
+        self.assertTrue(self.app.handle(event))
+
+        self.assertEqual(self.provider.calls, 0)
+        self.assertEqual(self.transport.downloaded_urls, [])
+        self.assertEqual(
+            self.transport.messages[-1][1],
+            "Можно использовать максимум 2 фотографии",
+        )
+
+    def test_second_image_download_failure_never_generates_or_debits(self) -> None:
+        prompt = "На фото 1 добавь мужчину из фото 2"
+        first_url = "https://iu.oneme.ru/download-first"
+        second_url = "https://iu.oneme.ru/download-second"
+        with self.database.read() as connection:
+            ledger_before = connection.execute(
+                "SELECT COUNT(*) FROM credit_ledger"
+            ).fetchone()[0]
+        self.transport.failed_download_urls.add(second_url)
+        event = self.event(
+            "message_created",
+            text=prompt,
+            image_url=first_url,
+            image_urls=(first_url, second_url),
+            image_attachment_count=2,
+        )
+
+        self.assertTrue(self.app.handle(event))
+
+        self.assertEqual(self.provider.calls, 0)
+        dialog = self.store.get("u1")
+        self.assertIsNone(dialog.user_id if dialog else None)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM generation_attempts").fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM demo_sessions").fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM credit_ledger").fetchone()[0],
+                ledger_before,
+            )
+        self.assertIn("Попытка не списана", self.transport.messages[-1][1])
 
     def test_two_photo_pending_payment_resumes_exact_sources_and_prompt(self) -> None:
         self.onboard_to_prompt()

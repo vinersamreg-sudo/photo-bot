@@ -1315,6 +1315,16 @@ class MaxApplication:
         event: MaxIncomingEvent,
         dialog: MaxDialog,
     ) -> None:
+        image_urls = event.image_urls or ((event.image_url,) if event.image_url else ())
+        if event.image_attachment_count > 2 or len(image_urls) > 2:
+            self._send_message(
+                event.user_id,
+                "Можно использовать максимум 2 фотографии",
+                (Button("← Назад", "nav:back:main"),),
+            )
+            return
+        if event.image_attachment_count and len(image_urls) != event.image_attachment_count:
+            raise StorageFailureError("Source image download URL is unavailable")
         if not event.image_url:
             self._send_message(event.user_id, "Пришлите фотографию 📷")
             return
@@ -1329,25 +1339,42 @@ class MaxApplication:
             self._receive_secondary_source(event, dialog)
             return
         destination = self.settings.temp_dir / f"max-{event.message_id or event.event_key}.upload"
+        secondary_destination = (
+            self.settings.temp_dir
+            / f"max-secondary-{event.message_id or event.event_key}.upload"
+        )
         try:
             try:
                 self.transport.download_image(
-                    event.image_url,
+                    image_urls[0],
                     destination,
                     self.settings.max_source_file_size_mb * 1024 * 1024,
                 )
+                if len(image_urls) == 2:
+                    self.transport.download_image(
+                        image_urls[1],
+                        secondary_destination,
+                        self.settings.max_source_file_size_mb * 1024 * 1024,
+                    )
             except MaxTransportError as exc:
                 if exc.kind == "media_too_large":
                     raise ImageTooLargeError("Source image exceeds the allowed limit") from exc
+                if len(image_urls) == 2:
+                    raise StorageFailureError("Source image download failed") from exc
                 raise
             try:
                 session = self.adapter.start_demo_with_implicit_consent(
                     event.user_id, destination
                 )
+                if len(image_urls) == 2:
+                    self.adapter.add_secondary_source(
+                        session.session_id, secondary_destination
+                    )
             except OSError as exc:
                 raise StorageFailureError("Source image storage failed") from exc
         finally:
             destination.unlink(missing_ok=True)
+            secondary_destination.unlink(missing_ok=True)
         with self.database.read() as connection:
             item_id = connection.execute(
                 "SELECT gallery_item_id FROM demo_sessions WHERE id=?", (session.session_id,)
@@ -1412,6 +1439,8 @@ class MaxApplication:
                         message_id=event.message_id,
                         text=prompt,
                         image_url=event.image_url,
+                        image_urls=event.image_urls,
+                        image_attachment_count=event.image_attachment_count,
                         callback_id=event.callback_id,
                         callback_payload=event.callback_payload,
                     )

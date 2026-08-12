@@ -8,7 +8,12 @@ The primary MAX flow is intentionally compact:
    upload instruction, «Мои работы» and legal links. It does not show an upload
    callback button because MAX cannot open the attachment picker from it.
 2. The user may attach the first source directly from the main screen and may
-   add exactly one more before entering the instruction.
+   add exactly one more before entering the instruction. When one MAX message
+   contains two image attachments and a caption, their attachment order is
+   preserved, both images are stored before generation starts, and the caption
+   is used as the single unchanged prompt. More than two attachments are rejected
+   explicitly; a failed second-image download never falls back to one-image
+   generation.
 3. Ravuna produces one watermarked preview with direct actions.
 4. User corrects/repeats, opens works/history, or requests the original.
 5. If no original entitlement exists, Ravuna shows one compact 49 ₽ package
