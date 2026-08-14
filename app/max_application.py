@@ -222,6 +222,20 @@ class MaxApplication:
                 type(exc).__name__,
             )
 
+    def _record_payment_preparation_failure(self, exc: PaymentError) -> None:
+        if isinstance(exc, PaymentUnavailable):
+            reason = "payment_prepare_provider_unavailable"
+        else:
+            reason = {
+                "Continuation pack price must be exactly 49 RUB": "payment_prepare_config_invalid",
+                "Pending edit request was not found": "payment_prepare_pending_request_missing",
+                "Gallery version was not found": "payment_prepare_version_missing",
+                "Only a completed version can start a package purchase": "payment_prepare_version_invalid",
+                "The paid original file is unavailable": "payment_prepare_original_missing",
+            }.get(str(exc), "payment_prepare_internal_validation")
+        LOGGER.warning("Payment preparation failed safely (reason=%s)", reason)
+        self._track("payment_preparation_failed", error_type=reason)
+
     def recover_interrupted_processing(self) -> int:
         """Close stale MAX status messages after a process restart."""
 
@@ -868,7 +882,8 @@ class MaxApplication:
                     account_purchase=True,
                 )
                 payment_url = self.payments.short_payment_url(order)
-            except (PaymentError, PaymentUnavailable):
+            except (PaymentError, PaymentUnavailable) as exc:
+                self._record_payment_preparation_failure(exc)
                 LOGGER.warning("Start payment offer is temporarily unavailable")
         self._send_view(user_id, main_menu(balance, payment_url))
 
@@ -2139,7 +2154,8 @@ class MaxApplication:
                 pending_request_id=request_id,
             )
             payment_url = self.payments.short_payment_url(order)
-        except (PaymentError, PaymentUnavailable):
+        except (PaymentError, PaymentUnavailable) as exc:
+            self._record_payment_preparation_failure(exc)
             payment_url = "package:buy"
         self._send_image(
             event.user_id,
@@ -2243,7 +2259,8 @@ class MaxApplication:
                 f"max:{event.event_key}",
             )
             payment_url = self.payments.short_payment_url(order)
-        except (PaymentError, PaymentUnavailable):
+        except (PaymentError, PaymentUnavailable) as exc:
+            self._record_payment_preparation_failure(exc)
             payment_url = "package:buy"
         offer_buttons = (
             Button("Оплатить 49 ₽", payment_url),
@@ -2312,7 +2329,8 @@ class MaxApplication:
                     f"max:{event.event_key}",
                     pending_request_id=pending_request_id,
                 )
-            except PaymentUnavailable:
+            except PaymentUnavailable as exc:
+                self._record_payment_preparation_failure(exc)
                 self._send_message(
                     event.user_id,
                     UNLOCK_PLACEHOLDER,
@@ -2324,7 +2342,8 @@ class MaxApplication:
                     ),
                 )
                 return
-            except PaymentError:
+            except PaymentError as exc:
+                self._record_payment_preparation_failure(exc)
                 self._send_message(
                     event.user_id,
                     "Не удалось подготовить оплату. Попробуйте позже.",

@@ -41,6 +41,7 @@ EVENT_TYPES = {
     "generation_credit_consumed",
     "generation_credit_released",
     "continuation_pack_clicked",
+    "payment_preparation_failed",
     "continuation_pack_payment_started",
     "continuation_pack_paid",
     "continuation_pack_failed",

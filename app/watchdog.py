@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Protocol
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -18,8 +22,15 @@ from app.payment_admin import payment_reconciliation_summary
 from app.database import ReadOnlyDatabase
 
 
-EXPECTED_SCHEMA_VERSION = 12
+EXPECTED_SCHEMA_VERSION = 13
 UNKNOWN_PAYMENT_TOKEN = "0" * 32
+AUTO_HEAL_COOLDOWN = timedelta(minutes=30)
+AUTO_HEAL_READINESS_ATTEMPTS = 6
+AUTO_HEAL_READINESS_DELAY_SECONDS = 5
+HEALABLE_APPLICATION_ERRORS = frozenset({
+    "runtime_process_unreadable",
+    "runtime_process_unexpected",
+})
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,32 @@ def read_only_application_errors(settings: Settings) -> list[str]:
             errors.append(f"{name}_missing")
         elif not os.access(path, os.R_OK | os.W_OK):
             errors.append(f"{name}_permissions")
+    if settings.app_env == "production":
+        try:
+            result = subprocess.run(
+                [
+                    "systemctl",
+                    "show",
+                    "photo-bot.service",
+                    "--property=MainPID",
+                    "--value",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            pid = int(result.stdout.strip() or "0") if result.returncode == 0 else 0
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pid = 0
+        if pid > 0:
+            try:
+                command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ")
+            except OSError:
+                errors.append("runtime_process_unreadable")
+            else:
+                if b"-m app.main run" not in command:
+                    errors.append("runtime_process_unexpected")
     return errors
 
 
@@ -111,6 +148,17 @@ def probe_payment_routes(settings: Settings) -> dict[str, int | None]:
     except (OSError, httpx.HTTPError):
         pass
     return statuses
+
+
+def probe_robokassa(settings: Settings) -> bool:
+    """Check provider reachability without creating an order or payment."""
+
+    try:
+        with httpx.Client(timeout=10, follow_redirects=False) as client:
+            response = client.get(settings.robokassa_payment_url)
+        return response.status_code < 500
+    except (OSError, httpx.HTTPError):
+        return False
 
 
 def _recovery_status(settings: Settings) -> dict[str, Any]:
@@ -151,6 +199,24 @@ def _recovery_status(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _recent_payment_preparation_failures(
+    database: ReadOnlyDatabase,
+    *,
+    now: datetime | None = None,
+) -> int | None:
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(minutes=30)
+    try:
+        with database.read() as connection:
+            row = connection.execute(
+                """SELECT COUNT(*) FROM product_events
+                   WHERE event_type='payment_preparation_failed' AND created_at>=?""",
+                (cutoff.isoformat(),),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    return int(row[0]) if row else 0
+
+
 def build_watchdog_report(
     settings: Settings,
     *,
@@ -158,16 +224,19 @@ def build_watchdog_report(
     application_errors: list[str] | None = None,
     launch: dict[str, Any] | None = None,
     payment_routes: dict[str, int | None] | None = None,
+    robokassa_available: bool | None = None,
 ) -> dict[str, Any]:
     """Evaluate operational signals without emitting identifiers or content."""
 
     launch = launch or collect_launch_status(settings, online=online)
-    reconciliation = payment_reconciliation_summary(
-        ReadOnlyDatabase(settings.database_path)
-    )
+    read_only_database = ReadOnlyDatabase(settings.database_path)
+    reconciliation = payment_reconciliation_summary(read_only_database)
+    recent_payment_failures = _recent_payment_preparation_failures(read_only_database)
     routes = payment_routes if payment_routes is not None else (
         probe_payment_routes(settings) if online else {}
     )
+    if online and robokassa_available is None:
+        robokassa_available = probe_robokassa(settings)
     application_errors = application_errors or []
     checks: list[WatchdogCheck] = []
 
@@ -204,6 +273,27 @@ def build_watchdog_report(
         "max_polling",
         "PASS" if poll_fresh else "FAIL",
         f"age_seconds={round(float(poll_age) * 3600) if poll_age is not None else 'missing'}",
+    )
+    max_api_available = max_status.get("connected") if online else None
+    add(
+        "max_api",
+        "PASS" if max_api_available is True else "FAIL" if online else "WARN",
+        "reachable" if max_api_available is True else "unavailable" if online else "not_checked",
+    )
+    add(
+        "robokassa_external",
+        "PASS" if robokassa_available is True else "FAIL" if online else "WARN",
+        "reachable" if robokassa_available is True else "unavailable" if online else "not_checked",
+    )
+    external_network_ok = bool(
+        max_api_available is True
+        or robokassa_available is True
+        or site.get("required_routes_ok") is True
+    )
+    add(
+        "external_network",
+        "PASS" if online and external_network_ok else "FAIL" if online else "WARN",
+        "reachable" if online and external_network_ok else "unavailable" if online else "not_checked",
     )
     add(
         "sqlite",
@@ -255,6 +345,17 @@ def build_watchdog_report(
         "PASS" if payment_state == "OK" else "FAIL" if payment_state == "CRITICAL" else "WARN",
         f"reconciliation={payment_state}",
     )
+    add(
+        "payment_preparation",
+        "PASS" if recent_payment_failures == 0 else "WARN",
+        (
+            "recent_failures=0"
+            if recent_payment_failures == 0
+            else f"recent_failures={recent_payment_failures}"
+            if recent_payment_failures is not None
+            else "unavailable"
+        ),
+    )
     provider_configuration_ok = bool(
         provider.get("configured")
         and provider.get("name")
@@ -304,8 +405,191 @@ def build_watchdog_report(
         "status": status,
         "exit_code": exit_code,
         "checks": [check.__dict__ for check in checks],
+        "application_error_codes": sorted(application_errors),
         "alert_transport": "not_configured",
     }
+
+
+def _check_states(report: dict[str, Any]) -> dict[str, str]:
+    return {
+        str(check.get("name")): str(check.get("state"))
+        for check in report.get("checks", [])
+        if isinstance(check, dict)
+    }
+
+
+def auto_heal_reason(report: dict[str, Any]) -> str | None:
+    """Return the one safe restart reason, never a business/external reason."""
+
+    states = _check_states(report)
+    if states.get("sqlite") != "PASS" or states.get("migration") != "PASS":
+        return None
+    if states.get("disk") != "PASS" or states.get("external_network") != "PASS":
+        return None
+    if states.get("service") == "FAIL":
+        return "service_inactive"
+    if states.get("max_polling") == "FAIL" and states.get("max_api") == "PASS":
+        return "max_polling_stale"
+    errors = set(report.get("application_error_codes") or [])
+    if (
+        states.get("application_health") == "FAIL"
+        and errors
+        and errors.issubset(HEALABLE_APPLICATION_ERRORS)
+    ):
+        return "application_runtime_unhealthy"
+    return None
+
+
+def auto_heal_state_path(settings: Settings) -> Path:
+    return settings.data_dir / "production-watchdog-autoheal.json"
+
+
+def _read_auto_heal_state(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_auto_heal_state(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".production-watchdog-autoheal-",
+        dir=path.parent,
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(value, output, ensure_ascii=False, sort_keys=True)
+            output.write("\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _cooldown_remaining_seconds(
+    path: Path,
+    *,
+    now: datetime,
+    cooldown: timedelta,
+) -> int:
+    raw = _read_auto_heal_state(path).get("attempted_at")
+    try:
+        attempted = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return 0
+    if attempted.tzinfo is None:
+        attempted = attempted.replace(tzinfo=timezone.utc)
+    remaining = cooldown - (now - attempted)
+    return max(0, int(remaining.total_seconds()))
+
+
+def _runtime_recovered(report: dict[str, Any]) -> bool:
+    states = _check_states(report)
+    return all(
+        states.get(name) == "PASS"
+        for name in (
+            "service",
+            "application_health",
+            "max_polling",
+            "max_api",
+            "sqlite",
+            "migration",
+            "disk",
+        )
+    )
+
+
+def apply_auto_heal(
+    report: dict[str, Any],
+    *,
+    state_path: Path,
+    restart_service: Callable[[], bool],
+    refresh_report: Callable[[], dict[str, Any]],
+    sleep: Callable[[float], None],
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    cooldown: timedelta = AUTO_HEAL_COOLDOWN,
+    readiness_attempts: int = AUTO_HEAL_READINESS_ATTEMPTS,
+    readiness_delay_seconds: float = AUTO_HEAL_READINESS_DELAY_SECONDS,
+) -> dict[str, Any]:
+    """Attempt at most one restart for a narrowly proven runtime failure."""
+
+    reason = auto_heal_reason(report)
+    if reason is None:
+        report["auto_heal"] = {"state": "NOT_ELIGIBLE", "reason": "none"}
+        return report
+    checked_at = now()
+    remaining = _cooldown_remaining_seconds(
+        state_path,
+        now=checked_at,
+        cooldown=cooldown,
+    )
+    if remaining:
+        report["auto_heal"] = {
+            "state": "COOLDOWN",
+            "reason": reason,
+            "remaining_seconds": remaining,
+        }
+        return report
+    state = {
+        "attempted_at": checked_at.isoformat(),
+        "reason": reason,
+        "result": "attempting",
+    }
+    try:
+        _write_auto_heal_state(state_path, state)
+    except OSError:
+        report["auto_heal"] = {"state": "BLOCKED", "reason": "cooldown_state_unwritable"}
+        report["status"] = "CRITICAL"
+        report["exit_code"] = 2
+        return report
+    try:
+        restarted = restart_service()
+    except Exception:
+        restarted = False
+    if not restarted:
+        state["result"] = "restart_failed"
+        try:
+            _write_auto_heal_state(state_path, state)
+        except OSError:
+            pass
+        report["auto_heal"] = {"state": "FAILED", "reason": reason}
+        report["status"] = "CRITICAL"
+        report["exit_code"] = 2
+        return report
+
+    latest = report
+    for _attempt in range(max(1, readiness_attempts)):
+        sleep(readiness_delay_seconds)
+        latest = refresh_report()
+        if _runtime_recovered(latest):
+            state["result"] = "recovered"
+            state["recovered_at"] = now().isoformat()
+            try:
+                _write_auto_heal_state(state_path, state)
+            except OSError:
+                pass
+            latest["auto_heal"] = {"state": "RECOVERED", "reason": reason}
+            latest["status"] = "RECOVERED"
+            latest["exit_code"] = 0 if all(
+                check.get("state") == "PASS" for check in latest.get("checks", [])
+            ) else 1
+            return latest
+    state["result"] = "readiness_failed"
+    try:
+        _write_auto_heal_state(state_path, state)
+    except OSError:
+        pass
+    latest["auto_heal"] = {"state": "FAILED", "reason": reason}
+    latest["status"] = "CRITICAL"
+    latest["exit_code"] = 2
+    return latest
 
 
 def render_watchdog(report: dict[str, Any]) -> str:
@@ -314,5 +598,10 @@ def render_watchdog(report: dict[str, Any]) -> str:
         f"{check['name']}={check['state']} {check['detail']}"
         for check in report["checks"]
     )
+    if report.get("auto_heal"):
+        auto_heal = report["auto_heal"]
+        lines.append(
+            f"auto_heal={auto_heal.get('state')} reason={auto_heal.get('reason')}"
+        )
     lines.append(f"alert_transport={report['alert_transport']}")
     return "\n".join(lines)

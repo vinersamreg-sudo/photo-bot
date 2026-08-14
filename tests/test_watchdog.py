@@ -1,7 +1,7 @@
 import hashlib
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -10,6 +10,7 @@ from app.config import Settings
 from app.database import Database
 from app.watchdog import (
     alert_transport_from_environment,
+    apply_auto_heal,
     build_watchdog_report,
     render_watchdog,
 )
@@ -30,7 +31,7 @@ class WatchdogTests(TestCase):
             disk_min_free_mb=1,
             payment_result_url="https://ravuna.ru/payments/robokassa/result",
         )
-        Database(self.settings.database_path)
+        self.database = Database(self.settings.database_path)
         now = datetime.now(timezone.utc).isoformat()
         self.settings.backup_dir_path.mkdir(parents=True)
         recovery_name = "ravuna-recovery-synthetic.tar.gz.enc"
@@ -53,7 +54,7 @@ class WatchdogTests(TestCase):
             )
         self.launch = {
             "runtime": {"service_active": True},
-            "database": {"quick_check": "ok", "migration": 12},
+            "database": {"quick_check": "ok", "migration": 13},
             "processing": {"active_attempts": 0, "active_dialogs": 0},
             "cleanup": {"remaining_orphan_count": 0},
             "backup": {
@@ -87,6 +88,7 @@ class WatchdogTests(TestCase):
             application_errors=[],
             launch=self.launch,
             payment_routes=self.routes,
+            robokassa_available=True,
         )
         rendered = render_watchdog(report)
         after_sha = hashlib.sha256(
@@ -110,13 +112,14 @@ class WatchdogTests(TestCase):
         )
         self.assertEqual(warning["status"], "WARNING")
         self.assertEqual(warning["exit_code"], 1)
-        broken = {**self.launch, "database": {"quick_check": "ok", "migration": 11}}
+        broken = {**self.launch, "database": {"quick_check": "ok", "migration": 12}}
         critical = build_watchdog_report(
             self.settings,
             online=True,
             application_errors=[],
             launch=broken,
             payment_routes=self.routes,
+            robokassa_available=True,
         )
         self.assertEqual(critical["status"], "CRITICAL")
         self.assertEqual(critical["exit_code"], 2)
@@ -144,7 +147,7 @@ class WatchdogTests(TestCase):
         self.assertEqual(payload["attention"], ["sqlite"])
         self.assertNotIn("private", json.dumps(payload))
 
-    def test_external_workflow_is_read_only_and_does_not_send_alerts_by_default(self) -> None:
+    def test_external_workflow_uses_safe_runtime_entrypoint(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]
             / ".github"
@@ -152,7 +155,154 @@ class WatchdogTests(TestCase):
             / "production-watchdog.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("*/10 * * * *", workflow)
-        self.assertIn("scripts.production_watchdog --format human", workflow)
-        self.assertNotIn("--notify", workflow)
+        self.assertIn("scripts.production_watchdog", workflow)
+        self.assertIn("--format human", workflow)
         self.assertNotIn("systemctl restart", workflow)
         self.assertNotIn("deploy", workflow.lower())
+
+    def _report(
+        self,
+        *,
+        launch: dict | None = None,
+        robokassa_available: bool = True,
+        application_errors: list[str] | None = None,
+    ) -> dict:
+        return build_watchdog_report(
+            self.settings,
+            online=True,
+            application_errors=application_errors or [],
+            launch=launch or self.launch,
+            payment_routes=self.routes,
+            robokassa_available=robokassa_available,
+        )
+
+    def _auto_heal(
+        self,
+        report: dict,
+        *,
+        restart,
+        refresh=None,
+        now: datetime | None = None,
+    ) -> dict:
+        current = now or datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+        return apply_auto_heal(
+            report,
+            state_path=self.base / "watchdog-autoheal.json",
+            restart_service=restart,
+            refresh_report=refresh or self._report,
+            sleep=lambda _seconds: None,
+            now=lambda: current,
+            readiness_attempts=1,
+            readiness_delay_seconds=0,
+        )
+
+    def test_auto_heal_healthy_service_does_not_restart(self) -> None:
+        restarts: list[str] = []
+        result = self._auto_heal(
+            self._report(),
+            restart=lambda: restarts.append("restart") or True,
+        )
+        self.assertEqual(restarts, [])
+        self.assertEqual(result["auto_heal"]["state"], "NOT_ELIGIBLE")
+
+    def test_auto_heal_failed_service_restarts_once_and_recovers(self) -> None:
+        broken = {**self.launch, "runtime": {"service_active": False}}
+        restarts: list[str] = []
+        result = self._auto_heal(
+            self._report(launch=broken),
+            restart=lambda: restarts.append("restart") or True,
+        )
+        self.assertEqual(restarts, ["restart"])
+        self.assertEqual(result["status"], "RECOVERED")
+        self.assertEqual(result["auto_heal"]["state"], "RECOVERED")
+
+    def test_auto_heal_failed_restart_is_critical_without_second_attempt(self) -> None:
+        broken = {**self.launch, "runtime": {"service_active": False}}
+        restarts: list[str] = []
+        result = self._auto_heal(
+            self._report(launch=broken),
+            restart=lambda: restarts.append("restart") or False,
+        )
+        self.assertEqual(restarts, ["restart"])
+        self.assertEqual(result["status"], "CRITICAL")
+        self.assertEqual(result["auto_heal"]["state"], "FAILED")
+
+    def test_auto_heal_max_external_outage_never_restarts(self) -> None:
+        broken = {
+            **self.launch,
+            "max": {"last_poll_age_hours": 1, "connected": False},
+        }
+        restarts: list[str] = []
+        result = self._auto_heal(
+            self._report(launch=broken),
+            restart=lambda: restarts.append("restart") or True,
+        )
+        self.assertEqual(restarts, [])
+        self.assertEqual(result["auto_heal"]["state"], "NOT_ELIGIBLE")
+
+    def test_auto_heal_robokassa_outage_never_restarts(self) -> None:
+        restarts: list[str] = []
+        result = self._auto_heal(
+            self._report(robokassa_available=False),
+            restart=lambda: restarts.append("restart") or True,
+        )
+        self.assertEqual(restarts, [])
+        self.assertEqual(result["auto_heal"]["state"], "NOT_ELIGIBLE")
+
+    def test_auto_heal_payment_preparation_failure_never_restarts(self) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO product_events(event_type,created_at,error_type)
+                   VALUES('payment_preparation_failed',?,?)""",
+                (datetime.now(timezone.utc).isoformat(), "payment_prepare_version_missing"),
+            )
+        report = self._report()
+        payment_check = next(
+            check for check in report["checks"]
+            if check["name"] == "payment_preparation"
+        )
+        self.assertEqual(payment_check["state"], "WARN")
+        self.assertEqual(payment_check["detail"], "recent_failures=1")
+        restarts: list[str] = []
+        result = self._auto_heal(
+            report,
+            restart=lambda: restarts.append("restart") or True,
+        )
+        self.assertEqual(restarts, [])
+        self.assertEqual(result["auto_heal"]["state"], "NOT_ELIGIBLE")
+
+    def test_auto_heal_stale_polling_with_available_max_restarts_once(self) -> None:
+        broken = {
+            **self.launch,
+            "max": {"last_poll_age_hours": 1, "connected": True},
+        }
+        restarts: list[str] = []
+        result = self._auto_heal(
+            self._report(launch=broken),
+            restart=lambda: restarts.append("restart") or True,
+        )
+        self.assertEqual(restarts, ["restart"])
+        self.assertEqual(result["status"], "RECOVERED")
+        self.assertEqual(result["auto_heal"]["reason"], "max_polling_stale")
+
+    def test_auto_heal_cooldown_prevents_restart_loop(self) -> None:
+        current = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+        state_path = self.base / "watchdog-autoheal.json"
+        state_path.write_text(
+            json.dumps({
+                "attempted_at": (current - timedelta(minutes=5)).isoformat(),
+                "reason": "service_inactive",
+                "result": "restart_failed",
+            }),
+            encoding="utf-8",
+        )
+        broken = {**self.launch, "runtime": {"service_active": False}}
+        restarts: list[str] = []
+        result = self._auto_heal(
+            self._report(launch=broken),
+            restart=lambda: restarts.append("restart") or True,
+            now=current,
+        )
+        self.assertEqual(restarts, [])
+        self.assertEqual(result["auto_heal"]["state"], "COOLDOWN")
+        self.assertGreater(result["auto_heal"]["remaining_seconds"], 0)

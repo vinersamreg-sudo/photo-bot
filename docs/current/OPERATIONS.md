@@ -32,8 +32,9 @@ explicit execute/apply flag is supplied.
 
 ## External watchdog
 
-The GitHub Actions workflow schedules the read-only watchdog every ten minutes.
-The same compact check can be run on the VPS:
+The GitHub Actions workflow schedules the watchdog every ten minutes, but GitHub
+only runs a scheduled workflow after that workflow exists in the default branch
+`main`. The same compact detect-only check can be run on the VPS:
 
 ```bash
 venv/bin/python -m scripts.production_watchdog --format human
@@ -43,6 +44,17 @@ Exit codes are `0` healthy, `1` warning and `2` critical. Output contains only
 aggregate states. An optional HTTPS hook uses `RAVUNA_ALERT_WEBHOOK_URL`; without
 it the report says `alert_transport=not_configured`. Do not enable `--notify`
 until the owner approves a destination and a real alert test.
+
+The scheduled command uses `--auto-heal --notify`. Auto-heal is still fail-closed:
+it may run one `systemctl restart photo-bot.service` only for an inactive service,
+stale polling while MAX API is reachable, or an unexpected application runtime
+process while SQLite/migration/disk/network checks remain healthy. MAX, Robokassa
+or network outages, payment/configuration errors, SQLite failures and migration
+mismatches are alert-only. A state file under `data/` enforces a 30-minute
+cooldown; a failed restart is never followed by a second automatic restart.
+Payment preparation failures are recorded only as aggregate safe reason codes;
+the watchdog warns on failures from the last 30 minutes without storing a user,
+prompt, image, payment URL or provider secret.
 
 The provider check is configuration-only: it verifies the selected provider,
 model and credential presence without calling Gemini or generating an image.

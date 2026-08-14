@@ -44,7 +44,7 @@ from app.max_transport import MaxIncomingEvent, MaxTransportError, parse_update
 from app.max_ui_shell import parse_versioned_action
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
-from app.payments import build_payment_service
+from app.payments import PaymentError, build_payment_service
 
 
 class Clock:
@@ -224,6 +224,21 @@ class MaxApplicationTests(TestCase):
         event = self.event("message_callback", action=action)
         self.app.handle(event)
         return event
+
+    def test_payment_preparation_failure_records_only_safe_reason_code(self) -> None:
+        self.app._record_payment_preparation_failure(
+            PaymentError("Gallery version was not found")
+        )
+        with self.database.read() as connection:
+            row = connection.execute(
+                """SELECT event_type,error_type,session_id,attempt_id,gallery_item_id
+                   FROM product_events ORDER BY id DESC LIMIT 1"""
+            ).fetchone()
+        self.assertEqual(row["event_type"], "payment_preparation_failed")
+        self.assertEqual(row["error_type"], "payment_prepare_version_missing")
+        self.assertIsNone(row["session_id"])
+        self.assertIsNone(row["attempt_id"])
+        self.assertIsNone(row["gallery_item_id"])
 
     def test_non_owner_gets_closed_testing_message_without_dialog_or_generation(self) -> None:
         event = MaxIncomingEvent(
