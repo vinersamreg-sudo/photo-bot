@@ -24,13 +24,6 @@ jobs:
         run: |
           echo "Encrypted production backup configuration is incomplete." >&2
           exit 1
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: pip
-      - name: Install application dependencies
-        run: python -m pip install -r requirements.txt
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
@@ -41,7 +34,7 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
-      - name: Create and restore-test encrypted server backup
+      - name: Create encrypted server backups
         id: create
         env:
           PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
@@ -49,53 +42,91 @@ jobs:
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          BACKUP_NAME=$(printf '%s\n' "$PASSPHRASE" | \
+          BACKUP_NAMES=$(printf '%s\n' "$PASSPHRASE" | \
             ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -euo pipefail
               IFS= read -r PASSPHRASE
               cd /opt/photo-bot
               REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-create --passphrase-stdin)
               NAME=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"backup_name\"])")
-              printf "%s\n" "$NAME"
-              printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-restore-test --backup "$NAME" --passphrase-stdin >/dev/null')
+              SHA=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
+              SQLITE_RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-restore-test --backup "$NAME" --passphrase-stdin)
+              SQLITE_RESTORE_OK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"restore_ok\"])")
+              SQLITE_QUICK_CHECK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"quick_check\"])")
+              SQLITE_MIGRATION=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
+              test "$SQLITE_RESTORE_OK" = True
+              test "$SQLITE_QUICK_CHECK" = ok
+              test "$SQLITE_MIGRATION" = 13
+              RECOVERY_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-create --passphrase-stdin)
+              RECOVERY_NAME=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"recovery_bundle_name\"])")
+              RECOVERY_SHA=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
+              RESTORE_ROOT=$(mktemp -d /var/tmp/ravuna-recovery-proof.XXXXXX)
+              cleanup_restore_root() {
+                case "$RESTORE_ROOT" in
+                  /var/tmp/ravuna-recovery-proof.*) rm -rf -- "$RESTORE_ROOT" ;;
+                  *) return 1 ;;
+                esac
+              }
+              trap cleanup_restore_root EXIT
+              RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-restore-test --backup "$RECOVERY_NAME" --restore-root "$RESTORE_ROOT" --passphrase-stdin)
+              RESTORE_OVERALL=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"overall\"])")
+              RESTORE_ARTIFACT=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"artifact_status\"])")
+              RESTORE_SQLITE=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sqlite_status\"])")
+              RESTORE_MIGRATION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
+              RESTORE_REVISION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"source_revision\"])")
+              test "$RESTORE_OVERALL" = PASS
+              test "$RESTORE_ARTIFACT" = PASS
+              test "$RESTORE_SQLITE" = PASS
+              test "$RESTORE_MIGRATION" = 13
+              test "$RESTORE_REVISION" = "$(cat .deploy-sha)"
+              printf "%s\t%s\t%s\t%s\n" "$NAME" "$SHA" "$RECOVERY_NAME" "$RECOVERY_SHA"')
+          IFS=$'\t' read -r BACKUP_NAME BACKUP_SHA RECOVERY_NAME RECOVERY_SHA <<< "$BACKUP_NAMES"
           test -n "$BACKUP_NAME"
+          test "$BACKUP_SHA" != ""
+          test -n "$RECOVERY_NAME"
+          test "$RECOVERY_SHA" != ""
           case "$BACKUP_NAME" in pixora-*.sqlite3.enc) ;; *) exit 1 ;; esac
+          case "$RECOVERY_NAME" in ravuna-recovery-*.tar.gz.enc) ;; *) exit 1 ;; esac
+          case "$BACKUP_SHA" in *[!0-9a-fA-F]*|'') exit 1 ;; esac
+          case "$RECOVERY_SHA" in *[!0-9a-fA-F]*|'') exit 1 ;; esac
+          test "${#BACKUP_SHA}" -eq 64
+          test "${#RECOVERY_SHA}" -eq 64
           printf 'backup_name=%s\n' "$BACKUP_NAME" >> "$GITHUB_OUTPUT"
-      - name: Copy encrypted backup off the VPS
+          printf 'backup_sha=%s\n' "$BACKUP_SHA" >> "$GITHUB_OUTPUT"
+          printf 'recovery_name=%s\n' "$RECOVERY_NAME" >> "$GITHUB_OUTPUT"
+          printf 'recovery_sha=%s\n' "$RECOVERY_SHA" >> "$GITHUB_OUTPUT"
+      - name: Copy encrypted backups off the VPS
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
           BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
+          RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
+          BACKUP_SHA: ${{ steps.create.outputs.backup_sha }}
+          RECOVERY_SHA: ${{ steps.create.outputs.recovery_sha }}
         run: |
           install -d artifact
           scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/$BACKUP_NAME" "artifact/$BACKUP_NAME"
-      - name: Independently restore-test copied artifact
-        env:
-          PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
-          BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
-        run: |
-          printf '%s\n' "$PASSPHRASE" | env \
-            APP_ENV=ci BASE_DIR="$GITHUB_WORKSPACE" OPENAI_IMAGE_MODEL=gpt-image-2 \
-            BACKUP_DIR="$GITHUB_WORKSPACE/artifact" \
-            python -m app.main backup-restore-test --backup "$BACKUP_NAME" --passphrase-stdin
+          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/$RECOVERY_NAME" "artifact/$RECOVERY_NAME"
+          printf '%s  %s\n' "$BACKUP_SHA" "artifact/$BACKUP_NAME" | sha256sum -c -
+          printf '%s  %s\n' "$RECOVERY_SHA" "artifact/$RECOVERY_NAME" | sha256sum -c -
       - name: Store encrypted off-site artifact
         uses: actions/upload-artifact@v4
         with:
           name: ravuna-production-backup-${{ github.run_id }}
-          path: artifact/*.sqlite3.enc
+          path: artifact/*.enc
           if-no-files-found: error
           retention-days: 14
-      - name: Confirm off-site copy and run cleanup
+      - name: Confirm encrypted off-site copy
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
           BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
+          RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$BACKUP_NAME" <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$BACKUP_NAME" "$RECOVERY_NAME" <<'REMOTE'
             set -euo pipefail
             cd /opt/photo-bot
             venv/bin/python -m app.main backup-mark-offsite --backup "$1" --provider github-actions >/dev/null
-            venv/bin/python -m app.main maintenance-cleanup --execute
-            venv/bin/python -m app.main launch-status --strict
+            venv/bin/python -m app.main recovery-mark-offsite --backup "$2" --provider github-actions >/dev/null
           REMOTE
