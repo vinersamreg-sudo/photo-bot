@@ -52,6 +52,25 @@ jobs:
               RECOVERY_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-create --passphrase-stdin)
               RECOVERY_NAME=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"recovery_bundle_name\"])")
               RECOVERY_SHA=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
+              RESTORE_ROOT=$(mktemp -d /var/tmp/ravuna-recovery-proof.XXXXXX)
+              cleanup_restore_root() {
+                case "$RESTORE_ROOT" in
+                  /var/tmp/ravuna-recovery-proof.*) rm -rf -- "$RESTORE_ROOT" ;;
+                  *) return 1 ;;
+                esac
+              }
+              trap cleanup_restore_root EXIT
+              RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-restore-test --backup "$RECOVERY_NAME" --restore-root "$RESTORE_ROOT" --passphrase-stdin)
+              RESTORE_OVERALL=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"overall\"])")
+              RESTORE_ARTIFACT=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"artifact_status\"])")
+              RESTORE_SQLITE=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sqlite_status\"])")
+              RESTORE_MIGRATION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
+              RESTORE_REVISION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"source_revision\"])")
+              test "$RESTORE_OVERALL" = PASS
+              test "$RESTORE_ARTIFACT" = PASS
+              test "$RESTORE_SQLITE" = PASS
+              test "$RESTORE_MIGRATION" = 13
+              test "$RESTORE_REVISION" = "$(cat .deploy-sha)"
               printf "%s\t%s\t%s\t%s\n" "$NAME" "$SHA" "$RECOVERY_NAME" "$RECOVERY_SHA"')
           IFS=$'\t' read -r BACKUP_NAME BACKUP_SHA RECOVERY_NAME RECOVERY_SHA <<< "$BACKUP_NAMES"
           test -n "$BACKUP_NAME"

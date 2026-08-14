@@ -225,7 +225,7 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
                WHERE status='rejected'
                  AND datetime(received_at)>=datetime('now','-24 hours')"""
         ).fetchone()[0])
-        expired_pending = int(connection.execute(
+        expired_unpaid_orders = int(connection.execute(
             """SELECT COUNT(*) FROM payment_orders
                WHERE status='pending' AND datetime(expires_at)<datetime('now')"""
         ).fetchone()[0])
@@ -295,11 +295,7 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
         + receipt_mismatches
         + duplicate_effects
     )
-    warnings = (
-        expired_pending
-        + failed_original_delivery
-        + rejected_callbacks_recent
-    )
+    warnings = failed_original_delivery + rejected_callbacks_recent
     return {
         "scope": "aggregate_local_ledger",
         "payment_orders_by_status": orders_by_status,
@@ -310,7 +306,7 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
         "duplicate_callback_evidence": duplicate_callbacks,
         "rejected_callbacks": rejected_callbacks,
         "rejected_callbacks_recent": rejected_callbacks_recent,
-        "expired_pending": expired_pending,
+        "expired_unpaid_orders": expired_unpaid_orders,
         "paid_without_grant": paid_without_grant,
         "grant_without_paid_order": grant_without_paid_order,
         "original_entitlement_mismatches": original_entitlement_mismatches,

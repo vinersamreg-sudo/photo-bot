@@ -164,6 +164,39 @@ class PaymentTests(TestCase):
         self.assertNotIn(self.user_id, rendered)
         self.assertNotIn(order.id, rendered)
 
+    def test_expired_unpaid_orders_are_informational_until_a_paid_order_is_inconsistent(self) -> None:
+        order_ids: list[str] = []
+        for index in range(15):
+            order = self.service.create_order(
+                self.user_id,
+                self.versions[index % len(self.versions)]["id"],
+                f"expired-unpaid-{index}",
+            )
+            order_ids.append(order.id)
+            self.clock.advance(minutes=31)
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE payment_orders SET status='pending' WHERE id IN (%s)"
+                % ",".join("?" for _ in order_ids),
+                order_ids,
+            )
+
+        healthy = payment_reconciliation_summary(self.database)
+        self.assertEqual(healthy["expired_unpaid_orders"], 15)
+        self.assertEqual(healthy["paid_without_grant"], 0)
+        self.assertEqual(healthy["duplicate_effects"], 0)
+        self.assertEqual(healthy["status"], "OK")
+
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE payment_orders SET status='paid' WHERE id=?",
+                (order_ids[0],),
+            )
+        inconsistent = payment_reconciliation_summary(self.database)
+        self.assertEqual(inconsistent["expired_unpaid_orders"], 14)
+        self.assertEqual(inconsistent["paid_without_grant"], 1)
+        self.assertEqual(inconsistent["status"], "CRITICAL")
+
     def test_read_only_database_does_not_create_a_missing_database(self) -> None:
         missing = self.base / "missing" / "photo_bot.sqlite3"
         with self.assertRaises(sqlite3.OperationalError):

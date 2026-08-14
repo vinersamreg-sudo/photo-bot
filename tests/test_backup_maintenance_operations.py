@@ -341,7 +341,14 @@ class BackupMaintenanceOperationsTests(TestCase):
         self.assertIn("backup-mark-offsite", workflow)
         self.assertIn("sha256sum -c -", workflow)
         self.assertNotIn("backup-restore-test", workflow)
-        self.assertNotIn("recovery-restore-test", workflow)
+        self.assertIn("recovery-restore-test", workflow)
+        self.assertIn("--restore-root \"$RESTORE_ROOT\"", workflow)
+        self.assertIn("/var/tmp/ravuna-recovery-proof.", workflow)
+        self.assertLess(
+            workflow.index("ssh -p \"$SSH_PORT\""),
+            workflow.index("recovery-restore-test"),
+        )
+        self.assertNotIn("openssl enc", workflow)
         self.assertNotIn("maintenance-cleanup --execute", workflow)
         self.assertNotIn('--passphrase "$PASSPHRASE"', workflow)
         self.assertIn("recovery-create --passphrase-stdin", workflow)

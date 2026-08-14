@@ -55,6 +55,8 @@ cooldown; a failed restart is never followed by a second automatic restart.
 Payment preparation failures are recorded only as aggregate safe reason codes;
 the watchdog warns on failures from the last 30 minutes without storing a user,
 prompt, image, payment URL or provider secret.
+Expired unpaid orders are reported as an informational aggregate and do not
+degrade watchdog health unless a paid/grant/receipt/duplicate invariant fails.
 
 The provider check is configuration-only: it verifies the selected provider,
 model and credential presence without calling Gemini or generating an image.
@@ -91,6 +93,11 @@ copies restored state over production.
 
 Automated CI restore drills use only synthetic SQLite and synthetic files via
 `tests.test_backup_maintenance_operations`.
+The production backup workflow runs the real-data recovery proof only through
+SSH on the trusted production host, validates the manifest, encrypted artifact,
+source revision, expected components and SQLite migration, then removes the
+isolated `/var/tmp/ravuna-recovery-proof.*` restore root. The GitHub runner sees
+and stores encrypted artifacts only.
 
 ## Daily checks
 
