@@ -49,6 +49,13 @@ jobs:
               REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-create --passphrase-stdin)
               NAME=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"backup_name\"])")
               SHA=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
+              SQLITE_RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-restore-test --backup "$NAME" --passphrase-stdin)
+              SQLITE_RESTORE_OK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"restore_ok\"])")
+              SQLITE_QUICK_CHECK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"quick_check\"])")
+              SQLITE_MIGRATION=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
+              test "$SQLITE_RESTORE_OK" = True
+              test "$SQLITE_QUICK_CHECK" = ok
+              test "$SQLITE_MIGRATION" = 13
               RECOVERY_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-create --passphrase-stdin)
               RECOVERY_NAME=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"recovery_bundle_name\"])")
               RECOVERY_SHA=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")

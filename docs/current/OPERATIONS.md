@@ -93,11 +93,12 @@ copies restored state over production.
 
 Automated CI restore drills use only synthetic SQLite and synthetic files via
 `tests.test_backup_maintenance_operations`.
-The production backup workflow runs the real-data recovery proof only through
-SSH on the trusted production host, validates the manifest, encrypted artifact,
-source revision, expected components and SQLite migration, then removes the
-isolated `/var/tmp/ravuna-recovery-proof.*` restore root. The GitHub runner sees
-and stores encrypted artifacts only.
+The production backup workflow runs both the legacy SQLite restore check and the
+real-data recovery proof only through SSH on the trusted production host. It
+validates `quick_check`, migration, manifest, encrypted artifact, source revision
+and expected components, then removes the isolated
+`/var/tmp/ravuna-recovery-proof.*` restore root. The GitHub runner sees and stores
+encrypted artifacts only.
 
 ## Daily checks
 

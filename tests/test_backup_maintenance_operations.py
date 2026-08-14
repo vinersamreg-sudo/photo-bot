@@ -340,10 +340,14 @@ class BackupMaintenanceOperationsTests(TestCase):
         self.assertIn("actions/upload-artifact@v4", workflow)
         self.assertIn("backup-mark-offsite", workflow)
         self.assertIn("sha256sum -c -", workflow)
-        self.assertNotIn("backup-restore-test", workflow)
+        self.assertIn("backup-restore-test", workflow)
         self.assertIn("recovery-restore-test", workflow)
         self.assertIn("--restore-root \"$RESTORE_ROOT\"", workflow)
         self.assertIn("/var/tmp/ravuna-recovery-proof.", workflow)
+        self.assertLess(
+            workflow.index("ssh -p \"$SSH_PORT\""),
+            workflow.index("backup-restore-test"),
+        )
         self.assertLess(
             workflow.index("ssh -p \"$SSH_PORT\""),
             workflow.index("recovery-restore-test"),
