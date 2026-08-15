@@ -89,17 +89,6 @@ PROCESSING_TEXT = (
     "⏳ Обрабатываю фотографию… Обычно это занимает около 1 минуты. "
     "Пожалуйста, не закрывайте чат."
 )
-RESULT_HISTORY_SCREENS = frozenset(
-    {
-        "result_ready",
-        "demo_exhausted",
-        "original_ready",
-        "original_delivery_failed",
-    }
-)
-RESULT_EXIT_ACTIONS = frozenset(
-    {"new:source", "result:correct", "result:repeat", "studio:works"}
-)
 UNLOCK_PLACEHOLDER = (
     "Получение оригинала пока недоступно — идёт закрытое тестирование.\n\n"
     "Работа сохранена в «Моих работах»."
@@ -517,11 +506,7 @@ class MaxApplication:
             self.settings.max_single_screen_ui_enabled
             and event.event_type in {"message_created", "bot_started"}
         ):
-            active_ui = self.ui.current(event.user_id)
-            if active_ui and active_ui.screen in RESULT_HISTORY_SCREENS:
-                self.ui.begin_new_message(event.user_id, chat_id=event.chat_id)
-            else:
-                self.ui.begin_user_input(event.user_id, chat_id=event.chat_id)
+            self.ui.begin_user_input(event.user_id, chat_id=event.chat_id)
         if is_start:
             if event.image_url:
                 self._reset_dialog_to_main(event.user_id, event.event_key)
@@ -948,13 +933,6 @@ class MaxApplication:
 
     def _callback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         _revision, action = parse_versioned_action(event.callback_payload or "")
-        if (
-            self.settings.max_single_screen_ui_enabled
-            and action in RESULT_EXIT_ACTIONS
-        ):
-            active_ui = self.ui.current(event.user_id)
-            if active_ui and active_ui.screen in RESULT_HISTORY_SCREENS:
-                self.ui.begin_new_message(event.user_id, chat_id=event.chat_id)
         if action in {"start:details", "legal:details"}:
             self._show_navigation_view(
                 event, dialog, legal_details_view(), NAV_SETTINGS

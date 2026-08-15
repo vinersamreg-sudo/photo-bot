@@ -42,20 +42,24 @@ pending request; a previous or latest completed work is never used as fallback.
 - If MAX cannot edit the active message, Ravuna sends exactly one replacement,
   adopts its id and then attempts to delete only the previous bot-owned message.
   User photos, prompts and messages are never deleted.
-- A new user photo, prompt, correction or source retires the previous bot screen.
-  Ravuna sends one new progress/status message below that user input and stores it
-  as the active message; the result or error then edits that new message in place.
+- A new user photo, prompt, correction or source retires and deletes the previous
+  bot UI screen. Ravuna sends one new progress/status message below that user
+  input and stores it as the active message; the user message itself is never
+  deleted.
 - A completed asynchronous edit updates the UI only while its processing
   revision is current. Otherwise the result remains available in «Моих работах»
   and a short service notification may be sent.
-- A finished result is chat history, not a disposable navigation shell. Starting
-  another photo, correction, repeat, works list or `/start` from that result
-  sends a new active message below it. The previous result is neither edited nor
-  deleted; callbacks on the new active message continue edit-in-place.
-- Original delivery keeps the watermarked result and the delivered file as
-  immutable chat history. Its confirmation/actions are posted below the file as
-  a new active message; starting another photo posts the upload instruction below
-  that confirmation.
+- Callback-only navigation from a result, including correction, another photo,
+  works, rating, feedback, referral and legal screens, continues in-place on the
+  active UI message. If MAX cannot change the message type safely, Ravuna sends
+  one replacement and deletes the previous bot UI message.
+- A finished preview is posted as a native image message for fullscreen/download;
+  only after that POST succeeds does Ravuna delete the processing screen and adopt
+  the preview as the sole active UI screen.
+- An original file is a delivered user artifact and may remain in chat history.
+  The watermarked result/menu is still disposable UI: after delivery Ravuna
+  replaces it with one confirmation/actions screen below the file, and subsequent
+  callbacks reuse that single active screen.
 
 ## Start state
 

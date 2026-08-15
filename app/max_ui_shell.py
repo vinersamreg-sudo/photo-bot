@@ -135,7 +135,6 @@ class MaxUiShell:
         platform_user_id: str,
         *,
         chat_id: Optional[str] = None,
-        preserve_previous_message: bool = False,
     ) -> RenderResult:
         """Retire the old bot screen before rendering below a new user message."""
 
@@ -157,7 +156,7 @@ class MaxUiShell:
                 (chat_id, revision, _now(), platform_user_id),
             )
 
-        if previous_message_id and not preserve_previous_message:
+        if previous_message_id:
             try:
                 self.transport.delete_message(previous_message_id)
             except MaxTransportError:
@@ -177,12 +176,11 @@ class MaxUiShell:
     def begin_new_message(
         self, platform_user_id: str, *, chat_id: Optional[str] = None
     ) -> RenderResult:
-        """Start a new active screen while preserving the previous message as history."""
+        """Retire the active bot screen before posting its replacement."""
 
         return self.begin_user_input(
             platform_user_id,
             chat_id=chat_id,
-            preserve_previous_message=True,
         )
 
     def callback_is_current(

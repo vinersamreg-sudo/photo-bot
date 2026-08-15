@@ -429,6 +429,14 @@ class MaxApplicationTests(TestCase):
         )
         self.app.settings = self.settings
 
+    def visible_ui_message_ids(self) -> set[str]:
+        deleted = set(self.transport.deletes)
+        sent = {message[4] for message in self.transport.messages}
+        images = {
+            f"image-{index}" for index in range(1, len(self.transport.images) + 1)
+        }
+        return (sent | images) - deleted
+
     def test_single_screen_callback_edits_current_message_without_provider_call(self) -> None:
         self.enable_single_screen()
         self.app.handle(self.event("bot_started"))
@@ -686,12 +694,13 @@ class MaxApplicationTests(TestCase):
         self.generate_first()
         result_message = self.app.ui.current("u1").message_id
         deletes_before = list(self.transport.deletes)
+        message_count = len(self.transport.messages)
 
         self.callback("studio:works")
 
         works_message = self.app.ui.current("u1").message_id
-        sheet = self.transport.images[-1]
-        self.assertNotEqual(works_message, result_message)
+        sheet = self.transport.image_edits[-1]
+        self.assertEqual(works_message, result_message)
         self.assertEqual(self.transport.deletes, deletes_before)
         number_button = next(
             button for button in sheet[3] if button.text == "Открыть 1"
@@ -704,17 +713,25 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(dialog.current_gallery_item_id, expected_item)
         self.assertEqual(dialog.pending_action, NAV_WORK)
         self.assertEqual(self.app.ui.current("u1").message_id, works_message)
-        self.assertEqual(len(self.transport.messages), 2)
+        self.assertEqual(len(self.transport.messages), message_count)
+
+        self.callback("nav:back:works")
+        self.assertEqual(self.app.ui.current("u1").message_id, works_message)
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(self.visible_ui_message_ids(), {works_message})
 
     def test_single_screen_correction_creates_new_progress_after_user_text(self) -> None:
         self.enable_single_screen()
         self.generate_first()
         result_message = self.app.ui.current("u1").message_id
         deletes_before = list(self.transport.deletes)
+        messages_before_correction = len(self.transport.messages)
         self.callback("result:correct")
         old_active = self.app.ui.current("u1").message_id
-        self.assertNotEqual(old_active, result_message)
+        self.assertEqual(old_active, result_message)
         self.assertEqual(self.transport.deletes, deletes_before)
+        self.assertEqual(len(self.transport.messages), messages_before_correction)
+        self.assertEqual(self.visible_ui_message_ids(), {result_message})
         messages_before = len(self.transport.messages)
         image_edits_before = len(self.transport.image_edits)
         self.clock.advance(2)
@@ -732,11 +749,11 @@ class MaxApplicationTests(TestCase):
         self.assertNotEqual(processing_message_id, active.message_id)
         self.assertNotEqual(active.message_id, old_active)
         self.assertIn(old_active, self.transport.deletes)
-        self.assertNotIn(result_message, self.transport.deletes)
         self.assertIn(processing_message_id, self.transport.deletes)
         self.assertNotIn(correction_event.message_id, self.transport.deletes)
         self.assertEqual(len(self.transport.image_edits), image_edits_before)
         self.assertEqual(self.transport.images[-1][2], result_actions(0).text)
+        self.assertEqual(self.visible_ui_message_ids(), {active.message_id})
 
     def test_single_screen_gallery_page_switch_changes_sheet_and_mapping(self) -> None:
         self.enable_single_screen()
@@ -1409,7 +1426,7 @@ class MaxApplicationTests(TestCase):
         self.assertFalse(self.app.handle(unlock_event))
         self.assertEqual(len(self.transport.messages), callback_message_count)
 
-    def test_result_other_photo_posts_new_active_message(self) -> None:
+    def test_result_other_photo_reuses_single_active_screen(self) -> None:
         self.enable_single_screen()
         self.generate_first()
         result_message = self.app.ui.current("u1").message_id
@@ -1422,16 +1439,16 @@ class MaxApplicationTests(TestCase):
         self.callback("new:source")
 
         active = self.app.ui.current("u1")
-        self.assertEqual(len(self.transport.messages), message_count + 1)
-        self.assertEqual(active.message_id, self.transport.messages[-1][4])
-        self.assertNotEqual(active.message_id, result_message)
-        self.assertEqual(len(self.transport.edits), edits_before)
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(active.message_id, result_message)
+        self.assertEqual(len(self.transport.edits), edits_before + 1)
         self.assertEqual(len(self.transport.image_edits), image_edits_before)
         self.assertEqual(self.transport.deletes, deletes_before)
         self.assertNotIn(result_message, self.transport.deletes)
         self.assertEqual(self.store.get("u1").state, "waiting_for_source")
-        self.assertIn("Загрузите другое фото", self.transport.messages[-1][1])
+        self.assertIn("Загрузите другое фото", self.transport.edits[-1][1])
         self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.visible_ui_message_ids(), {active.message_id})
 
         self.callback("nav:back:main")
         self.assertEqual(self.app.ui.current("u1").message_id, active.message_id)
@@ -1462,11 +1479,13 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(len(self.transport.messages), message_count_before_unlock + 1)
         self.assertEqual(len(self.transport.edits), edits_before_unlock)
         self.assertEqual(len(self.transport.image_edits), image_edits_before_unlock)
-        self.assertEqual(self.transport.deletes, deletes_before_unlock)
+        self.assertEqual(self.transport.deletes, deletes_before_unlock + [result_message])
+        self.assertEqual(self.visible_ui_message_ids(), {confirmation_message})
         self.assertEqual(
             self.transport.timeline[timeline_before_unlock:],
             [
                 ("send_file", original_message),
+                ("delete_message", result_message),
                 ("send_message", confirmation_message),
             ],
         )
@@ -1481,20 +1500,18 @@ class MaxApplicationTests(TestCase):
 
         dialog = self.store.get("u1")
         active = self.app.ui.current("u1")
-        self.assertEqual(len(self.transport.messages), message_count + 1)
-        self.assertEqual(active.message_id, self.transport.messages[-1][4])
-        self.assertNotEqual(active.message_id, confirmation_message)
-        self.assertEqual(len(self.transport.edits), edits_before)
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(active.message_id, confirmation_message)
+        self.assertEqual(len(self.transport.edits), edits_before + 1)
         self.assertEqual(len(self.transport.image_edits), image_edits_before)
         self.assertEqual(self.transport.deletes, deletes_before)
-        self.assertNotIn(result_message, self.transport.deletes)
         self.assertNotIn(original_message, self.transport.deletes)
-        self.assertEqual(self.transport.timeline[-1], ("send_message", active.message_id))
+        self.assertEqual(self.transport.timeline[-1], ("edit_message", active.message_id))
         self.assertEqual(dialog.state, "waiting_for_source")
         self.assertEqual(dialog.pending_action, "initial")
         self.assertIsNone(dialog.session_id)
         self.assertIsNone(dialog.current_version_id)
-        upload_message = self.transport.messages[-1]
+        upload_message = self.transport.edits[-1]
         self.assertIn("Загрузите другое фото", upload_message[1])
         self.assertIn("Прикрепите фотографию через скрепку 📎", upload_message[1])
         self.assertIn("до 2 фотографий", upload_message[1])
@@ -1514,19 +1531,14 @@ class MaxApplicationTests(TestCase):
             ],
         )
         self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.visible_ui_message_ids(), {active.message_id})
 
         self.callback("nav:back:main")
         self.assertEqual(self.app.ui.current("u1").message_id, active.message_id)
         self.assertEqual(self.transport.edits[-1][0], active.message_id)
-        mutated_history_ids = {
-            message_id
-            for operation, message_id in self.transport.timeline
-            if operation in {"edit_message", "edit_image", "delete_message"}
-        }
-        self.assertNotIn(result_message, mutated_history_ids)
-        self.assertNotIn(original_message, mutated_history_ids)
+        self.assertNotIn(original_message, self.transport.deletes)
 
-    def test_start_and_direct_reupload_after_result_preserve_result_message(self) -> None:
+    def test_start_and_direct_reupload_after_result_keep_one_active_screen(self) -> None:
         self.enable_single_screen()
         self.generate_first()
         result_message = self.app.ui.current("u1").message_id
@@ -1537,8 +1549,8 @@ class MaxApplicationTests(TestCase):
 
         start_message = self.app.ui.current("u1").message_id
         self.assertNotEqual(start_message, result_message)
-        self.assertNotIn(result_message, self.transport.deletes)
-        self.assertEqual(self.transport.deletes, deletes_before)
+        self.assertIn(result_message, self.transport.deletes)
+        self.assertEqual(self.transport.deletes, deletes_before + [result_message])
         self.assertEqual(len(self.transport.image_edits), image_edits_before)
 
         second = self.base / "direct-reupload.png"
@@ -1550,9 +1562,55 @@ class MaxApplicationTests(TestCase):
 
         self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
         self.assertNotEqual(self.app.ui.current("u1").message_id, start_message)
-        self.assertNotIn(result_message, self.transport.deletes)
+        self.assertIn(start_message, self.transport.deletes)
 
-    def test_repeat_from_result_preserves_previous_result_message(self) -> None:
+    def test_new_source_user_photo_retires_instruction_before_processing_below_input(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        self.callback("new:source")
+        instruction_message = self.app.ui.current("u1").message_id
+        timeline_start = len(self.transport.timeline)
+        provider_calls = self.provider.calls
+        self.clock.advance(2)
+
+        user_event = self.event(
+            "message_created",
+            text="Сделай фон светлее",
+            image_url="https://iu.oneme.ru/new-source",
+        )
+        self.app.handle(user_event)
+
+        active = self.app.ui.current("u1")
+        operations = self.transport.timeline[timeline_start:]
+        self.assertEqual(self.provider.calls, provider_calls + 1)
+        self.assertEqual(operations[0], ("delete_message", instruction_message))
+        self.assertEqual(operations[1][0], "send_message")
+        self.assertEqual(operations[2][0], "send_image")
+        self.assertEqual(operations[3], ("delete_message", operations[1][1]))
+        self.assertNotIn(user_event.message_id, self.transport.deletes)
+        self.assertEqual(self.visible_ui_message_ids(), {active.message_id})
+
+    def test_ten_callback_navigation_actions_keep_one_ui_message(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        active_message = self.app.ui.current("u1").message_id
+        message_count = len(self.transport.messages)
+        image_count = len(self.transport.images)
+        deletes_before = list(self.transport.deletes)
+        provider_calls = self.provider.calls
+
+        for _ in range(5):
+            self.callback("result:share")
+            self.callback("nav:back:work")
+
+        self.assertEqual(self.app.ui.current("u1").message_id, active_message)
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(len(self.transport.images), image_count)
+        self.assertEqual(self.transport.deletes, deletes_before)
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.visible_ui_message_ids(), {active_message})
+
+    def test_repeat_from_result_replaces_previous_result_message(self) -> None:
         self.enable_single_screen()
         self.generate_first()
         result_message = self.app.ui.current("u1").message_id
@@ -1564,10 +1622,9 @@ class MaxApplicationTests(TestCase):
 
         self.assertEqual(self.provider.calls, 2)
         self.assertNotEqual(self.app.ui.current("u1").message_id, result_message)
-        self.assertNotIn(result_message, self.transport.deletes)
         self.assertEqual(
             [message_id for message_id in self.transport.deletes if message_id == result_message],
-            [],
+            [result_message],
         )
         self.assertEqual(len(self.transport.image_edits), image_edits_before)
         self.assertGreater(len(self.transport.deletes), len(deletes_before))

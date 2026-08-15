@@ -184,7 +184,7 @@ class MaxUiShellTests(TestCase):
         self.assertEqual(self.shell.current("u1").message_id, progress.message_id)
         self.assertGreater(progress.revision, menu.revision)
 
-    def test_new_message_preserves_previous_screen_as_history(self) -> None:
+    def test_new_message_retires_previous_active_screen(self) -> None:
         result = self.shell.render(
             "u1",
             text="Готово",
@@ -202,7 +202,7 @@ class MaxUiShellTests(TestCase):
         )
 
         self.assertTrue(retired.applied)
-        self.assertEqual(self.transport.deletes, [])
+        self.assertEqual(self.transport.deletes, [result.message_id])
         self.assertEqual(self.transport.edits, [])
         self.assertEqual(self.transport.image_edits, [])
         self.assertEqual(len(self.transport.image_sends), 1)
