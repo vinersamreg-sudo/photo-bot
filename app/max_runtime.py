@@ -26,6 +26,23 @@ OBSERVE_ONLY_TEXT = (
     "Попробуйте немного позже."
 )
 
+_RECIPIENT_DELIVERY_STAGES = {
+    "message_send",
+    "image_message_send",
+    "file_message_send",
+}
+
+
+def _is_permanent_recipient_failure(exc: MaxTransportError) -> bool:
+    """Return true only when retrying the same recipient cannot succeed."""
+
+    if exc.kind == "bot_not_active":
+        return True
+    return (
+        exc.stage in _RECIPIENT_DELIVERY_STAGES
+        and exc.http_status in {403, 404}
+    )
+
 
 def build_max_application(
     settings: Settings, client: MaxApiClient | None = None
@@ -189,8 +206,19 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                                         )
                                 client.send_message(event.user_id, OBSERVE_ONLY_TEXT)
                                 store.finish_event(event.event_key, True)
-                            except MaxTransportError:
+                            except MaxTransportError as exc:
                                 store.finish_event(event.event_key, False)
+                                if _is_permanent_recipient_failure(exc):
+                                    LOGGER.warning(
+                                        "MAX event skipped after permanent recipient "
+                                        "failure (event_type=%s,kind=%s,stage=%s,"
+                                        "http_status=%s)",
+                                        event.event_type,
+                                        exc.kind,
+                                        exc.stage,
+                                        exc.http_status,
+                                    )
+                                    continue
                                 batch_ok = False
                                 break
                         if batch_ok and next_marker is not None:
@@ -209,6 +237,28 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                             continue
                         try:
                             application.handle(event)
+                        except MaxTransportError as exc:
+                            if _is_permanent_recipient_failure(exc):
+                                LOGGER.warning(
+                                    "MAX event skipped after permanent recipient "
+                                    "failure (event_type=%s,kind=%s,stage=%s,"
+                                    "http_status=%s)",
+                                    event.event_type,
+                                    exc.kind,
+                                    exc.stage,
+                                    exc.http_status,
+                                )
+                                continue
+                            batch_ok = False
+                            LOGGER.error(
+                                "MAX event transport failed safely "
+                                "(event_type=%s,kind=%s,stage=%s,http_status=%s)",
+                                event.event_type,
+                                exc.kind,
+                                exc.stage,
+                                exc.http_status,
+                            )
+                            break
                         except Exception as exc:
                             batch_ok = False
                             LOGGER.error(

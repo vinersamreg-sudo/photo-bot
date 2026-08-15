@@ -8,7 +8,12 @@ from unittest.mock import patch
 from app.config import Settings
 from app.database import Database
 from app.max_conversation import MaxConversationStore
-from app.max_runtime import OBSERVE_ONLY_TEXT, build_max_application, run_polling
+from app.max_runtime import (
+    OBSERVE_ONLY_TEXT,
+    _is_permanent_recipient_failure,
+    build_max_application,
+    run_polling,
+)
 from app.max_transport import MaxTransportError
 
 
@@ -64,7 +69,147 @@ class FakeObserveOnlyClient(FakePollingClient):
         return "observe-reply"
 
 
+class FakeBatchClient(FakePollingClient):
+    def get_updates(self, marker, *, timeout):
+        self.calls += 1
+        self.stop_event.set()
+        return [
+            {
+                "update_type": "bot_started",
+                "timestamp": 10,
+                "chat_id": "missing-chat",
+                "user": {"user_id": "inactive-user"},
+            },
+            {
+                "update_type": "message_created",
+                "timestamp": 11,
+                "message": {
+                    "sender": {"user_id": "active-user"},
+                    "recipient": {"chat_id": "active-chat"},
+                    "body": {"mid": "new-message", "text": "start"},
+                },
+            },
+        ], 79
+
+
+class FakeBatchApplication:
+    def __init__(self, database: Database, failure: MaxTransportError) -> None:
+        self.database = database
+        self.failure = failure
+        self.seen = []
+
+    def recover_interrupted_processing(self) -> int:
+        return 0
+
+    def handle(self, event) -> None:
+        self.seen.append(event.event_type)
+        if len(self.seen) == 1:
+            raise self.failure
+
+
 class MaxRuntimeTests(TestCase):
+    def test_permanent_recipient_failure_classification_is_narrow(self) -> None:
+        self.assertTrue(
+            _is_permanent_recipient_failure(
+                MaxTransportError(
+                    "recipient unavailable",
+                    kind="forbidden",
+                    stage="message_send",
+                    http_status=403,
+                )
+            )
+        )
+        self.assertFalse(
+            _is_permanent_recipient_failure(
+                MaxTransportError(
+                    "invalid payload",
+                    kind="http_error",
+                    stage="message_send",
+                    http_status=400,
+                )
+            )
+        )
+        self.assertFalse(
+            _is_permanent_recipient_failure(
+                MaxTransportError(
+                    "rate limited",
+                    kind="rate_limit",
+                    stage="message_send",
+                    http_status=429,
+                )
+            )
+        )
+
+    def test_permanent_recipient_failure_does_not_poison_poll_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base / name).mkdir()
+            settings = Settings(
+                "", "", "test", base,
+                max_bot_token="test-token", max_transport_mode="polling",
+                max_poll_observe_only=False, max_owner_user_ids=("owner",),
+            )
+            stop_event = threading.Event()
+            fake_client = FakeBatchClient(stop_event)
+            database = Database(settings.database_path)
+            store = MaxConversationStore(database)
+            application = FakeBatchApplication(
+                database,
+                MaxTransportError(
+                    "recipient unavailable",
+                    kind="forbidden",
+                    stage="message_send",
+                    http_status=403,
+                ),
+            )
+            with (
+                patch("app.max_runtime.MaxApiClient", return_value=fake_client),
+                patch(
+                    "app.max_runtime.build_max_application",
+                    return_value=(application, fake_client, store),
+                ),
+            ):
+                self.assertEqual(run_polling(settings, stop_event), 0)
+
+            self.assertEqual(application.seen, ["bot_started", "message_created"])
+            self.assertEqual(store.get_marker(), 79)
+
+    def test_payload_failure_keeps_marker_for_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base / name).mkdir()
+            settings = Settings(
+                "", "", "test", base,
+                max_bot_token="test-token", max_transport_mode="polling",
+                max_poll_observe_only=False, max_owner_user_ids=("owner",),
+            )
+            stop_event = threading.Event()
+            fake_client = FakeBatchClient(stop_event)
+            database = Database(settings.database_path)
+            store = MaxConversationStore(database)
+            application = FakeBatchApplication(
+                database,
+                MaxTransportError(
+                    "invalid payload",
+                    kind="http_error",
+                    stage="message_send",
+                    http_status=400,
+                ),
+            )
+            with (
+                patch("app.max_runtime.MaxApiClient", return_value=fake_client),
+                patch(
+                    "app.max_runtime.build_max_application",
+                    return_value=(application, fake_client, store),
+                ),
+            ):
+                self.assertEqual(run_polling(settings, stop_event), 0)
+
+            self.assertEqual(application.seen, ["bot_started"])
+            self.assertIsNone(store.get_marker())
+
     def test_application_uses_configured_image_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
