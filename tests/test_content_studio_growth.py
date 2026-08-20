@@ -253,6 +253,49 @@ class ContentStudioGrowthTests(unittest.TestCase):
         )
         self.assertEqual(hashlib.sha256(production_db.read_bytes()).hexdigest(), before)
 
+    def test_full_auto_rebuilds_a_corrupt_partial_video_once(self) -> None:
+        settings = ContentStudioSettings(
+            base_dir=self.root / "content-repair",
+            database_path=self.root / "content-repair" / "content.sqlite3",
+            storage_dir=self.root / "content-repair" / "storage",
+            approved_assets_dir=PROJECT_ROOT / "marketing/assets/approved",
+            publishing_enabled=True,
+            full_auto_enabled=True,
+            content_library_path=PROJECT_ROOT / "marketing/content/library.json",
+            production_database_path=self.root / "missing-production.sqlite3",
+        )
+        engine = FullAutoGrowthEngine(ContentStudioService(settings))
+        now = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+        ideas = engine._idea_pool(now.date(), engine.optimization())
+        asset = engine._select_assets(
+            now.date(), 8, engine.optimization(), ideas=ideas
+        )[0]
+        post_id = f"vk-clip-{now.date().isoformat()}-{asset.id}"
+        _, output = engine.service.storage.output_path(
+            "videos", post_id, "vertical.mp4"
+        )
+        output.write_bytes(b"corrupt-partial")
+        renders = []
+
+        class FakeVideo:
+            @staticmethod
+            def render_pair(spec):
+                renders.append(spec.output)
+                spec.output.write_bytes(b"valid-video")
+                return spec.output
+
+        def assess_video(path, **_kwargs):
+            if path.read_bytes() != b"valid-video":
+                raise ValueError("invalid test video")
+            return {"decoded": True, "codec": "h264", "width": 1080, "height": 1920}
+
+        engine.video = FakeVideo()
+        engine.quality.assess_video = assess_video
+        result = engine.maintain_queue(now=now, apply=True)
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual(renders.count(output), 1)
+        self.assertEqual(output.read_bytes(), b"valid-video")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -376,7 +376,14 @@ class FullAutoGrowthEngine:
             media_relative, output = self.service.storage.output_path(
                 "videos", post_id, "vertical.mp4"
             )
-            if not output.is_file():
+            if output.is_file():
+                try:
+                    video_checks = self.quality.assess_video(
+                        output, ffprobe_binary=self.settings.ffprobe_binary
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    output.unlink(missing_ok=True)
+            if video_checks is None:
                 self.video.render_pair(
                     VerticalPairVideoSpec(
                         pair_card=pair_path,
@@ -385,9 +392,9 @@ class FullAutoGrowthEngine:
                         prompt_text=f"Запрос: {asset.prompt_example}",
                     )
                 )
-            video_checks = self.quality.assess_video(
-                output, ffprobe_binary=self.settings.ffprobe_binary
-            )
+                video_checks = self.quality.assess_video(
+                    output, ffprobe_binary=self.settings.ffprobe_binary
+                )
         scheduled = datetime.combine(
             planned,
             datetime.strptime(clock, "%H:%M").time(),
