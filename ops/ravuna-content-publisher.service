@@ -14,6 +14,14 @@ EnvironmentFile=/opt/ravuna-content/.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/ravuna-content/venv/bin/python -m app.content_studio.cli content auto-run --apply
 TimeoutStartSec=20min
+Nice=10
+CPUWeight=10
+CPUQuota=80%
+IOWeight=10
+IOSchedulingClass=idle
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=64
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

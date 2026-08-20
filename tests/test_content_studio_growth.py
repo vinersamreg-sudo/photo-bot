@@ -18,7 +18,11 @@ from app.content_studio.models import TransformationType
 from app.content_studio.storage import ContentStorage
 from app.content_studio.growth import FullAutoGrowthEngine, _publish_timezone
 from app.content_studio.service import ContentStudioService
-from app.content_studio.video import VerticalVideoGenerator, VerticalVideoSpec
+from app.content_studio.video import (
+    VerticalPairVideoSpec,
+    VerticalVideoGenerator,
+    VerticalVideoSpec,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -143,6 +147,22 @@ class ContentStudioGrowthTests(unittest.TestCase):
                     hook="Hook",
                 )
             )
+
+    def test_pair_video_uses_low_memory_single_stream_rendering(self) -> None:
+        generator = VerticalVideoGenerator(self.approved, self.runtime)
+        command = generator.pair_command(
+            VerticalPairVideoSpec(
+                pair_card=self.before,
+                output=self.runtime / "pair.mp4",
+                hook="До и после",
+                prompt_text="Запрос: улучшить фото",
+            )
+        )
+        joined = " ".join(command)
+        self.assertNotIn("xfade", joined)
+        self.assertNotIn("zoompan", joined)
+        self.assertIn("if(lt(t,4),0,iw/2)", joined)
+        self.assertEqual(command[command.index("-threads") + 1], "1")
 
     def test_full_auto_apply_builds_an_idempotent_eight_day_queue(self) -> None:
         settings = ContentStudioSettings(

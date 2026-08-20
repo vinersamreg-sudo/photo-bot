@@ -49,7 +49,10 @@ fi
 "$VENV/bin/python" -m pip install --disable-pip-version-check --quiet -r "$RELEASE/requirements.txt"
 "$VENV/bin/python" -m py_compile "$RELEASE"/app/content_studio/*.py
 
-PREVIOUS=$(readlink -f "$ROOT/current" 2>/dev/null || true)
+PREVIOUS=""
+if [ -L "$ROOT/current" ] || [ -e "$ROOT/current" ]; then
+  PREVIOUS=$(readlink -e "$ROOT/current" 2>/dev/null || true)
+fi
 ln -sfn "$RELEASE" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$ROOT/current"
 install -m 0644 "$RELEASE/ops/ravuna-content-publisher.service" /etc/systemd/system/ravuna-content-publisher.service
@@ -58,9 +61,11 @@ systemctl daemon-reload
 systemctl enable ravuna-content-publisher.timer >/dev/null
 
 if ! systemctl start ravuna-content-publisher.service; then
-  if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
+  if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] && [ "$PREVIOUS" != "$ROOT/current" ]; then
     ln -sfn "$PREVIOUS" "$ROOT/current.next"
     mv -Tf "$ROOT/current.next" "$ROOT/current"
+  else
+    rm -f -- "$ROOT/current"
   fi
   echo "Content Studio first run failed; photo-bot was not touched" >&2
   exit 1

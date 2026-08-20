@@ -146,19 +146,10 @@ class VerticalVideoGenerator:
         cta = _drawtext(spec.cta, 90)
         font = str(self.font_file).replace("\\", "/").replace(":", "\\:")
         filter_graph = (
-            "[0:v]split=2[left][right];"
-            "[left]crop=iw/2:ih:0:0,scale=1080:1920:"
-            "force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-            "zoompan=z='min(zoom+0.0002,1.03)':d=1:s=1080x1920:fps=30,"
-            "setpts=PTS-STARTPTS[b];"
-            "[right]crop=iw/2:ih:iw/2:0,scale=1080:1920:"
-            "force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-            "zoompan=z='min(zoom+0.0002,1.03)':d=1:s=1080x1920:fps=30,"
-            "setpts=PTS-STARTPTS[a];"
-            "[b][a]xfade=transition=fade:duration=0.5:offset=4[v];"
-            f"[v]drawtext=fontfile='{font}':text='ДО':fontsize=86:fontcolor=white:"
+            "[0:v]crop=iw/2:ih:x='if(lt(t,4),0,iw/2)':y=0,"
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,"
+            f"drawtext=fontfile='{font}':text='ДО':fontsize=86:fontcolor=white:"
             "box=1:boxcolor=black@0.55:boxborderw=28:x=(w-text_w)/2:y=120:"
             "enable='between(t,0,2)',"
             f"drawtext=fontfile='{font}':text='{hook}':fontsize=48:fontcolor=white:"
@@ -198,6 +189,8 @@ class VerticalVideoGenerator:
             "libx264",
             "-preset",
             "veryfast",
+            "-threads",
+            "1",
             "-profile:v",
             "high",
             "-level",

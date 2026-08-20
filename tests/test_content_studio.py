@@ -450,12 +450,15 @@ class ContentStudioTests(unittest.TestCase):
         self.assertIn("ReadWritePaths=/opt/ravuna-content/data", service)
         self.assertIn("ReadOnlyPaths=/opt/photo-bot/data", service)
         self.assertIn("TimeoutStartSec=20min", service)
+        self.assertIn("CPUQuota=80%", service)
+        self.assertIn("MemoryMax=1G", service)
         self.assertNotIn("photo-bot.service", service)
         self.assertNotIn("restart", service.lower())
         self.assertIn("OnCalendar=*:0/15", timer)
         self.assertIn("/opt/ravuna-content", deploy)
         self.assertNotIn("systemctl restart photo-bot", deploy)
         self.assertNotIn("/opt/photo-bot/.env", deploy)
+        self.assertIn('readlink -e "$ROOT/current"', deploy)
 
     def test_category_catalog_contains_every_required_category(self) -> None:
         required = {
