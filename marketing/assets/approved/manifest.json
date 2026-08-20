@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "policy": "Only owner-provided, purpose-created synthetic, or explicit marketing-consent assets may be listed.",
+  "assets": [
+    {
+      "file": "ravuna-pilot-before-after.png",
+      "sha256": "131e60cdd9810c2e7ca9d12ce1c91de8d691a13904420ca9132d9ec0bbe51686",
+      "source": "OpenAI ImageGen",
+      "subject": "entirely synthetic fictional adult",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner",
+      "purpose": "Ravuna Content Studio pilot"
+    },
+    {
+      "file": "ravuna-background-before-after.png",
+      "sha256": "a4c2a6054396838ef5bca9db3d5d0344d292931190c3213249a4796a0e2adb84",
+      "source": "OpenAI ImageGen",
+      "subject": "entirely synthetic fictional adult",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_request_for_growth_mvp",
+      "purpose": "Ravuna background-replacement demonstration"
+    },
+    {
+      "file": "ravuna-restoration-before-after.png",
+      "sha256": "2cb1abd16b9bd59151e4ff88d7cd05df998f323a36150f38796f575ab76d8a59",
+      "source": "OpenAI ImageGen",
+      "subject": "entirely synthetic fictional adult",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_full_auto_authorization",
+      "purpose": "Ravuna old-photo restoration demonstration"
+    },
+    {
+      "file": "ravuna-object-removal-before-after.png",
+      "sha256": "5200dca25cb5f03e53ea951563786934760e98ff994580322aa2c798f365b8a9",
+      "source": "OpenAI ImageGen",
+      "subject": "entirely synthetic fictional adult",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_full_auto_authorization",
+      "purpose": "Ravuna object-removal demonstration"
+    },
+    {
+      "file": "ravuna-enhancement-before-after.png",
+      "sha256": "fbb8a6e1ee9b19b930404fd873965594b52dcdfa73f6a58900be79c4d3380d88",
+      "source": "OpenAI ImageGen",
+      "subject": "entirely synthetic fictional adult and animal",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_full_auto_authorization",
+      "purpose": "Ravuna image enhancement demonstration"
+    },
+    {
+      "file": "ravuna-outfit-before-after.png",
+      "sha256": "6f13e73900e1d426be8694de62b5f6665f872deb97103ba7d1c8a9b1d0dd6fd5",
+      "source": "OpenAI ImageGen",
+      "subject": "entirely synthetic fictional adult",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_full_auto_authorization",
+      "purpose": "Ravuna outfit and background demonstration"
+    },
+    {
+      "file": "ravuna-reframe-before-after.png",
+      "sha256": "dbc28e1cd8c1d37d203a582aa8bf40c2d62d28b44a1f4fbff2c045e0f2d873f8",
+      "source": "OpenAI ImageGen",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_full_auto_authorization",
+      "purpose": "Ravuna mobile reframing demonstration"
+    }
+  ]
+}

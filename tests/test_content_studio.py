@@ -43,15 +43,18 @@ class ContentStudioTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        self.approved = self.root / "marketing" / "assets" / "approved"
+        self.approved.mkdir(parents=True)
         self.settings = ContentStudioSettings(
             base_dir=self.root / "content",
             database_path=self.root / "content" / "content.sqlite3",
             storage_dir=self.root / "content" / "storage",
+            approved_assets_dir=self.approved,
             publishing_enabled=False,
             bot_url="https://max.ru/ravuna_bot",
         )
-        self.before = self.root / "before.png"
-        self.after = self.root / "after.png"
+        self.before = self.approved / "before.png"
+        self.after = self.approved / "after.png"
         _image(self.before, "#DFB18D", "#17355A", 90)
         _image(self.after, "#DCE9F5", "#2C6947", 210)
         self.service = ContentStudioService(self.settings)
@@ -200,9 +203,11 @@ class ContentStudioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "English"):
             self.generate(prompt_en="Замени фон")
 
-    def test_only_max_adapter_is_enabled_in_v1(self) -> None:
-        with self.assertRaisesRegex(ValueError, "MAX adapter"):
-            self.generate(platform="telegram")
+    def test_platform_neutral_generation_builds_platform_utm(self) -> None:
+        generated = self.generate(platform="telegram")
+        post = self.service.repository.get_post(generated["post_id"])
+        self.assertEqual(post["platform"], "telegram")
+        self.assertIn("utm_source=telegram", post["utm_url"])
 
     def test_quality_issue_forces_review_and_blocks_approval(self) -> None:
         generated = self.generate(reported_issues=(QualityIssue.SIX_FINGERS,))
@@ -259,7 +264,7 @@ class ContentStudioTests(unittest.TestCase):
         preview = self.service.create_plan(date(2026, 7, 20), 7, apply=False)
         self.assertEqual(preview["created"], 0)
         self.assertEqual(preview["entries"][0]["content_type"], "before_after")
-        self.assertEqual(preview["entries"][6]["content_type"], "best_case_of_week")
+        self.assertEqual(preview["entries"][6]["content_type"], "restoration")
         applied = self.service.create_plan(date(2026, 7, 20), 7, apply=True)
         self.assertEqual(applied["created"], 7)
 
@@ -274,6 +279,7 @@ class ContentStudioTests(unittest.TestCase):
         self.assertEqual(preview.status, "planned")
         self.assertEqual(dry_run.status, "simulated")
         self.assertTrue(dry_run.payload["demo_disclosure_present"])
+        self.assertEqual(dry_run.payload["media_path"], "<content-studio-media>")
         self.assertEqual(self.service.status()["publication_attempts"], 2)
         self.assertEqual(self.service.status()["published_posts"], 0)
 
@@ -288,6 +294,27 @@ class ContentStudioTests(unittest.TestCase):
             )
         self.assertEqual(self.service.status()["published_posts"], 0)
         self.assertEqual(self.service.status()["publication_attempts"], 1)
+
+    def test_publish_due_is_bounded_reviewed_and_dry_run_first(self) -> None:
+        generated = self.generate()
+        self.service.approve(
+            generated["post_id"], reviewer="owner", reason="checked", apply=True
+        )
+        self.service.schedule(
+            generated["post_id"], "2020-01-01T00:00:00+00:00", apply=True
+        )
+        preview = self.service.publish_due(limit=1, apply=False)
+        self.assertEqual(preview["due"], [generated["post_id"]])
+        self.assertEqual(preview["published"], [])
+
+        transport = FakeTransport()
+        self.service.publishers["max"] = MaxPublisher(
+            publishing_enabled=True, transport=transport
+        )
+        result = self.service.publish_due(limit=1, apply=True)
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(result["published"][0]["post_id"], generated["post_id"])
+        self.assertEqual(transport.published, 1)
 
     def test_publisher_interface_supports_publish_and_retry_with_injected_transport(self) -> None:
         transport = FakeTransport()
@@ -326,9 +353,22 @@ class ContentStudioTests(unittest.TestCase):
             reactions=4,
             comments=2,
             conversion_to_bot=3,
+            starts=8,
+            first_photos=6,
+            generations=5,
+            payments=1,
         )
         self.assertEqual(summary["ctr"], 0.1)
         self.assertEqual(summary["conversions"], 3)
+        self.assertEqual(
+            (
+                summary["starts"],
+                summary["first_photos"],
+                summary["generations"],
+                summary["payments"],
+            ),
+            (8, 6, 5, 1),
+        )
         latest = self.service.record_analytics(
             generated["post_id"],
             views=140,
@@ -350,11 +390,14 @@ class ContentStudioTests(unittest.TestCase):
 
     def test_cli_exposes_requested_commands(self) -> None:
         parser = build_parser()
-        for command in ("status", "generate", "queue", "approve", "publish", "analytics", "schedule"):
+        for command in (
+            "status", "auto-run", "dashboard", "permissions", "generate", "queue",
+            "approve", "publish", "publish-due", "analytics", "schedule", "video",
+        ):
             with self.subTest(command=command):
-                if command == "status":
+                if command in {"status", "auto-run", "dashboard", "permissions"}:
                     args = parser.parse_args(["content", command])
-                elif command == "queue" or command == "analytics":
+                elif command in {"queue", "analytics", "publish-due"}:
                     args = parser.parse_args(["content", command])
                 elif command == "approve":
                     args = parser.parse_args(
@@ -364,6 +407,16 @@ class ContentStudioTests(unittest.TestCase):
                     args = parser.parse_args(["content", command, "--post-id", "x"])
                 elif command == "schedule":
                     args = parser.parse_args(["content", command, "--plan-start", "2026-07-20"])
+                elif command == "video":
+                    args = parser.parse_args(
+                        [
+                            "content", command,
+                            "--before", "before.png",
+                            "--after", "after.png",
+                            "--output", "video.mp4",
+                            "--hook", "Hook",
+                        ]
+                    )
                 else:
                     args = parser.parse_args(
                         [
@@ -380,6 +433,28 @@ class ContentStudioTests(unittest.TestCase):
                         ]
                     )
                 self.assertEqual(args.content_command, command)
+
+    def test_optional_timer_runs_only_bounded_due_publication(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        service = (project_root / "ops" / "ravuna-content-publisher.service").read_text(
+            encoding="utf-8"
+        )
+        timer = (project_root / "ops" / "ravuna-content-publisher.timer").read_text(
+            encoding="utf-8"
+        )
+        deploy = (project_root / "ops" / "deploy_ravuna_content_studio.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("content auto-run --apply", service)
+        self.assertIn("WorkingDirectory=/opt/ravuna-content/current", service)
+        self.assertIn("ReadWritePaths=/opt/ravuna-content/data", service)
+        self.assertIn("ReadOnlyPaths=/opt/photo-bot/data", service)
+        self.assertNotIn("photo-bot.service", service)
+        self.assertNotIn("restart", service.lower())
+        self.assertIn("OnCalendar=*:0/15", timer)
+        self.assertIn("/opt/ravuna-content", deploy)
+        self.assertNotIn("systemctl restart photo-bot", deploy)
+        self.assertNotIn("/opt/photo-bot/.env", deploy)
 
     def test_category_catalog_contains_every_required_category(self) -> None:
         required = {

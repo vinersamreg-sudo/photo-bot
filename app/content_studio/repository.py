@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS demo_posts (
     published_time TEXT,
     platform TEXT NOT NULL,
     utm_url TEXT NOT NULL,
+    source_code TEXT NOT NULL DEFAULT '',
     generator_prompt_en TEXT NOT NULL,
     published_external_id TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count>=0),
@@ -127,6 +128,10 @@ CREATE TABLE IF NOT EXISTS content_analytics (
     comments INTEGER NOT NULL CHECK(comments>=0),
     ctr REAL NOT NULL CHECK(ctr>=0),
     conversion_to_bot INTEGER NOT NULL CHECK(conversion_to_bot>=0),
+    starts INTEGER NOT NULL DEFAULT 0 CHECK(starts>=0),
+    first_photos INTEGER NOT NULL DEFAULT 0 CHECK(first_photos>=0),
+    generations INTEGER NOT NULL DEFAULT 0 CHECK(generations>=0),
+    payments INTEGER NOT NULL DEFAULT 0 CHECK(payments>=0),
     utm_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_content_analytics_post
@@ -205,6 +210,29 @@ class ContentStudioRepository:
                 "INSERT OR IGNORE INTO content_schema_migrations(version,name,applied_at) VALUES(2,?,?)",
                 ("post_generator_prompt_metadata", utc_now()),
             )
+            if "source_code" not in columns:
+                connection.execute(
+                    "ALTER TABLE demo_posts "
+                    "ADD COLUMN source_code TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                "INSERT OR IGNORE INTO content_schema_migrations(version,name,applied_at) VALUES(3,?,?)",
+                ("post_source_attribution", utc_now()),
+            )
+            analytics_columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(content_analytics)").fetchall()
+            }
+            for name in ("starts", "first_photos", "generations", "payments"):
+                if name not in analytics_columns:
+                    connection.execute(
+                        f"ALTER TABLE content_analytics ADD COLUMN {name} "
+                        "INTEGER NOT NULL DEFAULT 0 CHECK(" + name + ">=0)"
+                    )
+            connection.execute(
+                "INSERT OR IGNORE INTO content_schema_migrations(version,name,applied_at) VALUES(4,?,?)",
+                ("content_funnel_metrics", utc_now()),
+            )
         finally:
             connection.close()
 
@@ -280,9 +308,9 @@ class ContentStudioRepository:
             connection.execute(
                 """INSERT INTO demo_posts(
                        id,result_id,title,body,hashtags_json,cta,disclosure,publish_status,
-                       scheduled_time,published_time,platform,utm_url,generator_prompt_en,
+                       scheduled_time,published_time,platform,utm_url,source_code,generator_prompt_en,
                        published_external_id,retry_count,last_error,created_at,updated_at
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     post.id,
                     post.result_id,
@@ -296,6 +324,7 @@ class ContentStudioRepository:
                     post.published_time,
                     post.platform,
                     post.utm_url,
+                    post.source_code,
                     post.generator_prompt_en,
                     post.published_external_id,
                     post.retry_count,
@@ -308,11 +337,79 @@ class ContentStudioRepository:
     def get_asset(self, asset_id: str) -> dict[str, Any]:
         return self._required("SELECT * FROM demo_assets WHERE id=?", (asset_id,), "DemoAsset")
 
+    def find_asset_by_checksum(self, checksum: str) -> dict[str, Any] | None:
+        connection = self.connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM demo_assets WHERE checksum=?", (checksum,)
+            ).fetchone()
+            return dict(row) if row is not None else None
+        finally:
+            connection.close()
+
     def get_result(self, result_id: str) -> dict[str, Any]:
         return self._required("SELECT * FROM demo_results WHERE id=?", (result_id,), "DemoResult")
 
     def get_post(self, post_id: str) -> dict[str, Any]:
         return self._required("SELECT * FROM demo_posts WHERE id=?", (post_id,), "DemoPost")
+
+    def post_exists(self, post_id: str) -> bool:
+        connection = self.connect()
+        try:
+            return bool(
+                connection.execute(
+                    "SELECT 1 FROM demo_posts WHERE id=?", (post_id,)
+                ).fetchone()
+            )
+        finally:
+            connection.close()
+
+    def published_posts(self, limit: int = 500) -> list[dict[str, Any]]:
+        return self.queue(PostStatus.PUBLISHED.value, limit=limit)
+
+    def scheduled_through(self) -> str | None:
+        connection = self.connect()
+        try:
+            row = connection.execute(
+                """SELECT MAX(scheduled_time) FROM demo_posts
+                   WHERE publish_status IN ('scheduled','published')"""
+            ).fetchone()
+            return str(row[0]) if row and row[0] else None
+        finally:
+            connection.close()
+
+    def post_with_result(self, post_id: str) -> dict[str, Any]:
+        return self._required(
+            """SELECT p.*,r.edit_plan_json,r.watermark_preview_path,r.quality_issues_json
+               FROM demo_posts p JOIN demo_results r ON r.id=p.result_id
+               WHERE p.id=?""",
+            (post_id,),
+            "DemoPost",
+        )
+
+    def performance_rows(self) -> list[dict[str, Any]]:
+        connection = self.connect()
+        try:
+            rows = connection.execute(
+                """WITH latest AS (
+                       SELECT a.*,ROW_NUMBER() OVER(
+                           PARTITION BY a.post_id ORDER BY a.observed_at DESC,a.id DESC
+                       ) AS rank
+                       FROM content_analytics a
+                   )
+                   SELECT p.id,p.platform,p.source_code,r.edit_plan_json,
+                          COALESCE(l.views,0) views,COALESCE(l.starts,0) starts,
+                          COALESCE(l.first_photos,0) first_photos,
+                          COALESCE(l.generations,0) generations,
+                          COALESCE(l.payments,0) payments
+                   FROM demo_posts p
+                   JOIN demo_results r ON r.id=p.result_id
+                   LEFT JOIN latest l ON l.post_id=p.id AND l.rank=1
+                   WHERE p.publish_status='published'"""
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
 
     def queue(self, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         if limit <= 0 or limit > 1000:
@@ -329,6 +426,24 @@ class ContentStudioRepository:
                     "SELECT * FROM demo_posts ORDER BY COALESCE(scheduled_time,created_at),created_at LIMIT ?",
                     (limit,),
                 ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    def due_posts(self, now: str, limit: int = 10) -> list[dict[str, Any]]:
+        if limit <= 0 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        connection = self.connect()
+        try:
+            rows = connection.execute(
+                """SELECT * FROM demo_posts
+                   WHERE publish_status='scheduled'
+                     AND scheduled_time IS NOT NULL
+                     AND scheduled_time<=?
+                   ORDER BY scheduled_time,created_at,id
+                   LIMIT ?""",
+                (now, limit),
+            ).fetchall()
             return [dict(row) for row in rows]
         finally:
             connection.close()
@@ -457,9 +572,23 @@ class ContentStudioRepository:
         reactions: int,
         comments: int,
         conversion_to_bot: int,
+        starts: int = 0,
+        first_photos: int = 0,
+        generations: int = 0,
+        payments: int = 0,
         utm: dict[str, str],
     ) -> None:
-        metrics = (views, clicks, reactions, comments, conversion_to_bot)
+        metrics = (
+            views,
+            clicks,
+            reactions,
+            comments,
+            conversion_to_bot,
+            starts,
+            first_photos,
+            generations,
+            payments,
+        )
         if any(value < 0 for value in metrics):
             raise ValueError("analytics values must not be negative")
         ctr = clicks / views if views else 0.0
@@ -467,8 +596,8 @@ class ContentStudioRepository:
             connection.execute(
                 """INSERT INTO content_analytics(
                        id,post_id,observed_at,views,clicks,reactions,comments,ctr,
-                       conversion_to_bot,utm_json
-                   ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                       conversion_to_bot,starts,first_photos,generations,payments,utm_json
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     analytics_id,
                     post_id,
@@ -479,6 +608,10 @@ class ContentStudioRepository:
                     comments,
                     ctr,
                     conversion_to_bot,
+                    starts,
+                    first_photos,
+                    generations,
+                    payments,
                     _json(utm),
                 ),
             )
@@ -506,8 +639,12 @@ class ContentStudioRepository:
                    SELECT COALESCE(SUM(views),0) views,
                           COALESCE(SUM(clicks),0) clicks,
                           COALESCE(SUM(reactions),0) reactions,
-                          COALESCE(SUM(comments),0) comments,
-                          COALESCE(SUM(conversion_to_bot),0) conversions
+                           COALESCE(SUM(comments),0) comments,
+                           COALESCE(SUM(conversion_to_bot),0) conversions,
+                           COALESCE(SUM(starts),0) starts,
+                           COALESCE(SUM(first_photos),0) first_photos,
+                           COALESCE(SUM(generations),0) generations,
+                           COALESCE(SUM(payments),0) payments
                    FROM ranked WHERE rank=1""",
                 params,
             ).fetchone()

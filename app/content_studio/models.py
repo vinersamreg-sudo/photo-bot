@@ -159,6 +159,7 @@ class DemoPost:
     published_time: str | None
     platform: str
     utm_url: str
+    source_code: str
     generator_prompt_en: str
     created_at: str
     updated_at: str

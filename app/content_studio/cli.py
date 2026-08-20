@@ -21,6 +21,7 @@ from .models import (
     TransformationType,
 )
 from .service import ContentStudioService
+from .video import VerticalVideoGenerator, VerticalVideoSpec, command_preview
 
 
 LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = actions.add_parser("status")
     _add_format(status)
+
+    auto_run = actions.add_parser("auto-run")
+    auto_run.add_argument("--apply", action="store_true")
+    _add_format(auto_run)
+
+    dashboard = actions.add_parser("dashboard")
+    dashboard.add_argument("--days", type=int, default=7)
+    _add_format(dashboard)
+
+    permissions = actions.add_parser("permissions")
+    _add_format(permissions)
 
     generate = actions.add_parser("generate")
     source = generate.add_mutually_exclusive_group(required=True)
@@ -82,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--apply", action="store_true")
     _add_format(publish)
 
+    publish_due = actions.add_parser("publish-due")
+    publish_due.add_argument("--limit", type=int, default=10)
+    publish_due.add_argument("--apply", action="store_true")
+    _add_format(publish_due)
+
     analytics = actions.add_parser("analytics")
     analytics.add_argument("--post-id")
     analytics.add_argument("--record", action="store_true")
@@ -90,8 +107,21 @@ def build_parser() -> argparse.ArgumentParser:
     analytics.add_argument("--reactions", type=int, default=0)
     analytics.add_argument("--comments", type=int, default=0)
     analytics.add_argument("--conversion-to-bot", type=int, default=0)
+    analytics.add_argument("--starts", type=int, default=0)
+    analytics.add_argument("--first-photos", type=int, default=0)
+    analytics.add_argument("--generations", type=int, default=0)
+    analytics.add_argument("--payments", type=int, default=0)
     analytics.add_argument("--apply", action="store_true")
     _add_format(analytics)
+
+    video = actions.add_parser("video")
+    video.add_argument("--before", type=Path, required=True)
+    video.add_argument("--after", type=Path, required=True)
+    video.add_argument("--output", type=Path, required=True)
+    video.add_argument("--hook", required=True)
+    video.add_argument("--cta", default="Попробуйте Ravuna в MAX")
+    video.add_argument("--apply", action="store_true")
+    _add_format(video)
     return parser
 
 
@@ -107,6 +137,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))
         return 2
     _print(result, args.format)
+    if args.content_command == "publish-due" and result.get("failed"):
+        return 1
+    if args.content_command == "auto-run" and result.get("publication", {}).get("failed"):
+        return 1
     return 0
 
 
@@ -114,6 +148,14 @@ def _run_content(service: ContentStudioService, args: argparse.Namespace) -> Any
     command = args.content_command
     if command == "status":
         return service.status()
+    if command == "auto-run":
+        return service.full_auto_run(apply=args.apply)
+    if command == "dashboard":
+        if not 1 <= args.days <= 90:
+            raise ValueError("dashboard days must be between 1 and 90")
+        return service.growth_dashboard(days=args.days)
+    if command == "permissions":
+        return service.publishing_permissions()
     if command == "generate":
         asset_id = args.asset_id
         if args.source_image:
@@ -170,6 +212,8 @@ def _run_content(service: ContentStudioService, args: argparse.Namespace) -> Any
             "payload": outcome.payload,
             "network_publication": outcome.mode in {PublicationMode.PUBLISH, PublicationMode.RETRY},
         }
+    if command == "publish-due":
+        return service.publish_due(limit=args.limit, apply=args.apply)
     if command == "analytics":
         if args.record:
             if not args.apply or not args.post_id:
@@ -181,8 +225,38 @@ def _run_content(service: ContentStudioService, args: argparse.Namespace) -> Any
                 reactions=args.reactions,
                 comments=args.comments,
                 conversion_to_bot=args.conversion_to_bot,
+                starts=args.starts,
+                first_photos=args.first_photos,
+                generations=args.generations,
+                payments=args.payments,
             )
         return service.repository.analytics_summary(args.post_id)
+    if command == "video":
+        generator = VerticalVideoGenerator(
+            service.settings.approved_assets_dir,
+            service.settings.storage_dir,
+        )
+        spec = VerticalVideoSpec(
+            before=args.before,
+            after=args.after,
+            output=args.output,
+            hook=args.hook,
+            cta=args.cta,
+        )
+        command_line = generator.command(spec)
+        if not args.apply:
+            return {
+                "apply": False,
+                "resolution": "1080x1920",
+                "duration_seconds": spec.duration_seconds,
+                "command": command_preview(command_line),
+            }
+        return {
+            "apply": True,
+            "output": str(generator.render(spec)),
+            "resolution": "1080x1920",
+            "duration_seconds": spec.duration_seconds,
+        }
     raise ValueError("unsupported content command")
 
 

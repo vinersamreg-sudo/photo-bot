@@ -8,6 +8,7 @@ MAX user -> MAX API -> Ravuna VPS -> private SQLite/storage
                               -> OpenAI only when manually selected
 Robokassa -> signed ResultURL -> payment/ledger records
 Ravuna VPS -> MAX API -> preview/original delivery
+Content Studio -> approved MAX/Telegram/VK destination (machine-gated demo only)
 ```
 
 Ravuna does not receive full bank-card details.
@@ -36,6 +37,9 @@ Ravuna does not receive full bank-card details.
 - Credentials are passed via stdin where supported, never printed or committed.
 - Secret scans cover tracked/untracked non-ignored repository files before release.
 - Chat-posted credentials are treated as disclosed and not copied into docs/code.
+- Content publishing uses isolated per-platform settings with minimum channel or
+  community rights. MAX may reuse the official Ravuna bot token only for the
+  Ravuna channel; credentials are never stored in Content Studio SQLite.
 
 ## Storage and delivery
 
@@ -69,6 +73,18 @@ Ravuna does not receive full bank-card details.
 Operational output may include counts, booleans, modes, masked references,
 durations and aggregate failure rates. It must not include tokens, passwords,
 MAX IDs, full invoice identifiers, prompts, image bytes or private absolute paths.
+
+Content Studio accepts only rights-verified Ravuna demonstration assets. External
+publishing requires a global flag and a second platform-specific flag, and only
+manifest-verified, machine-approved scheduled posts are eligible. Publication
+errors contain error classes and HTTP status only, never remote bodies, tokens or
+media bytes. The autonomous runtime has separate state and writable paths; its
+access to the product SQLite is `mode=ro`/`query_only` and limited to aggregate
+attribution counts. Customer IDs, prompts, images and payment secrets are neither
+selected nor copied into marketing storage or analytics.
+The approved source root is `marketing/assets/approved/`; runtime copies stay in
+the separate Content Studio storage, and publisher transports reject any media
+path outside it. This is a hard path boundary from private customer storage.
 
 Engineering documentation does not replace legal review. Public legal texts are
 maintained in `site/public/legal/` and must remain consistent with actual data flow.

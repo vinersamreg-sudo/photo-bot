@@ -17,6 +17,9 @@ not authorization to implement.
   `RAVUNA_ALERT_WEBHOOK_URL`, then perform one bounded alert-delivery test.
 - Periodically exercise the encrypted recovery bundle on an isolated host and
   retain off-site evidence; synthetic local restore is the minimum recurring gate.
+- Migrate MAX event ingestion from Long Polling to an HTTPS Webhook in a separate
+  rollout. MAX documents Long Polling as unsuitable for production; preserve a
+  bounded rollback plan and do not combine this migration with incident recovery.
 
 ### Commercial reconciliation
 
@@ -48,9 +51,12 @@ not authorization to implement.
 
 ### Content Studio
 
-- Extend backup/restore coverage to Content Studio state before enabling publish.
 - Use only rights-cleared Ravuna-owned demonstration assets.
-- Keep external publishing disabled until a separate owner decision.
+- Complete the minimum-rights VK user-token authorization for community
+  `ravuna_photo_ai`; VK publishing remains fail-closed until the permission audit
+  confirms wall and video upload rights.
+- Review aggregate seven-day funnel results after the first full week and adjust
+  content weights without reducing the 20% exploration floor.
 
 ## P3
 
