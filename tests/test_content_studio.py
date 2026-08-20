@@ -449,6 +449,7 @@ class ContentStudioTests(unittest.TestCase):
         self.assertIn("WorkingDirectory=/opt/ravuna-content/current", service)
         self.assertIn("ReadWritePaths=/opt/ravuna-content/data", service)
         self.assertIn("ReadOnlyPaths=/opt/photo-bot/data", service)
+        self.assertIn("TimeoutStartSec=20min", service)
         self.assertNotIn("photo-bot.service", service)
         self.assertNotIn("restart", service.lower())
         self.assertIn("OnCalendar=*:0/15", timer)

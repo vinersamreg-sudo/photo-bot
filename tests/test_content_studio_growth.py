@@ -126,6 +126,7 @@ class ContentStudioGrowthTests(unittest.TestCase):
         self.assertIn("1080x1920", joined)
         self.assertIn("xfade", joined)
         self.assertIn("libx264", command)
+        self.assertIn("veryfast", command)
         self.assertIn("yuv420p", command)
         self.assertEqual(command[command.index("-t", command.index("-map")) + 1], "13")
 

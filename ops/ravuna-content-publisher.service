@@ -13,6 +13,7 @@ WorkingDirectory=/opt/ravuna-content/current
 EnvironmentFile=/opt/ravuna-content/.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/ravuna-content/venv/bin/python -m app.content_studio.cli content auto-run --apply
+TimeoutStartSec=20min
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
