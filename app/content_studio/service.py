@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,7 +26,7 @@ from .models import (
     utc_now,
 )
 from .planner import ContentPlanGenerator
-from .publisher import MaxPublisher, PublicationOutcome, PublisherAdapter
+from .publisher import PublicationOutcome, PublisherAdapter
 from .quality import ContentQualityGate
 from .repository import ContentStudioRepository
 from .storage import ContentStorage
@@ -38,17 +38,27 @@ class ContentStudioService:
         settings: ContentStudioSettings,
         *,
         publisher: PublisherAdapter | None = None,
+        publishers: dict[str, PublisherAdapter] | None = None,
     ) -> None:
         self.settings = settings
         self.repository = ContentStudioRepository(settings.database_path)
-        self.storage = ContentStorage(settings.storage_dir)
+        self.storage = ContentStorage(
+            settings.storage_dir, settings.approved_assets_dir
+        )
         self.renderer = BeforeAfterRenderer()
         self.quality = ContentQualityGate()
         self.generator = ContentGenerator(settings.bot_url)
         self.planner = ContentPlanGenerator()
-        self.publisher = publisher or MaxPublisher(
-            publishing_enabled=settings.publishing_enabled
-        )
+        if publisher is not None and publishers is not None:
+            raise ValueError("provide either publisher or publishers")
+        if publishers is None:
+            if publisher is not None:
+                publishers = {publisher.platform: publisher}
+            else:
+                from .transports import build_publishers
+
+                publishers = build_publishers(settings)
+        self.publishers = dict(publishers)
 
     def add_asset(
         self,
@@ -121,8 +131,8 @@ class ContentStudioService:
             raise ValueError("transformation prompt must be non-empty English/ASCII text")
         if not templates or any(template not in TEMPLATES for template in templates):
             raise ValueError("at least one known card template is required")
-        if platform != "max":
-            raise ValueError("v1 implements only the MAX adapter")
+        if platform not in {"max", "telegram", "vk"}:
+            raise ValueError("unsupported Content Studio platform")
         transformation_id = str(uuid4())
         result_id = str(uuid4())
         post_id = str(uuid4())
@@ -196,6 +206,7 @@ class ContentStudioService:
                 published_time=None,
                 platform=platform,
                 utm_url=copy.utm_url,
+                source_code=copy.source_code,
                 generator_prompt_en=copy.internal_prompt_en,
                 created_at=now,
                 updated_at=now,
@@ -262,16 +273,17 @@ class ContentStudioService:
             raise ValueError("scheduled time must be ISO 8601") from error
         if scheduled.tzinfo is None:
             raise ValueError("scheduled time must include a timezone")
+        scheduled_utc = scheduled.astimezone(timezone.utc).isoformat()
         result = {
             "post_id": post_id,
             "from": post["publish_status"],
             "to": PostStatus.SCHEDULED.value,
-            "scheduled_time": scheduled_time,
+            "scheduled_time": scheduled_utc,
             "apply": apply,
         }
         if apply:
             self.repository.transition_post(
-                post_id, PostStatus.SCHEDULED, scheduled_time=scheduled_time
+                post_id, PostStatus.SCHEDULED, scheduled_time=scheduled_utc
             )
         return result
 
@@ -301,7 +313,10 @@ class ContentStudioService:
     ) -> PublicationOutcome:
         post = self.repository.get_post(post_id)
         result = self.repository.get_result(post["result_id"])
-        media_path = result["watermark_preview_path"]
+        media_path = str(self.storage.resolve(result["watermark_preview_path"]))
+        publisher = self.publishers.get(post["platform"])
+        if publisher is None:
+            raise ValueError("Content Studio publisher is unavailable")
         if mode in {
             PublicationMode.MANUAL_PUBLISH,
             PublicationMode.PUBLISH,
@@ -313,21 +328,21 @@ class ContentStudioService:
             raise ValueError("publication requires an approved or scheduled post")
         try:
             if mode is PublicationMode.PREVIEW:
-                outcome = self.publisher.preview(post, media_path)
+                outcome = publisher.preview(post, media_path)
             elif mode is PublicationMode.DRY_RUN:
-                outcome = self.publisher.dry_run(post, media_path)
+                outcome = publisher.dry_run(post, media_path)
             elif mode is PublicationMode.MANUAL_PUBLISH:
                 if not apply:
                     raise ValueError("manual_publish requires --apply and an external id")
-                outcome = self.publisher.manual_publish(post, media_path, external_id or "")
+                outcome = publisher.manual_publish(post, media_path, external_id or "")
             elif mode is PublicationMode.PUBLISH:
                 if not apply:
                     raise ValueError("publish requires --apply")
-                outcome = self.publisher.publish(post, media_path)
+                outcome = publisher.publish(post, media_path)
             elif mode is PublicationMode.RETRY:
                 if not apply:
                     raise ValueError("retry requires --apply")
-                outcome = self.publisher.retry(post, media_path)
+                outcome = publisher.retry(post, media_path)
             else:  # pragma: no cover - enum exhaustiveness
                 raise ValueError("unsupported publication mode")
         except Exception as error:
@@ -366,6 +381,40 @@ class ContentStudioService:
             )
         return outcome
 
+    def publish_due(self, *, limit: int = 10, apply: bool = False) -> dict[str, object]:
+        """Publish a bounded batch of already reviewed posts whose time has arrived."""
+
+        due = self.repository.due_posts(utc_now(), limit)
+        if not apply:
+            return {
+                "apply": False,
+                "due": [post["id"] for post in due],
+                "published": [],
+                "failed": [],
+            }
+        published: list[dict[str, str]] = []
+        failed: list[dict[str, str]] = []
+        for post in due:
+            try:
+                outcome = self.publication(
+                    post["id"], mode=PublicationMode.PUBLISH, apply=True
+                )
+            except Exception as error:
+                failed.append({"post_id": post["id"], "error": type(error).__name__})
+            else:
+                published.append(
+                    {
+                        "post_id": post["id"],
+                        "external_id": outcome.external_id or "",
+                    }
+                )
+        return {
+            "apply": True,
+            "due": [post["id"] for post in due],
+            "published": published,
+            "failed": failed,
+        }
+
     def record_analytics(
         self,
         post_id: str,
@@ -375,6 +424,10 @@ class ContentStudioService:
         reactions: int,
         comments: int,
         conversion_to_bot: int,
+        starts: int = 0,
+        first_photos: int = 0,
+        generations: int = 0,
+        payments: int = 0,
     ) -> dict[str, object]:
         post = self.repository.get_post(post_id)
         if post["publish_status"] != PostStatus.PUBLISHED.value:
@@ -387,11 +440,16 @@ class ContentStudioService:
             reactions=reactions,
             comments=comments,
             conversion_to_bot=conversion_to_bot,
+            starts=starts,
+            first_photos=first_photos,
+            generations=generations,
+            payments=payments,
             utm={
                 "utm_source": post["platform"],
                 "utm_medium": "channel",
                 "utm_campaign": "demo_posts",
                 "utm_content": post_id,
+                "source_code": post["source_code"],
             },
         )
         return self.repository.analytics_summary(post_id)
@@ -402,8 +460,35 @@ class ContentStudioService:
             {
                 "publishing_enabled": self.settings.publishing_enabled,
                 "external_ai_requests": 0,
-                "platform_adapters": ["max"],
-                "mode": "review_first",
+                "approved_assets_configured": self.settings.approved_assets_dir.is_dir(),
+                "daily_publish_time": self.settings.daily_publish_time,
+                "daily_publish_timezone": self.settings.daily_publish_timezone,
+                "platform_adapters": sorted(self.publishers),
+                "platform_publishing_enabled": {
+                    "max": self.settings.max_publishing_enabled,
+                    "telegram": self.settings.telegram_publishing_enabled,
+                    "vk": self.settings.vk_publishing_enabled,
+                },
+                "full_auto_enabled": self.settings.full_auto_enabled,
+                "minimum_queue_days": self.settings.minimum_queue_days,
+                "mode": "full_auto" if self.settings.full_auto_enabled else "review_first",
             }
         )
         return status
+
+    def full_auto_run(
+        self, *, apply: bool = False, now: datetime | None = None
+    ) -> dict[str, object]:
+        from .growth import FullAutoGrowthEngine
+
+        return FullAutoGrowthEngine(self).run(now=now, apply=apply)
+
+    def growth_dashboard(self, *, days: int = 7) -> dict[str, object]:
+        from .growth import FullAutoGrowthEngine
+
+        return FullAutoGrowthEngine(self).dashboard(days=days)
+
+    def publishing_permissions(self) -> dict[str, object]:
+        from .growth import FullAutoGrowthEngine
+
+        return FullAutoGrowthEngine(self).audit_permissions()

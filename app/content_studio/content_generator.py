@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .models import TransformationType
@@ -39,6 +40,7 @@ class GeneratedPostCopy:
     cta: str
     disclosure: str
     utm_url: str
+    source_code: str
     internal_prompt_en: str
 
 
@@ -131,7 +133,10 @@ class ContentGenerator:
         title_override: str | None = None,
     ) -> GeneratedPostCopy:
         template = TEMPLATES[transformation_type]
-        utm_url = build_utm_url(self.bot_url, platform=platform, content=post_id)
+        source_code = build_source_code(platform, post_id)
+        utm_url = build_utm_url(
+            self.bot_url, platform=platform, content=post_id, source_code=source_code
+        )
         title = (title_override or template.title).strip()
         result_lines = "\n".join(f"• {line}" for line in template.results)
         body = (
@@ -153,15 +158,31 @@ class ContentGenerator:
             cta=cta,
             disclosure=DISCLOSURE,
             utm_url=utm_url,
+            source_code=source_code,
             internal_prompt_en=internal_prompt,
         )
 
 
-def build_utm_url(url: str, *, platform: str, content: str) -> str:
+def build_source_code(platform: str, content: str) -> str:
+    platform_code = {"max": "max", "vk": "vk", "telegram": "tg"}.get(platform)
+    if platform_code is None:
+        raise ValueError("unsupported attribution platform")
+    if platform == "vk" and content.startswith("vk-clip-"):
+        platform_code = "vk-clip"
+    elif platform == "vk" and content.startswith("vk-post-"):
+        platform_code = "vk-post"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:10]
+    return f"src_{platform_code}-{digest}"
+
+
+def build_utm_url(
+    url: str, *, platform: str, content: str, source_code: str | None = None
+) -> str:
     parsed = urlsplit(url)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query.update(
         {
+            "start": source_code or build_source_code(platform, content),
             "utm_source": platform,
             "utm_medium": "channel",
             "utm_campaign": "demo_posts",
@@ -181,5 +202,7 @@ def _validate_copy(title: str, body: str, cta: str, internal_prompt: str) -> Non
         raise ValueError("mandatory demonstration disclosure is missing")
     if "utm_source=" not in cta or "utm_medium=" not in cta or "utm_campaign=" not in cta:
         raise ValueError("CTA URL must carry UTM parameters")
+    if "start=src_" not in cta:
+        raise ValueError("CTA URL must carry a MAX bot start source")
     if not internal_prompt.isascii():
         raise ValueError("Content Studio internal prompts must be English/ASCII")

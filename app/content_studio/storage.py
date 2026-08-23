@@ -24,8 +24,13 @@ class StoredImage:
 
 
 class ContentStorage:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, approved_source_root: Path) -> None:
         self.root = root.resolve()
+        self.approved_source_root = approved_source_root.resolve()
+        if self.root == self.approved_source_root or _inside(
+            self.approved_source_root, self.root
+        ):
+            raise ValueError("approved assets must be outside Content Studio runtime storage")
         self.root.mkdir(parents=True, exist_ok=True)
         try:
             self.root.chmod(0o700)
@@ -41,6 +46,10 @@ class ContentStorage:
         stem: str,
     ) -> StoredImage:
         source = source.expanduser().resolve()
+        if not _inside(source, self.approved_source_root):
+            raise ValueError(
+                "Content Studio accepts inputs only from marketing/assets/approved"
+            )
         if not source.is_file() or source.is_symlink():
             raise ValueError("image source must be a regular file")
         with Image.open(source) as image:
@@ -103,3 +112,11 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _inside(candidate: Path, root: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True

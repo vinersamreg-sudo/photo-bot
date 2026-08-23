@@ -66,7 +66,8 @@ Operational reports and payment reconciliation open the existing SQLite file in
 ## Backup and recovery proof
 
 The scheduled backup creates the legacy encrypted SQLite artifact and a separate
-encrypted recovery bundle containing SQLite plus `data/users`. The GitHub runner
+encrypted recovery bundle containing the application SQLite/private storage plus
+the Content Studio SQLite and its rights-cleared media storage. The GitHub runner
 copies and stores only encrypted artifacts and verifies their SHA-256 values; it
 never decrypts production data or runs cleanup. Cleanup is a separate,
 explicitly authorized maintenance operation.
@@ -99,6 +100,55 @@ validates `quick_check`, migration, manifest, encrypted artifact, source revisio
 and expected components, then removes the isolated
 `/var/tmp/ravuna-recovery-proof.*` restore root. The GitHub runner sees and stores
 encrypted artifacts only.
+
+## Content Studio publishing
+
+Content Studio remains globally fail-closed until
+`CONTENT_STUDIO_PUBLISHING_ENABLED=true`. MAX, Telegram and VK each also require
+their own publishing flag, dedicated credential and destination ID. A platform
+cannot borrow another platform's credential. Tokens are excluded from status,
+publication-attempt payloads and errors.
+
+Raw inputs must be present under `marketing/assets/approved/` and listed with a
+rights record. Content Studio copies approved inputs into its isolated
+`data/content_studio/storage`; both ingestion and platform transports reject paths
+outside those roots. Customer `data/users` is never an eligible marketing source.
+
+Every generated CTA uses the official MAX bot deep-link form
+`?start=src_<platform>-<content-hash>` (plus UTMs for external analytics). The
+existing bot attribution parser accepts this bounded payload, so starts, first
+photos, generations and payments can be joined to the Content Studio source code.
+Views remain a platform-side metric and are recorded as aggregate snapshots.
+
+Full-auto mode additionally requires `CONTENT_STUDIO_FULL_AUTO_ENABLED=true`.
+It maintains at least seven future days, rotates all approved themes with a 20%
+exploration floor, and machine-approves only posts whose manifest checksum,
+commercial-use flag, before/after difference, media format, CTA and attribution
+all pass immediately before publication. A failed check leaves the item
+unpublished and records only a safe failure class.
+
+Operator preview and one-cycle execution:
+
+```bash
+venv/bin/python -m app.content_studio.cli content auto-run
+venv/bin/python -m app.content_studio.cli content auto-run --apply
+venv/bin/python -m app.content_studio.cli content dashboard --days 7
+```
+
+The `ravuna-content-publisher.timer` runs the same bounded full-auto cycle every
+15 minutes from `/opt/ravuna-content`, with its own venv, env, SQLite and storage.
+It has read-only access to `/opt/photo-bot/data` for aggregate attribution only;
+it cannot restart or write the product service. Each destination remains
+independently fail-closed until its permission audit and platform flag pass.
+Failed posts remain auditable and are not silently marked published.
+
+MAX publishes one image post daily at 19:00 Samara. VK schedules one vertical
+H.264 1080x1920 video daily at 20:00 and a wall before/after post on Monday,
+Wednesday and Friday at 18:30. Polling every 15 minutes does not increase these
+limits. The official VK wall/video methods require a user token, so
+`CONTENT_STUDIO_VK_TOKEN_TYPE` must remain `user`; unsupported token types fail
+closed. Video generation uses only the separate local FFmpeg runtime and never
+invokes the production image provider or an AI video API.
 
 ## Daily checks
 

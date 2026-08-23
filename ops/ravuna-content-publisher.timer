@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish due approved Ravuna Content Studio posts
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+RandomizedDelaySec=30
+Unit=ravuna-content-publisher.service
+
+[Install]
+WantedBy=timers.target

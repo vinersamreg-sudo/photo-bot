@@ -1,11 +1,8 @@
-"""Platform adapter boundary for review-first publication.
-
-No network transport is constructed by Content Studio v1. Production remains
-fail-closed until both an explicit flag and an injected adapter are present.
-"""
+"""Platform adapter boundary for review-first publication."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -46,30 +43,34 @@ class PublisherAdapter(Protocol):
     def retry(self, post: dict[str, Any], media_path: str) -> PublicationOutcome: ...
 
 
-class MaxPublisher:
-    platform = "max"
-
+class PlatformPublisher:
     def __init__(
         self,
         *,
+        platform: str,
         publishing_enabled: bool = False,
         transport: PlatformTransport | None = None,
     ) -> None:
+        if platform not in {"max", "telegram", "vk"}:
+            raise ValueError("unsupported Content Studio platform")
+        self.platform = platform
         self.publishing_enabled = publishing_enabled
         self.transport = transport
 
     def preview(self, post: dict[str, Any], media_path: str) -> PublicationOutcome:
+        payload = self._payload(post, media_path)
         return PublicationOutcome(
             PublicationMode.PREVIEW,
             "planned",
-            self._payload(post, media_path),
+            _audit_payload(payload),
         )
 
     def dry_run(self, post: dict[str, Any], media_path: str) -> PublicationOutcome:
+        payload = self._payload(post, media_path)
         return PublicationOutcome(
             PublicationMode.DRY_RUN,
             "simulated",
-            self._payload(post, media_path),
+            _audit_payload(payload),
         )
 
     def manual_publish(
@@ -80,7 +81,7 @@ class MaxPublisher:
         return PublicationOutcome(
             PublicationMode.MANUAL_PUBLISH,
             "succeeded",
-            self._payload(post, media_path),
+            _audit_payload(self._payload(post, media_path)),
             external_id.strip(),
         )
 
@@ -88,7 +89,9 @@ class MaxPublisher:
         self._require_transport()
         payload = self._payload(post, media_path)
         external_id = self.transport.publish(payload)  # type: ignore[union-attr]
-        return PublicationOutcome(PublicationMode.PUBLISH, "succeeded", payload, external_id)
+        return PublicationOutcome(
+            PublicationMode.PUBLISH, "succeeded", _audit_payload(payload), external_id
+        )
 
     def retry(self, post: dict[str, Any], media_path: str) -> PublicationOutcome:
         self._require_transport()
@@ -96,31 +99,49 @@ class MaxPublisher:
         external_id = self.transport.retry(  # type: ignore[union-attr]
             payload, post.get("published_external_id")
         )
-        return PublicationOutcome(PublicationMode.RETRY, "succeeded", payload, external_id)
+        return PublicationOutcome(
+            PublicationMode.RETRY, "succeeded", _audit_payload(payload), external_id
+        )
 
     def _require_transport(self) -> None:
         if not self.publishing_enabled:
             raise PublishingDisabledError("Content Studio publishing is disabled")
         if self.transport is None:
-            raise PublishingDisabledError("MAX publisher transport is not configured")
+            raise PublishingDisabledError(
+                f"{self.platform.upper()} publisher transport is not configured"
+            )
 
-    @staticmethod
-    def _payload(post: dict[str, Any], media_path: str) -> dict[str, Any]:
+    def _payload(self, post: dict[str, Any], media_path: str) -> dict[str, Any]:
+        disclosure = str(post.get("disclosure") or "")
         return {
-            "platform": "max",
+            "platform": self.platform,
             "post_id": post["id"],
             "text": f"{post['title']}\n\n{post['body']}\n\n{post['cta']}\n\n{_hashtags(post)}",
             "media_path": media_path,
             "utm_url": post["utm_url"],
-            "demo_disclosure_present": (
-                "Демонстрационный пример Ravuna." in post["body"]
-                and "Изображения созданы специально" in post["body"]
-            ),
+            "source_code": post.get("source_code", ""),
+            "demo_disclosure_present": bool(disclosure and disclosure in post["body"]),
         }
 
 
-def _hashtags(post: dict[str, Any]) -> str:
-    import json
+class MaxPublisher(PlatformPublisher):
+    def __init__(
+        self,
+        *,
+        publishing_enabled: bool = False,
+        transport: PlatformTransport | None = None,
+    ) -> None:
+        super().__init__(
+            platform="max",
+            publishing_enabled=publishing_enabled,
+            transport=transport,
+        )
 
+
+def _hashtags(post: dict[str, Any]) -> str:
     values = json.loads(post["hashtags_json"])
     return " ".join(values)
+
+
+def _audit_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {**payload, "media_path": "<content-studio-media>"}
