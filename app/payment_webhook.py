@@ -10,7 +10,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import parse_qsl, urlsplit
 
-from app.payments import PaymentError, PaymentService, PaymentUnavailable
+from app.payments import (
+    PaymentError,
+    PaymentExpired,
+    PaymentService,
+    PaymentUnavailable,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -69,14 +74,17 @@ class PaymentWebhookServer:
                 *,
                 refresh_url: str | None = None,
                 refresh_seconds: int = 2,
+                action_url: str | None = None,
+                action_label: str = "Обновить состояние",
             ) -> None:
                 refresh = (
                     f'<meta http-equiv="refresh" content="{refresh_seconds};url={escape(refresh_url, quote=True)}">'
                     if refresh_url else ""
                 )
                 action = (
-                    f'<p><a href="{escape(refresh_url, quote=True)}">Обновить состояние</a></p>'
-                    if refresh_url else ""
+                    f'<p><a href="{escape(action_url or refresh_url, quote=True)}">'
+                    f"{escape(action_label)}</a></p>"
+                    if action_url or refresh_url else ""
                 )
                 body = (
                     "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
@@ -132,9 +140,11 @@ class PaymentWebhookServer:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def _max_url(self, token: str, *, failed: bool = False) -> str:
+            def _max_url(
+                self, token: str, *, failed: bool = False, refresh: bool = False
+            ) -> str:
                 separator = "&" if "?" in owner.service.settings.max_bot_url else "?"
-                prefix = "payfail_" if failed else "pay_"
+                prefix = "payrefresh_" if refresh else "payfail_" if failed else "pay_"
                 return f"{owner.service.settings.max_bot_url}{separator}start={prefix}{token}"
 
             def _handle_browser(self, parsed) -> bool:
@@ -160,6 +170,22 @@ class PaymentWebhookServer:
                     if kind == "checkout":
                         self._payment_form(token)
                         return True
+                except PaymentExpired:
+                    if kind == "checkout":
+                        self._page(
+                            410,
+                            "Ссылка на оплату устарела",
+                            "Обновить её можно в Ravuna.",
+                            action_url=self._max_url(token, refresh=True),
+                            action_label="Вернуться в Ravuna",
+                        )
+                        return True
+                    self._page(
+                        404,
+                        "Ссылка недоступна",
+                        "Срок действия ссылки истёк или она неверна.",
+                    )
+                    return True
                 except (PaymentError, PaymentUnavailable):
                     self._page(404, "Ссылка недоступна", "Срок действия ссылки истёк или она неверна.")
                     return True

@@ -1663,6 +1663,119 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.store.get("u1").state, "main_menu")
         self.assertEqual(self.provider.calls, provider_calls)
 
+    def test_expired_checkout_deeplink_refreshes_owner_account_order_once(self) -> None:
+        self.generate_first()
+        self.clock.advance(2)
+        self.callback("result:repeat")
+        paid_app, payments = self.paid_application()
+        account_id = self.store.get("u1").user_id
+        old = payments.create_order(
+            account_id, None, "expired-max-account", account_purchase=True
+        )
+        self.clock.advance(31 * 60)
+        self.sequence += 1
+        refresh = MaxIncomingEvent(
+            "bot_started",
+            f"start:c1:u1:{self.sequence}",
+            "u1",
+            "c1",
+            self.sequence,
+            start_payload=f"payrefresh_{old.public_token}",
+        )
+
+        paid_app.handle(refresh)
+
+        menu = self.transport.messages[-1]
+        buy = menu[2][0]
+        self.assertEqual(buy.text, "Купить пакет — 49 ₽")
+        self.assertRegex(buy.action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
+        self.assertNotEqual(buy.action, payments.short_payment_url(old))
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                2,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT status FROM payment_orders WHERE id=?", (old.id,)
+                ).fetchone()[0],
+                "expired",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants"
+                ).fetchone()[0],
+                0,
+            )
+
+    def test_repeat_payment_button_renews_expired_order_instead_of_reusing_url(self) -> None:
+        self.generate_first()
+        self.clock.advance(2)
+        self.callback("result:repeat")
+        paid_app, payments = self.paid_application()
+        account_id = self.store.get("u1").user_id
+        old = payments.create_order(
+            account_id, None, "expired-failed-return", account_purchase=True
+        )
+        self.clock.advance(31 * 60)
+        self.sequence += 1
+        returned = MaxIncomingEvent(
+            "bot_started",
+            f"start:c1:u1:{self.sequence}",
+            "u1",
+            "c1",
+            self.sequence,
+            start_payload=f"payfail_{old.public_token}",
+        )
+
+        paid_app.handle(returned)
+
+        repeat = self.transport.messages[-1][2][0]
+        self.assertEqual(repeat.text, "Обновить ссылку на оплату")
+        self.assertEqual(repeat.action, f"payment:renew:{old.public_token}")
+        self.assertNotEqual(repeat.action, payments.short_payment_url(old))
+        renew = self.event("message_callback", action=repeat.action)
+        paid_app.handle(renew)
+        self.assertRegex(
+            self.transport.messages[-1][2][0].action,
+            r"^https://ravuna\.ru/p/[0-9a-f]{32}$",
+        )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                2,
+            )
+
+    def test_expired_package_screen_reopen_creates_fresh_exact_version_order(self) -> None:
+        self.generate_first()
+        paid_app, payments = self.paid_application()
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        dialog = self.store.get("u1")
+        with self.database.read() as connection:
+            old = connection.execute(
+                "SELECT * FROM payment_orders ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        self.clock.advance(31 * 60)
+
+        paid_app._show_continuation_pack_offer(
+            self.event("message_callback", action="result:unlock"), dialog
+        )
+
+        with self.database.read() as connection:
+            orders = connection.execute(
+                "SELECT * FROM payment_orders ORDER BY created_at"
+            ).fetchall()
+        self.assertEqual(len(orders), 2)
+        self.assertEqual(orders[0]["status"], "expired")
+        self.assertEqual(orders[1]["status"], "pending")
+        self.assertEqual(orders[1]["version_id"], old["version_id"])
+        self.assertEqual(orders[1]["payment_purpose"], "original_download")
+        self.assertNotEqual(orders[1]["public_token"], old["public_token"])
+        self.assertEqual(
+            self.transport.messages[-1][2][0].action,
+            payments.short_payment_url(payments.order_by_public_token(orders[1]["public_token"])),
+        )
+
     def test_stale_correction_callback_with_zero_edits_opens_checkout_without_prompt(self) -> None:
         self.generate_first()
         self.clock.advance(2)

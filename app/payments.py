@@ -42,6 +42,12 @@ class PaymentUnavailable(PaymentError):
     pass
 
 
+class PaymentExpired(PaymentError):
+    """The opaque checkout token is known, but its order is no longer reusable."""
+
+    pass
+
+
 def _next_provider_invoice_id(connection, now: datetime) -> int:
     """Allocate a merchant-wide invoice id that survives fresh local databases."""
 
@@ -337,6 +343,122 @@ class PaymentService:
             raise PaymentUnavailable("Payments are disabled")
         return self.provider
 
+    def is_reusable_order(
+        self, order: PaymentOrder, *, now: datetime | None = None
+    ) -> bool:
+        """Return the single canonical definition of an active checkout order."""
+
+        current = now or self.clock()
+        return (
+            order.status is PaymentStatus.PENDING
+            and order.expires_at > current
+        )
+
+    def _expire_order_locked(self, connection, row, now: datetime) -> bool:
+        """Idempotently expire one pending order and its intent at the boundary."""
+
+        order = _row_order(row)
+        if order.status is not PaymentStatus.PENDING or order.expires_at > now:
+            return False
+        updated = connection.execute(
+            """UPDATE payment_orders
+               SET status='expired',updated_at=?,failure_code='expired'
+               WHERE id=? AND status='pending' AND expires_at<=?""",
+            (_iso(now), order.id, _iso(now)),
+        )
+        if updated.rowcount != 1:
+            return False
+        connection.execute(
+            """UPDATE payment_intents SET status='expired',updated_at=?
+               WHERE id=? AND status='pending'""",
+            (_iso(now), order.intent_id),
+        )
+        self._audit(
+            connection,
+            order.id,
+            "checkout_expired",
+            PaymentStatus.PENDING.value,
+            PaymentStatus.EXPIRED.value,
+            order.purpose,
+            "application",
+        )
+        return True
+
+    def _expire_pending_orders_locked(
+        self, connection, user_id: str, now: datetime
+    ) -> int:
+        rows = connection.execute(
+            """SELECT * FROM payment_orders
+               WHERE user_id=? AND product_code=? AND status='pending'
+                 AND expires_at<=?""",
+            (user_id, PRODUCT_CODE, _iso(now)),
+        ).fetchall()
+        return sum(
+            int(self._expire_order_locked(connection, row, now)) for row in rows
+        )
+
+    def _reusable_order_row_locked(
+        self,
+        connection,
+        user_id: str,
+        version_id: str | None,
+        pending_request_id: str | None,
+        account_purchase: bool,
+        now: datetime,
+    ):
+        if account_purchase:
+            return connection.execute(
+                """SELECT * FROM payment_orders
+                   WHERE user_id=? AND product_code=? AND status='pending'
+                     AND expires_at>? AND pending_request_id IS NULL
+                     AND COALESCE(version_id,'')=''
+                   ORDER BY created_at DESC LIMIT 1""",
+                (user_id, PRODUCT_CODE, _iso(now)),
+            ).fetchone()
+        return connection.execute(
+            """SELECT * FROM payment_orders
+               WHERE user_id=? AND product_code=? AND status='pending'
+                 AND expires_at>?
+                 AND ((? IS NOT NULL AND pending_request_id=?)
+                      OR (? IS NOT NULL AND pending_request_id IS NULL AND version_id=?))
+               ORDER BY created_at DESC LIMIT 1""",
+            (
+                user_id,
+                PRODUCT_CODE,
+                _iso(now),
+                pending_request_id,
+                pending_request_id,
+                version_id,
+                version_id,
+            ),
+        ).fetchone()
+
+    def reusable_order_for_target(
+        self,
+        user_id: str,
+        version_id: str | None,
+        *,
+        pending_request_id: str | None = None,
+        account_purchase: bool = False,
+    ) -> PaymentOrder | None:
+        """Find an exact target-scoped reusable order and expire stale rows."""
+
+        if sum(bool(value) for value in (version_id, pending_request_id, account_purchase)) != 1:
+            raise PaymentError("Exactly one payment target is required")
+        now = self.clock()
+        with self.database.transaction() as connection:
+            self._expire_pending_orders_locked(connection, user_id, now)
+            row = self._reusable_order_row_locked(
+                connection,
+                user_id,
+                version_id,
+                pending_request_id,
+                account_purchase,
+                now,
+            )
+        order = _row_order(row) if row is not None else None
+        return order if order is not None and self.is_reusable_order(order, now=now) else None
+
     def order_by_invoice(self, provider_invoice_id: int) -> PaymentOrder:
         """Resolve an operator-supplied invoice without exposing signed URLs."""
 
@@ -364,6 +486,30 @@ class PaymentService:
         if row is None:
             raise PaymentError("Payment order was not found")
         return _row_order(row)
+
+    def reusable_order_by_public_token(self, public_token: str) -> PaymentOrder:
+        """Resolve an active checkout or idempotently expire the known order."""
+
+        token = public_token.strip()
+        if len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token):
+            raise PaymentError("Payment link is invalid")
+        now = self.clock()
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM payment_orders WHERE public_token=?", (token,)
+            ).fetchone()
+            if row is None:
+                raise PaymentError("Payment order was not found")
+            self._expire_order_locked(connection, row, now)
+            current = connection.execute(
+                "SELECT * FROM payment_orders WHERE id=?", (row["id"],)
+            ).fetchone()
+        order = _row_order(current)
+        if order.status is PaymentStatus.EXPIRED:
+            raise PaymentExpired("Payment link is no longer active")
+        if not self.is_reusable_order(order, now=now):
+            raise PaymentError("Payment link is no longer active")
+        return order
 
     def order_for_platform_user(
         self, public_token: str, platform_user_id: str
@@ -413,18 +559,78 @@ class PaymentService:
     def payment_redirect_url(self, public_token: str) -> str:
         """Return the signed provider URL for an existing active order only."""
 
-        order = self.order_by_public_token(public_token)
-        if order.status is not PaymentStatus.PENDING or self.clock() >= order.expires_at:
-            raise PaymentError("Payment link is no longer active")
+        order = self.reusable_order_by_public_token(public_token)
         return self._provider_payment_url(order)
 
     def payment_redirect_form(self, public_token: str) -> RobokassaPaymentForm:
         """Return signed POST fields for an existing active order only."""
 
-        order = self.order_by_public_token(public_token)
-        if order.status is not PaymentStatus.PENDING or self.clock() >= order.expires_at:
-            raise PaymentError("Payment link is no longer active")
+        order = self.reusable_order_by_public_token(public_token)
         return self._provider_payment_form(order)
+
+    def refresh_order_for_platform_user(
+        self, public_token: str, platform_user_id: str
+    ) -> PaymentOrder:
+        """Refresh an expired checkout only after MAX proves the current owner."""
+
+        previous = self.order_for_platform_user(public_token, platform_user_id)
+        if self.is_reusable_order(previous):
+            return previous
+        if previous.status is PaymentStatus.PENDING:
+            try:
+                self.reusable_order_by_public_token(public_token)
+            except PaymentExpired:
+                pass
+            previous = self.order_for_platform_user(public_token, platform_user_id)
+        if previous.status is not PaymentStatus.EXPIRED:
+            raise PaymentError("Payment order cannot be refreshed")
+
+        if previous.purpose == "account_topup":
+            if previous.version_id or previous.pending_request_id:
+                raise PaymentError("Payment target is invalid")
+            refreshed = self.create_order(
+                previous.user_id,
+                None,
+                f"checkout-refresh:{previous.id}",
+                account_purchase=True,
+            )
+        elif previous.purpose == "processing_request":
+            if previous.version_id or not previous.pending_request_id:
+                raise PaymentError("Payment target is invalid")
+            refreshed = self.create_order(
+                previous.user_id,
+                None,
+                f"checkout-refresh:{previous.id}",
+                pending_request_id=previous.pending_request_id,
+            )
+        elif previous.purpose == "original_download":
+            if previous.pending_request_id or not previous.version_id:
+                raise PaymentError("Payment target is invalid")
+            refreshed = self.create_order(
+                previous.user_id,
+                previous.version_id,
+                f"checkout-refresh:{previous.id}",
+            )
+        else:
+            raise PaymentError("Payment purpose is invalid")
+
+        with self.database.transaction() as connection:
+            exists = connection.execute(
+                """SELECT 1 FROM payment_audit
+                   WHERE order_id=? AND event_type='checkout_refreshed'""",
+                (previous.id,),
+            ).fetchone()
+            if exists is None:
+                self._audit(
+                    connection,
+                    previous.id,
+                    "checkout_refreshed",
+                    PaymentStatus.EXPIRED.value,
+                    PaymentStatus.PENDING.value,
+                    previous.purpose,
+                    "max",
+                )
+        return refreshed
 
     def create_order(
         self,
@@ -514,37 +720,19 @@ class PaymentService:
                 ):
                     raise PaymentError("Payment idempotency key conflict")
                 order = _row_order(replay)
+                if not self.is_reusable_order(order, now=now):
+                    self._expire_order_locked(connection, replay, now)
+                    raise PaymentExpired("Payment order is no longer reusable")
             else:
-                connection.execute(
-                    """UPDATE payment_orders SET status=?,updated_at=?,failure_code='expired'
-                       WHERE user_id=? AND product_code=? AND status=? AND expires_at<?""",
-                    (
-                        PaymentStatus.EXPIRED.value, _iso(now), user_id, PRODUCT_CODE,
-                        PaymentStatus.PENDING.value, _iso(now),
-                    ),
+                self._expire_pending_orders_locked(connection, user_id, now)
+                existing = self._reusable_order_row_locked(
+                    connection,
+                    user_id,
+                    version_id,
+                    pending_request_id,
+                    account_purchase,
+                    now,
                 )
-                if account_purchase:
-                    existing = connection.execute(
-                        """SELECT * FROM payment_orders
-                           WHERE user_id=? AND product_code=? AND status='pending'
-                             AND expires_at>=? AND pending_request_id IS NULL
-                             AND COALESCE(version_id,'')=''
-                           ORDER BY created_at DESC LIMIT 1""",
-                        (user_id, PRODUCT_CODE, _iso(now)),
-                    ).fetchone()
-                else:
-                    existing = connection.execute(
-                        """SELECT * FROM payment_orders
-                           WHERE user_id=? AND product_code=? AND status='pending' AND expires_at>=?
-                             AND ((? IS NOT NULL AND pending_request_id=?)
-                                  OR (? IS NOT NULL AND pending_request_id IS NULL AND version_id=?))
-                           ORDER BY created_at DESC LIMIT 1""",
-                        (
-                            user_id, PRODUCT_CODE, _iso(now),
-                            pending_request_id, pending_request_id,
-                            version_id, version_id,
-                        ),
-                    ).fetchone()
                 if existing is not None:
                     order = _row_order(existing)
                 else:
