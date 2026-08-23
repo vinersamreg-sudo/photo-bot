@@ -25,10 +25,14 @@ from .models import (
     TransformationType,
     utc_now,
 )
+from .novelty import DuplicateContentError, DuplicateNoveltyGate
 from .planner import ContentPlanGenerator
 from .publisher import PublicationOutcome, PublisherAdapter
 from .quality import ContentQualityGate
-from .repository import ContentStudioRepository
+from .repository import (
+    ContentStudioRepository,
+    PublicationClaimConflictError,
+)
 from .storage import ContentStorage
 
 
@@ -49,6 +53,7 @@ class ContentStudioService:
         self.quality = ContentQualityGate()
         self.generator = ContentGenerator(settings.bot_url)
         self.planner = ContentPlanGenerator()
+        self.novelty = DuplicateNoveltyGate(self.repository, self.storage)
         if publisher is not None and publishers is not None:
             raise ValueError("provide either publisher or publishers")
         if publishers is None:
@@ -326,26 +331,77 @@ class ContentStudioService:
             PostStatus.SCHEDULED.value,
         }:
             raise ValueError("publication requires an approved or scheduled post")
+        if mode is PublicationMode.MANUAL_PUBLISH and not apply:
+            raise ValueError("manual_publish requires --apply and an external id")
+        if mode in {PublicationMode.PUBLISH, PublicationMode.RETRY} and not apply:
+            raise ValueError(f"{mode.value} requires --apply")
+        real_mode = mode in {
+            PublicationMode.MANUAL_PUBLISH,
+            PublicationMode.PUBLISH,
+            PublicationMode.RETRY,
+        }
+        fingerprint = None
+        novelty_score = 1.0
+        claim_token = None
+        if real_mode:
+            self.novelty.ensure_published_history()
+            candidate_metadata = self.repository.novelty_candidate(post_id)
+            fingerprint, decision = self.novelty.evaluate(
+                post_id,
+                alternative_categories=self.repository.unpublished_asset_categories(
+                    str(candidate_metadata["platform"]),
+                    excluding_checksum=str(candidate_metadata["asset_checksum"]),
+                ),
+            )
+            novelty_score = decision.score
+            if not decision.allowed:
+                reason = decision.reason or "duplicate_content"
+                self.repository.record_novelty_event(
+                    str(uuid4()),
+                    post_id=post_id,
+                    platform=post["platform"],
+                    asset_checksum=fingerprint.asset_checksum,
+                    scheduled_time=fingerprint.scheduled_time,
+                    reason=reason,
+                    novelty_score=decision.score,
+                )
+                self.repository.add_publication_attempt(
+                    str(uuid4()),
+                    post_id,
+                    post["platform"],
+                    mode.value,
+                    "failed",
+                    {"post_id": post_id, "platform": post["platform"]},
+                    error_safe=f"novelty_{reason}",
+                )
+                self.repository.transition_post(
+                    post_id,
+                    PostStatus.ARCHIVED,
+                    last_error=f"novelty_{reason}",
+                )
+                raise DuplicateContentError(reason)
+            if post["publish_status"] == PostStatus.SCHEDULED.value:
+                claim_token = str(uuid4())
+                if not self.repository.claim_publication(post_id, claim_token):
+                    raise PublicationClaimConflictError(
+                        "scheduled publication is already claimed"
+                    )
         try:
             if mode is PublicationMode.PREVIEW:
                 outcome = publisher.preview(post, media_path)
             elif mode is PublicationMode.DRY_RUN:
                 outcome = publisher.dry_run(post, media_path)
             elif mode is PublicationMode.MANUAL_PUBLISH:
-                if not apply:
-                    raise ValueError("manual_publish requires --apply and an external id")
                 outcome = publisher.manual_publish(post, media_path, external_id or "")
             elif mode is PublicationMode.PUBLISH:
-                if not apply:
-                    raise ValueError("publish requires --apply")
                 outcome = publisher.publish(post, media_path)
             elif mode is PublicationMode.RETRY:
-                if not apply:
-                    raise ValueError("retry requires --apply")
                 outcome = publisher.retry(post, media_path)
             else:  # pragma: no cover - enum exhaustiveness
                 raise ValueError("unsupported publication mode")
         except Exception as error:
+            if claim_token is not None:
+                self.repository.release_publication_claim(post_id, claim_token)
             if mode in {PublicationMode.PUBLISH, PublicationMode.RETRY} and apply:
                 self.repository.add_publication_attempt(
                     str(uuid4()),
@@ -357,7 +413,7 @@ class ContentStudioService:
                     error_safe=type(error).__name__,
                 )
             raise
-        if mode in {PublicationMode.PREVIEW, PublicationMode.DRY_RUN} or apply:
+        if mode in {PublicationMode.PREVIEW, PublicationMode.DRY_RUN}:
             self.repository.add_publication_attempt(
                 str(uuid4()),
                 post_id,
@@ -367,17 +423,32 @@ class ContentStudioService:
                 outcome.payload,
                 external_id=outcome.external_id,
             )
-        if outcome.status == "succeeded" and mode in {
-            PublicationMode.MANUAL_PUBLISH,
-            PublicationMode.PUBLISH,
-            PublicationMode.RETRY,
-        }:
-            self.repository.transition_post(
-                post_id,
-                PostStatus.PUBLISHED,
-                published_time=utc_now(),
+        elif outcome.status == "succeeded" and real_mode:
+            if fingerprint is None or not outcome.external_id:
+                raise ValueError("publication result is missing novelty or external metadata")
+            self.repository.complete_publication(
+                attempt_id=str(uuid4()),
+                post_id=post_id,
+                platform=post["platform"],
+                mode=mode.value,
+                payload=outcome.payload,
                 external_id=outcome.external_id,
+                fingerprint=fingerprint.record(),
+                novelty_score=novelty_score,
+                claim_token=claim_token,
                 increment_retry=mode is PublicationMode.RETRY,
+            )
+        elif apply:
+            if claim_token is not None:
+                self.repository.release_publication_claim(post_id, claim_token)
+            self.repository.add_publication_attempt(
+                str(uuid4()),
+                post_id,
+                post["platform"],
+                mode.value,
+                outcome.status,
+                outcome.payload,
+                external_id=outcome.external_id,
             )
         return outcome
 

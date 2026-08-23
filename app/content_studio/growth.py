@@ -13,7 +13,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.database import ReadOnlyDatabase
 
-from .content_generator import DISCLOSURE, build_source_code, build_utm_url
+from .novelty import MAX_CANDIDATE_ATTEMPTS
+from .repository import PublicationSlotConflictError
 from .models import (
     ContentCategory,
     ContentPlanEntry,
@@ -112,14 +113,28 @@ class FullAutoGrowthEngine:
         ideas = self._idea_pool(today, optimization)
         selected = self._select_assets(
             today,
-            self.settings.minimum_queue_days + 1,
+            len(self.library),
             optimization,
             ideas=ideas,
         )
+        if apply:
+            self.service.novelty.ensure_published_history()
         created: list[str] = []
         skipped: list[dict[str, str]] = []
         plan_entries: list[ContentPlanEntry] = []
-        for offset, asset in enumerate(selected):
+        reservations = {
+            platform: self.repository.reserved_asset_checksums(platform)
+            for platform in ("max", "vk", "telegram")
+        }
+        recent_categories = {
+            platform: list(
+                reversed(
+                    self.repository.recent_publication_categories(platform, limit=3)
+                )
+            )
+            for platform in ("max", "vk", "telegram")
+        }
+        for offset in range(self.settings.minimum_queue_days + 1):
             planned = today + timedelta(days=offset)
             specs = [
                 ("max", "image", self.settings.max_daily_publish_time),
@@ -128,6 +143,63 @@ class FullAutoGrowthEngine:
             if planned.weekday() in {0, 2, 4}:
                 specs.append(("vk", "image", self.settings.vk_wall_publish_time))
             for platform, media_kind, clock in specs:
+                scheduled = datetime.combine(
+                    planned,
+                    datetime.strptime(clock, "%H:%M").time(),
+                    tzinfo=self.timezone,
+                ).astimezone(timezone.utc).isoformat()
+                if self.repository.slot_has_post(platform, scheduled):
+                    continue
+                rotated = selected[offset % len(selected) :] + selected[: offset % len(selected)]
+                available = [
+                    item for item in rotated if item.sha256 not in reservations[platform]
+                ]
+                asset = None
+                category_saturated = False
+                for candidate in rotated[:MAX_CANDIDATE_ATTEMPTS]:
+                    if candidate.sha256 in reservations[platform]:
+                        continue
+                    alternatives = {
+                        item.category.value
+                        for item in available
+                        if item.sha256 != candidate.sha256
+                    }
+                    if (
+                        len(recent_categories[platform][-3:]) == 3
+                        and all(
+                            category == candidate.category.value
+                            for category in recent_categories[platform][-3:]
+                        )
+                        and alternatives - {candidate.category.value}
+                    ):
+                        category_saturated = True
+                        continue
+                    asset = candidate
+                    break
+                if asset is None:
+                    rejection_reason = (
+                        "recent_category_saturation"
+                        if available and category_saturated
+                        else "candidate_pool_exhausted"
+                    )
+                    skipped.append(
+                        {
+                            "asset": "",
+                            "platform": platform,
+                            "error": rejection_reason,
+                        }
+                    )
+                    if apply:
+                        self.repository.record_novelty_event(
+                            _stable_id(
+                                "novelty-skip",
+                                f"{platform}:{scheduled}:{rejection_reason}",
+                            ),
+                            platform=platform,
+                            scheduled_time=scheduled,
+                            reason=rejection_reason,
+                        )
+                    continue
                 try:
                     post_id = self._ensure_post(
                         asset,
@@ -148,6 +220,8 @@ class FullAutoGrowthEngine:
                     continue
                 if post_id:
                     created.append(post_id)
+                    reservations[platform].add(asset.sha256)
+                    recent_categories[platform].append(asset.category.value)
                     plan_entries.append(
                         ContentPlanEntry(
                             id=_stable_id("plan", post_id),
@@ -400,20 +474,15 @@ class FullAutoGrowthEngine:
             datetime.strptime(clock, "%H:%M").time(),
             tzinfo=self.timezone,
         ).astimezone(timezone.utc)
-        source_code = build_source_code(platform, post_id)
-        utm_url = build_utm_url(
-            self.settings.bot_url,
+        copy = self.service.generator.generate_demo_case(
+            asset.transformation,
+            post_id=post_id,
             platform=platform,
-            content=post_id,
-            source_code=source_code,
+            title=asset.title,
+            hook=asset.hook,
+            prompt_example=asset.prompt_example,
+            hashtags=asset.hashtags,
         )
-        title = asset.hook
-        body = (
-            f"Пример запроса: «{asset.prompt_example}»\n\n"
-            "Показываем конкретный результат до и после — без сложных настроек.\n\n"
-            f"{DISCLOSURE}"
-        )
-        cta = f"👇 Попробовать Ravuna:\n{utm_url}"
         transformation_id = _stable_id("transformation", post_id)
         result_id = _stable_id("result", post_id)
         now = utc_now()
@@ -455,18 +524,18 @@ class FullAutoGrowthEngine:
         post = DemoPost(
             id=post_id,
             result_id=result_id,
-            title=title,
-            body=body,
-            hashtags=asset.hashtags,
-            cta=cta,
-            disclosure=DISCLOSURE,
+            title=copy.title,
+            body=copy.body,
+            hashtags=copy.hashtags,
+            cta=copy.cta,
+            disclosure=copy.disclosure,
             publish_status=PostStatus.NEEDS_REVIEW,
             scheduled_time=None,
             published_time=None,
             platform=platform,
-            utm_url=utm_url,
-            source_code=source_code,
-            generator_prompt_en=f"Deterministic full-auto copy for {asset.theme}.",
+            utm_url=copy.utm_url,
+            source_code=copy.source_code,
+            generator_prompt_en=copy.internal_prompt_en,
             created_at=now,
             updated_at=now,
         )
@@ -476,9 +545,25 @@ class FullAutoGrowthEngine:
             "automatic_quality_gate",
             "Rights manifest, image difference, CTA and attribution validation passed.",
         )
-        self.repository.transition_post(
-            post_id, PostStatus.SCHEDULED, scheduled_time=scheduled.isoformat()
-        )
+        try:
+            self.repository.transition_post(
+                post_id, PostStatus.SCHEDULED, scheduled_time=scheduled.isoformat()
+            )
+        except PublicationSlotConflictError:
+            self.repository.transition_post(
+                post_id,
+                PostStatus.ARCHIVED,
+                last_error="novelty_publication_slot_conflict",
+            )
+            self.repository.record_novelty_event(
+                _stable_id("novelty-slot", post_id),
+                post_id=post_id,
+                platform=platform,
+                asset_checksum=asset.sha256,
+                scheduled_time=scheduled.isoformat(),
+                reason="publication_slot_conflict",
+            )
+            return None
         return post_id
 
     def _validate_staged_post(self, post_id: str) -> None:
@@ -614,8 +699,6 @@ class FullAutoGrowthEngine:
         candidates = [item for item in unseen if item.id not in selected_ids]
         for index, item in enumerate(candidates[:missing_exploration]):
             selected[-(index + 1)] = item
-        while len(selected) < count:
-            selected.append(ordered[len(selected) % len(ordered)])
         return selected
 
     def _funnel_by_campaign(self, campaigns: list[str]) -> dict[str, dict[str, int]]:

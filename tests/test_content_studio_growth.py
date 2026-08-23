@@ -164,7 +164,7 @@ class ContentStudioGrowthTests(unittest.TestCase):
         self.assertIn("if(lt(t,4),0,iw/2)", joined)
         self.assertEqual(command[command.index("-threads") + 1], "1")
 
-    def test_full_auto_apply_builds_an_idempotent_eight_day_queue(self) -> None:
+    def test_full_auto_apply_builds_an_idempotent_unique_asset_queue(self) -> None:
         settings = ContentStudioSettings(
             base_dir=self.root / "content",
             database_path=self.root / "content" / "content.sqlite3",
@@ -200,16 +200,20 @@ class ContentStudioGrowthTests(unittest.TestCase):
         self.assertEqual(
             first["idea_types"], ["before_after", "practical_tip", "prompt_example"]
         )
-        self.assertEqual(len(first["created_posts"]), 19)
-        self.assertEqual(first["days_queued"], 7)
+        self.assertEqual(len(first["created_posts"]), 14)
+        self.assertEqual(first["days_queued"], 6)
+        self.assertTrue(
+            all(item["error"] == "candidate_pool_exhausted" for item in first["skipped"])
+        )
         self.assertEqual(second["created_posts"], [])
-        self.assertEqual(service.status()["posts"], 19)
+        self.assertEqual(second["skipped"], [])
+        self.assertEqual(service.status()["posts"], 14)
         self.assertEqual(service.status()["assets"], 7)
         posts = service.repository.queue(limit=100)
         self.assertTrue(all(post["publish_status"] == "scheduled" for post in posts))
-        self.assertEqual(sum(post["platform"] == "max" for post in posts), 8)
-        self.assertEqual(sum(post["id"].startswith("vk-clip-") for post in posts), 8)
-        self.assertEqual(sum(post["id"].startswith("vk-post-") for post in posts), 3)
+        self.assertEqual(sum(post["platform"] == "max" for post in posts), 7)
+        self.assertEqual(sum(post["id"].startswith("vk-clip-") for post in posts), 5)
+        self.assertEqual(sum(post["id"].startswith("vk-post-") for post in posts), 2)
         self.assertTrue(all(str(post["source_code"]).startswith("src_") for post in posts))
 
     def test_growth_funnel_reads_only_aggregate_attribution_without_db_mutation(self) -> None:
@@ -292,7 +296,9 @@ class ContentStudioGrowthTests(unittest.TestCase):
         engine.video = FakeVideo()
         engine.quality.assess_video = assess_video
         result = engine.maintain_queue(now=now, apply=True)
-        self.assertEqual(result["skipped"], [])
+        self.assertTrue(
+            all(item["error"] == "candidate_pool_exhausted" for item in result["skipped"])
+        )
         self.assertEqual(renders.count(output), 1)
         self.assertEqual(output.read_bytes(), b"valid-video")
 

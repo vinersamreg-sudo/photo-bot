@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
+from threading import Event
 
 from PIL import Image, ImageDraw
 
@@ -22,6 +25,10 @@ from app.content_studio.models import (
     TransformationType,
 )
 from app.content_studio.publisher import MaxPublisher, PublishingDisabledError
+from app.content_studio.repository import (
+    PublicationClaimConflictError,
+    PublicationSlotConflictError,
+)
 from app.content_studio.service import ContentStudioService
 
 
@@ -37,6 +44,20 @@ class FakeTransport:
     def retry(self, payload, previous_external_id):
         self.retried += 1
         return "max-post-2"
+
+
+class BlockingTransport:
+    def __init__(self) -> None:
+        self.published = 0
+        self.entered = Event()
+        self.release = Event()
+
+    def publish(self, payload):
+        self.published += 1
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise TimeoutError("synthetic transport wait expired")
+        return "max-post-concurrent"
 
 
 class ContentStudioTests(unittest.TestCase):
@@ -95,6 +116,8 @@ class ContentStudioTests(unittest.TestCase):
             connection.close()
         self.assertIn("demo_assets", tables)
         self.assertIn("demo_posts", tables)
+        self.assertIn("content_publication_history", tables)
+        self.assertIn("content_novelty_events", tables)
         self.assertNotIn("users", tables)
         self.assertNotIn("gallery_versions", tables)
         self.assertNotIn("payment_orders", tables)
@@ -131,10 +154,87 @@ class ContentStudioTests(unittest.TestCase):
         self.assertEqual(preserved[0], "preserved")
         self.assertEqual(migration[0], "post_generator_prompt_metadata")
 
+    def test_v5_migration_is_repeatable_and_does_not_touch_product_database(self) -> None:
+        from app.content_studio.repository import ContentStudioRepository
+
+        production_database = self.root / "product.sqlite3"
+        connection = sqlite3.connect(production_database)
+        try:
+            connection.execute("CREATE TABLE sentinel(value TEXT NOT NULL)")
+            connection.execute("INSERT INTO sentinel(value) VALUES('unchanged')")
+            connection.commit()
+        finally:
+            connection.close()
+        product_before = hashlib.sha256(production_database.read_bytes()).hexdigest()
+        studio_database = self.root / "repeatable" / "content.sqlite3"
+        isolated_settings = ContentStudioSettings(
+            base_dir=self.root / "repeatable",
+            database_path=studio_database,
+            storage_dir=self.root / "repeatable" / "storage",
+            approved_assets_dir=self.approved,
+            production_database_path=production_database,
+        )
+        isolated_service = ContentStudioService(isolated_settings)
+        asset = isolated_service.add_asset(
+            self.before,
+            title="Synthetic rollback fixture",
+            description="Created for migration compatibility testing",
+            category=ContentCategory.PORTRAIT,
+        )
+        generated = isolated_service.generate(
+            asset_id=asset.id,
+            after_image=self.after,
+            transformation_type=TransformationType.PORTRAIT,
+            prompt_en="Create a synthetic migration fixture.",
+        )
+        isolated_service.approve(
+            generated["post_id"], reviewer="owner", reason="fixture", apply=True
+        )
+        isolated_service.schedule(
+            generated["post_id"], "2026-08-23T19:00:00+04:00", apply=True
+        )
+        rolled_back = sqlite3.connect(studio_database)
+        try:
+            rolled_back.execute(
+                "UPDATE demo_posts SET scheduled_time=? WHERE id=?",
+                ("2026-08-24T15:00:00+00:00", generated["post_id"]),
+            )
+            rolled_back.commit()
+        finally:
+            rolled_back.close()
+        first = ContentStudioRepository(studio_database)
+        studio_after_first = hashlib.sha256(studio_database.read_bytes()).hexdigest()
+        second = ContentStudioRepository(studio_database)
+        studio_after_second = hashlib.sha256(studio_database.read_bytes()).hexdigest()
+        connection = second.connect()
+        try:
+            migrations = connection.execute(
+                "SELECT COUNT(*) FROM content_schema_migrations WHERE version=5"
+            ).fetchone()[0]
+            quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+            slot_rows = connection.execute(
+                "SELECT COUNT(*) FROM content_publication_slots"
+            ).fetchone()[0]
+            repaired_slot = connection.execute(
+                "SELECT scheduled_time FROM content_publication_slots WHERE post_id=?",
+                (generated["post_id"],),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertIsNotNone(first)
+        self.assertEqual(studio_after_second, studio_after_first)
+        self.assertEqual((migrations, quick_check, slot_rows), (1, "ok", 1))
+        self.assertEqual(repaired_slot, "2026-08-24T15:00:00+00:00")
+        self.assertEqual(
+            hashlib.sha256(production_database.read_bytes()).hexdigest(),
+            product_before,
+        )
+
     def test_status_starts_safe_and_empty(self) -> None:
         status = self.service.status()
         self.assertEqual(status["quick_check"], "ok")
         self.assertEqual(status["published_posts"], 0)
+        self.assertEqual(status["schema_version"], 5)
         self.assertFalse(status["publishing_enabled"])
         self.assertEqual(status["external_ai_requests"], 0)
 
@@ -259,6 +359,110 @@ class ContentStudioTests(unittest.TestCase):
             generated["post_id"], "2026-07-22T09:00:00+04:00", apply=True
         )
         self.assertTrue(result["apply"])
+
+    def test_parallel_schedulers_cannot_reserve_the_same_persistent_slot(self) -> None:
+        first = self.generate()
+        second_before = self.approved / "second-before.png"
+        second_after = self.approved / "second-after.png"
+        _image(second_before, "#D3C2A8", "#31597A", 35)
+        _image(second_after, "#D8E7EE", "#3B7048", 175)
+        second_asset = self.service.add_asset(
+            second_before,
+            title="Второй синтетический пример",
+            description="Создан специально для Ravuna",
+            category=ContentCategory.RESTORE,
+        )
+        second = self.generate(
+            asset=second_asset,
+            after_image=second_after,
+            transformation_type=TransformationType.RESTORE_PHOTO,
+            prompt_en="Restore this synthetic demonstration photograph.",
+        )
+        for generated in (first, second):
+            self.service.approve(
+                generated["post_id"], reviewer="owner", reason="checked", apply=True
+            )
+
+        def reserve(post_id: str) -> str:
+            try:
+                self.service.schedule(
+                    post_id, "2026-08-23T19:00:00+04:00", apply=True
+                )
+            except PublicationSlotConflictError:
+                return "conflict"
+            return "scheduled"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(reserve, (first["post_id"], second["post_id"])))
+
+        self.assertEqual(sorted(outcomes), ["conflict", "scheduled"])
+        connection = self.service.repository.connect()
+        try:
+            slots = connection.execute(
+                "SELECT platform,scheduled_time,COUNT(*) FROM content_publication_slots GROUP BY 1,2"
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual(len(slots), 1)
+        self.assertEqual(slots[0][2], 1)
+        scheduled_post = (first["post_id"], second["post_id"])[outcomes.index("scheduled")]
+        legacy_duplicate = (first["post_id"], second["post_id"])[outcomes.index("conflict")]
+        connection = self.service.repository.connect()
+        try:
+            connection.execute(
+                """UPDATE demo_posts SET publish_status='scheduled',scheduled_time=?
+                   WHERE id=?""",
+                ("2026-08-23T15:00:00+00:00", legacy_duplicate),
+            )
+        finally:
+            connection.close()
+        self.service.repository.transition_post(scheduled_post, PostStatus.ARCHIVED)
+        self.assertEqual(
+            self.service.repository.publication_slot_owner(
+                "max", "2026-08-23T15:00:00+00:00"
+            ),
+            legacy_duplicate,
+        )
+
+    def test_parallel_timer_jobs_claim_one_scheduled_send_before_transport(self) -> None:
+        generated = self.generate()
+        self.service.approve(
+            generated["post_id"], reviewer="owner", reason="checked", apply=True
+        )
+        self.service.schedule(
+            generated["post_id"], "2020-01-01T00:00:00+00:00", apply=True
+        )
+        transport = BlockingTransport()
+        publisher = MaxPublisher(publishing_enabled=True, transport=transport)
+        self.service.publishers["max"] = publisher
+        second_service = ContentStudioService(
+            self.settings, publishers={"max": publisher}
+        )
+
+        def publish(service: ContentStudioService) -> str:
+            try:
+                service.publication(
+                    generated["post_id"], mode=PublicationMode.PUBLISH, apply=True
+                )
+            except PublicationClaimConflictError:
+                return "claimed"
+            return "published"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(publish, self.service)
+            self.assertTrue(transport.entered.wait(timeout=5))
+            second = executor.submit(publish, second_service)
+            second_result = second.result(timeout=5)
+            transport.release.set()
+            first_result = first.result(timeout=5)
+
+        self.assertEqual(sorted((first_result, second_result)), ["claimed", "published"])
+        self.assertEqual(transport.published, 1)
+        self.assertEqual(
+            self.service.repository.get_post(generated["post_id"])["publish_status"],
+            PostStatus.PUBLISHED.value,
+        )
+        self.assertEqual(self.service.status()["publication_history"], 1)
 
     def test_weekly_plan_is_deterministic_and_dry_run_first(self) -> None:
         preview = self.service.create_plan(date(2026, 7, 20), 7, apply=False)

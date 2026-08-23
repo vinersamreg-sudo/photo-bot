@@ -162,6 +162,62 @@ class ContentGenerator:
             internal_prompt_en=internal_prompt,
         )
 
+    def generate_demo_case(
+        self,
+        transformation_type: TransformationType,
+        *,
+        post_id: str,
+        platform: str,
+        title: str,
+        hook: str,
+        prompt_example: str,
+        hashtags: tuple[str, ...],
+    ) -> GeneratedPostCopy:
+        """Build varied factual copy without inventing a customer narrative."""
+
+        variant = int(hashlib.sha256(post_id.encode("utf-8")).hexdigest()[:8], 16) % 3
+        titles = (
+            hook,
+            f"До и после: {title}",
+            f"{title} — один точный запрос",
+        )
+        task_leads = (
+            "Пример запроса",
+            "Демонстрационная задача",
+            "Что меняем в этом примере",
+        )
+        result_lines = (
+            "Показываем конкретный результат до и после — без сложных настроек.",
+            "На карточке видно, что изменилось после одного точного запроса.",
+            "Сравните исходное изображение и готовый демонстрационный результат.",
+        )
+        source_code = build_source_code(platform, post_id)
+        utm_url = build_utm_url(
+            self.bot_url, platform=platform, content=post_id, source_code=source_code
+        )
+        generated_title = titles[variant].strip()
+        body = (
+            f"{task_leads[variant]}: «{prompt_example.strip()}»\n\n"
+            f"{result_lines[variant]}\n\n{DISCLOSURE}"
+        )
+        cta = f"{CTA_LEAD}:\n{utm_url}"
+        internal_prompt = (
+            "Create one factual Russian hook/task/result demo variant for "
+            f"'{transformation_type.value}'. Never invent a customer story or testimonial. "
+            "Include the mandatory Ravuna demo disclosure and attributed CTA."
+        )
+        _validate_copy(generated_title, body, cta, internal_prompt)
+        return GeneratedPostCopy(
+            title=generated_title,
+            body=body,
+            hashtags=hashtags,
+            cta=cta,
+            disclosure=DISCLOSURE,
+            utm_url=utm_url,
+            source_code=source_code,
+            internal_prompt_en=internal_prompt,
+        )
+
 
 def build_source_code(platform: str, content: str) -> str:
     platform_code = {"max": "max", "vk": "vk", "telegram": "tg"}.get(platform)
