@@ -3,16 +3,8 @@ name: Ravuna site CI
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "site/**"
-      - ".github/workflows/site.yml"
-      - ".github/workflows/site-deploy.yml"
   push:
     branches: [main]
-    paths:
-      - "site/**"
-      - ".github/workflows/site.yml"
-      - ".github/workflows/site-deploy.yml"
 
 permissions:
   contents: read

@@ -143,6 +143,16 @@ commercial-use flag, before/after difference, media format, CTA and attribution
 all pass immediately before publication. A failed check leaves the item
 unpublished and records only a safe failure class.
 
+Before every send, the persistent Novelty Gate compares the candidate with at
+least the latest 30 published posts. It blocks reused asset checksums, perceptual
+image duplicates, normalized exact text, text similarity of 0.82 or greater,
+occupied publication slots and avoidable three-post category runs. UUIDs, UTMs,
+timestamps, hashtags and standard CTA/disclosure text do not create novelty.
+After at most five candidates, an exhausted pool is recorded and skipped; a
+duplicate is never published as fallback. Schema version 5 also stores durable
+publication history, slot ownership and send claims so concurrent or retried
+scheduler runs cannot publish the same item twice.
+
 Operator preview and one-cycle execution:
 
 ```bash

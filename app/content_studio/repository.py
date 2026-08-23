@@ -118,6 +118,49 @@ CREATE TABLE IF NOT EXISTS content_publication_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_content_publication_post
     ON content_publication_attempts(post_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS content_publication_slots (
+    platform TEXT NOT NULL,
+    scheduled_time TEXT NOT NULL,
+    post_id TEXT NOT NULL UNIQUE REFERENCES demo_posts(id) ON DELETE RESTRICT,
+    created_at TEXT NOT NULL,
+    claim_token TEXT,
+    claimed_at TEXT,
+    PRIMARY KEY(platform, scheduled_time)
+);
+CREATE TABLE IF NOT EXISTS content_publication_history (
+    post_id TEXT PRIMARY KEY REFERENCES demo_posts(id) ON DELETE RESTRICT,
+    platform TEXT NOT NULL,
+    asset_id TEXT NOT NULL REFERENCES demo_assets(id) ON DELETE RESTRICT,
+    asset_checksum TEXT NOT NULL,
+    transformation_type TEXT NOT NULL,
+    category TEXT NOT NULL,
+    before_phash TEXT NOT NULL,
+    after_phash TEXT NOT NULL,
+    card_phash TEXT NOT NULL,
+    normalized_text_hash TEXT NOT NULL,
+    normalized_text TEXT NOT NULL,
+    published_external_id TEXT NOT NULL,
+    scheduled_time TEXT,
+    published_at TEXT NOT NULL,
+    novelty_score REAL NOT NULL,
+    duplicate_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_content_publication_history_recent
+    ON content_publication_history(platform, published_at DESC, post_id DESC);
+CREATE INDEX IF NOT EXISTS idx_content_publication_history_asset
+    ON content_publication_history(platform, asset_checksum);
+CREATE TABLE IF NOT EXISTS content_novelty_events (
+    id TEXT PRIMARY KEY,
+    post_id TEXT REFERENCES demo_posts(id) ON DELETE SET NULL,
+    platform TEXT NOT NULL,
+    asset_checksum TEXT,
+    scheduled_time TEXT,
+    reason TEXT NOT NULL,
+    novelty_score REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_content_novelty_events_recent
+    ON content_novelty_events(platform, created_at DESC);
 CREATE TABLE IF NOT EXISTS content_analytics (
     id TEXT PRIMARY KEY,
     post_id TEXT NOT NULL REFERENCES demo_posts(id) ON DELETE RESTRICT,
@@ -157,6 +200,14 @@ ALLOWED_POST_TRANSITIONS: dict[str, frozenset[str]] = {
     PostStatus.PUBLISHED.value: frozenset({PostStatus.ARCHIVED.value}),
     PostStatus.ARCHIVED.value: frozenset(),
 }
+
+
+class PublicationSlotConflictError(ValueError):
+    """Raised when another post durably owns a platform/time slot."""
+
+
+class PublicationClaimConflictError(RuntimeError):
+    """Raised when another scheduler process already owns the send claim."""
 
 
 class ContentStudioRepository:
@@ -232,6 +283,45 @@ class ContentStudioRepository:
             connection.execute(
                 "INSERT OR IGNORE INTO content_schema_migrations(version,name,applied_at) VALUES(4,?,?)",
                 ("content_funnel_metrics", utc_now()),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO content_schema_migrations(version,name,applied_at) VALUES(5,?,?)",
+                ("content_publication_novelty_history", utc_now()),
+            )
+            slot_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(content_publication_slots)"
+                ).fetchall()
+            }
+            if "claim_token" not in slot_columns:
+                connection.execute(
+                    "ALTER TABLE content_publication_slots ADD COLUMN claim_token TEXT"
+                )
+            if "claimed_at" not in slot_columns:
+                connection.execute(
+                    "ALTER TABLE content_publication_slots ADD COLUMN claimed_at TEXT"
+                )
+            connection.execute(
+                """DELETE FROM content_publication_slots
+                   WHERE NOT EXISTS(
+                       SELECT 1 FROM demo_posts p
+                       WHERE p.id=content_publication_slots.post_id
+                         AND p.platform=content_publication_slots.platform
+                         AND p.scheduled_time=content_publication_slots.scheduled_time
+                         AND p.publish_status IN ('scheduled','published')
+                   )"""
+            )
+            connection.execute(
+                """INSERT OR IGNORE INTO content_publication_slots(
+                       platform,scheduled_time,post_id,created_at
+                   )
+                   SELECT platform,scheduled_time,MIN(id),?
+                   FROM demo_posts
+                   WHERE scheduled_time IS NOT NULL
+                     AND publish_status IN ('scheduled','published')
+                   GROUP BY platform,scheduled_time""",
+                (utc_now(),),
             )
         finally:
             connection.close()
@@ -387,6 +477,350 @@ class ContentStudioRepository:
             "DemoPost",
         )
 
+    def novelty_candidate(self, post_id: str) -> dict[str, Any]:
+        return self._required(
+            """SELECT p.*,r.asset_id,r.before_path,r.after_path,
+                      r.watermark_preview_path,t.transformation_type,
+                      a.checksum asset_checksum,a.category asset_category
+               FROM demo_posts p
+               JOIN demo_results r ON r.id=p.result_id
+               JOIN demo_transformations t ON t.id=r.transformation_id
+               JOIN demo_assets a ON a.id=r.asset_id
+               WHERE p.id=?""",
+            (post_id,),
+            "DemoPost",
+        )
+
+    def publication_history(
+        self, *, platform: str | None = None, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        if limit <= 0 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        connection = self.connect()
+        try:
+            if platform:
+                rows = connection.execute(
+                    """SELECT * FROM content_publication_history
+                       WHERE platform=? ORDER BY published_at DESC,post_id DESC LIMIT ?""",
+                    (platform, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """SELECT * FROM content_publication_history
+                       ORDER BY published_at DESC,post_id DESC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    def published_candidates_missing_history(
+        self, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        connection = self.connect()
+        try:
+            rows = connection.execute(
+                """SELECT p.* FROM demo_posts p
+                   LEFT JOIN content_publication_history h ON h.post_id=p.id
+                   WHERE p.publish_status='published' AND h.post_id IS NULL
+                   ORDER BY COALESCE(p.published_time,p.updated_at),p.id LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    def record_publication_history(
+        self,
+        fingerprint: dict[str, Any],
+        *,
+        external_id: str,
+        published_at: str,
+        novelty_score: float,
+        duplicate_reason: str | None = None,
+    ) -> None:
+        with self.transaction() as connection:
+            self._insert_publication_history(
+                connection,
+                fingerprint,
+                external_id=external_id,
+                published_at=published_at,
+                novelty_score=novelty_score,
+                duplicate_reason=duplicate_reason,
+            )
+
+    def record_novelty_event(
+        self,
+        event_id: str,
+        *,
+        platform: str,
+        reason: str,
+        novelty_score: float = 0.0,
+        post_id: str | None = None,
+        asset_checksum: str | None = None,
+        scheduled_time: str | None = None,
+    ) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO content_novelty_events(
+                       id,post_id,platform,asset_checksum,scheduled_time,reason,
+                       novelty_score,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    event_id,
+                    post_id,
+                    platform,
+                    asset_checksum,
+                    scheduled_time,
+                    reason,
+                    novelty_score,
+                    utc_now(),
+                ),
+            )
+
+    def slot_has_post(self, platform: str, scheduled_time: str) -> bool:
+        connection = self.connect()
+        try:
+            if connection.execute(
+                """SELECT 1 FROM content_publication_slots
+                   WHERE platform=? AND scheduled_time=? LIMIT 1""",
+                (platform, scheduled_time),
+            ).fetchone():
+                return True
+            if connection.execute(
+                """SELECT 1 FROM demo_posts
+                   WHERE platform=? AND scheduled_time=?
+                     AND publish_status IN ('scheduled','published') LIMIT 1""",
+                (platform, scheduled_time),
+            ).fetchone():
+                return True
+            if connection.execute(
+                """SELECT 1 FROM content_novelty_events
+                   WHERE platform=? AND scheduled_time=?
+                     AND reason IN (
+                         'candidate_pool_exhausted','recent_category_saturation'
+                     ) LIMIT 1""",
+                (platform, scheduled_time),
+            ).fetchone():
+                return True
+            if platform != "max":
+                return False
+            return bool(
+                connection.execute(
+                    """SELECT 1 FROM content_publication_history
+                       WHERE platform='max'
+                         AND substr(COALESCE(scheduled_time,published_at),1,10)=substr(?,1,10)
+                       LIMIT 1""",
+                    (scheduled_time,),
+                ).fetchone()
+            )
+        finally:
+            connection.close()
+
+    def publication_slot_owner(
+        self, platform: str, scheduled_time: str
+    ) -> str | None:
+        connection = self.connect()
+        try:
+            row = connection.execute(
+                """SELECT post_id FROM content_publication_slots
+                   WHERE platform=? AND scheduled_time=?""",
+                (platform, scheduled_time),
+            ).fetchone()
+            return str(row[0]) if row is not None else None
+        finally:
+            connection.close()
+
+    def claim_publication(self, post_id: str, claim_token: str) -> bool:
+        """Atomically claim one scheduled send across concurrent timer processes."""
+
+        if not claim_token:
+            raise ValueError("publication claim token is required")
+        with self.transaction() as connection:
+            current = connection.execute(
+                "SELECT publish_status FROM demo_posts WHERE id=?", (post_id,)
+            ).fetchone()
+            if current is None:
+                raise LookupError("DemoPost not found")
+            if current["publish_status"] != PostStatus.SCHEDULED.value:
+                return False
+            updated = connection.execute(
+                """UPDATE content_publication_slots
+                   SET claim_token=?,claimed_at=?
+                   WHERE post_id=? AND claim_token IS NULL""",
+                (claim_token, utc_now(), post_id),
+            )
+            return updated.rowcount == 1
+
+    def release_publication_claim(self, post_id: str, claim_token: str) -> None:
+        """Release only the caller's claim after a confirmed pre-send/send failure."""
+
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE content_publication_slots
+                   SET claim_token=NULL,claimed_at=NULL
+                   WHERE post_id=? AND claim_token=?""",
+                (post_id, claim_token),
+            )
+
+    def reserved_asset_checksums(self, platform: str) -> set[str]:
+        connection = self.connect()
+        try:
+            rows = connection.execute(
+                """SELECT DISTINCT a.checksum
+                   FROM demo_posts p
+                   JOIN demo_results r ON r.id=p.result_id
+                   JOIN demo_assets a ON a.id=r.asset_id
+                   WHERE p.platform=?
+                     AND p.publish_status IN ('scheduled','published')""",
+                (platform,),
+            ).fetchall()
+            return {str(row[0]) for row in rows}
+        finally:
+            connection.close()
+
+    def recent_publication_categories(
+        self, platform: str, limit: int = 3
+    ) -> list[str]:
+        return [
+            str(row["category"])
+            for row in self.publication_history(platform=platform, limit=limit)
+        ]
+
+    def unpublished_asset_categories(
+        self, platform: str, *, excluding_checksum: str
+    ) -> set[str]:
+        connection = self.connect()
+        try:
+            rows = connection.execute(
+                """SELECT DISTINCT a.category
+                   FROM demo_assets a
+                   WHERE a.checksum<>?
+                     AND NOT EXISTS(
+                         SELECT 1 FROM content_publication_history h
+                         WHERE h.platform=? AND h.asset_checksum=a.checksum
+                     )""",
+                (excluding_checksum, platform),
+            ).fetchall()
+            return {str(row[0]) for row in rows}
+        finally:
+            connection.close()
+
+    def complete_publication(
+        self,
+        *,
+        attempt_id: str,
+        post_id: str,
+        platform: str,
+        mode: str,
+        payload: dict[str, Any],
+        external_id: str,
+        fingerprint: dict[str, Any],
+        novelty_score: float,
+        claim_token: str | None = None,
+        increment_retry: bool = False,
+    ) -> None:
+        now = utc_now()
+        with self.transaction() as connection:
+            current = connection.execute(
+                "SELECT publish_status FROM demo_posts WHERE id=?", (post_id,)
+            ).fetchone()
+            if current is None:
+                raise LookupError("DemoPost not found")
+            if current["publish_status"] not in {
+                PostStatus.APPROVED.value,
+                PostStatus.SCHEDULED.value,
+            }:
+                raise ValueError("publication requires an approved or scheduled post")
+            if current["publish_status"] == PostStatus.SCHEDULED.value:
+                claimed = connection.execute(
+                    """SELECT claim_token FROM content_publication_slots
+                       WHERE post_id=?""",
+                    (post_id,),
+                ).fetchone()
+                if (
+                    claimed is None
+                    or not claim_token
+                    or claimed["claim_token"] != claim_token
+                ):
+                    raise PublicationClaimConflictError(
+                        "scheduled publication claim is not owned by this process"
+                    )
+            connection.execute(
+                """INSERT INTO content_publication_attempts(
+                       id,post_id,platform,mode,status,payload_json,external_id,
+                       error_safe,created_at,completed_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    attempt_id,
+                    post_id,
+                    platform,
+                    mode,
+                    "succeeded",
+                    _json(payload),
+                    external_id,
+                    None,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """UPDATE demo_posts SET publish_status='published',published_time=?,
+                       published_external_id=?,last_error=NULL,retry_count=retry_count+?,
+                       updated_at=? WHERE id=?""",
+                (now, external_id, int(increment_retry), now, post_id),
+            )
+            connection.execute(
+                """UPDATE content_publication_slots
+                   SET claim_token=NULL,claimed_at=NULL WHERE post_id=?""",
+                (post_id,),
+            )
+            self._insert_publication_history(
+                connection,
+                fingerprint,
+                external_id=external_id,
+                published_at=now,
+                novelty_score=novelty_score,
+                duplicate_reason=None,
+            )
+
+    @staticmethod
+    def _insert_publication_history(
+        connection: sqlite3.Connection,
+        fingerprint: dict[str, Any],
+        *,
+        external_id: str,
+        published_at: str,
+        novelty_score: float,
+        duplicate_reason: str | None,
+    ) -> None:
+        connection.execute(
+            """INSERT OR IGNORE INTO content_publication_history(
+                   post_id,platform,asset_id,asset_checksum,transformation_type,
+                   category,before_phash,after_phash,card_phash,
+                   normalized_text_hash,normalized_text,published_external_id,
+                   scheduled_time,published_at,novelty_score,duplicate_reason
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                fingerprint["post_id"],
+                fingerprint["platform"],
+                fingerprint["asset_id"],
+                fingerprint["asset_checksum"],
+                fingerprint["transformation_type"],
+                fingerprint["category"],
+                fingerprint["before_phash"],
+                fingerprint["after_phash"],
+                fingerprint["card_phash"],
+                fingerprint["normalized_text_hash"],
+                fingerprint["normalized_text"],
+                external_id,
+                fingerprint.get("scheduled_time"),
+                published_at,
+                novelty_score,
+                duplicate_reason,
+            ),
+        )
+
     def performance_rows(self) -> list[dict[str, Any]]:
         connection = self.connect()
         try:
@@ -459,31 +893,70 @@ class ContentStudioRepository:
         last_error: str | None = None,
         increment_retry: bool = False,
     ) -> dict[str, Any]:
-        with self.transaction() as connection:
-            current = connection.execute(
-                "SELECT publish_status,retry_count FROM demo_posts WHERE id=?", (post_id,)
-            ).fetchone()
-            if current is None:
-                raise LookupError("DemoPost not found")
-            if target.value not in ALLOWED_POST_TRANSITIONS[current["publish_status"]]:
-                raise ValueError(
-                    f"invalid post transition {current['publish_status']} -> {target.value}"
+        try:
+            with self.transaction() as connection:
+                current = connection.execute(
+                    """SELECT publish_status,retry_count,platform,scheduled_time
+                       FROM demo_posts WHERE id=?""",
+                    (post_id,),
+                ).fetchone()
+                if current is None:
+                    raise LookupError("DemoPost not found")
+                if target.value not in ALLOWED_POST_TRANSITIONS[current["publish_status"]]:
+                    raise ValueError(
+                        f"invalid post transition {current['publish_status']} -> {target.value}"
+                    )
+                if target is PostStatus.SCHEDULED:
+                    if not scheduled_time:
+                        raise ValueError("scheduled transition requires scheduled_time")
+                    connection.execute(
+                        """INSERT INTO content_publication_slots(
+                               platform,scheduled_time,post_id,created_at
+                           ) SELECT platform,?,?,? FROM demo_posts WHERE id=?""",
+                        (scheduled_time, post_id, utc_now(), post_id),
+                    )
+                elif target is PostStatus.ARCHIVED:
+                    connection.execute(
+                        "DELETE FROM content_publication_slots WHERE post_id=?",
+                        (post_id,),
+                    )
+                connection.execute(
+                    """UPDATE demo_posts SET publish_status=?,scheduled_time=?,published_time=?,
+                           published_external_id=COALESCE(?,published_external_id),last_error=?,
+                           retry_count=retry_count+?,updated_at=? WHERE id=?""",
+                    (
+                        target.value,
+                        scheduled_time,
+                        published_time,
+                        external_id,
+                        last_error,
+                        int(increment_retry),
+                        utc_now(),
+                        post_id,
+                    ),
                 )
-            connection.execute(
-                """UPDATE demo_posts SET publish_status=?,scheduled_time=?,published_time=?,
-                       published_external_id=COALESCE(?,published_external_id),last_error=?,
-                       retry_count=retry_count+?,updated_at=? WHERE id=?""",
-                (
-                    target.value,
-                    scheduled_time,
-                    published_time,
-                    external_id,
-                    last_error,
-                    int(increment_retry),
-                    utc_now(),
-                    post_id,
-                ),
-            )
+                if target is PostStatus.ARCHIVED and current["scheduled_time"]:
+                    connection.execute(
+                        """INSERT OR IGNORE INTO content_publication_slots(
+                               platform,scheduled_time,post_id,created_at
+                           )
+                           SELECT platform,scheduled_time,MIN(id),?
+                           FROM demo_posts
+                           WHERE platform=? AND scheduled_time=?
+                             AND publish_status IN ('scheduled','published')
+                           GROUP BY platform,scheduled_time""",
+                        (
+                            utc_now(),
+                            current["platform"],
+                            current["scheduled_time"],
+                        ),
+                    )
+        except sqlite3.IntegrityError as error:
+            if target is PostStatus.SCHEDULED:
+                raise PublicationSlotConflictError(
+                    "publication slot is already reserved"
+                ) from error
+            raise
         return self.get_post(post_id)
 
     def add_review(self, post_id: str, action: str, reviewer: str, reason: str) -> None:
@@ -686,6 +1159,9 @@ class ContentStudioRepository:
                 ("demo_posts", "posts"),
                 ("content_plan_entries", "plan_entries"),
                 ("content_publication_attempts", "publication_attempts"),
+                ("content_publication_slots", "publication_slots"),
+                ("content_publication_history", "publication_history"),
+                ("content_novelty_events", "novelty_events"),
             ):
                 counts[key] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
             counts["published_posts"] = int(
