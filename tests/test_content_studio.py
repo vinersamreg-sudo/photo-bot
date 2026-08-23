@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import sqlite3
+import stat
+import subprocess
+import tarfile
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -663,6 +668,100 @@ class ContentStudioTests(unittest.TestCase):
         self.assertNotIn("systemctl restart photo-bot", deploy)
         self.assertNotIn("/opt/photo-bot/.env", deploy)
         self.assertIn('readlink -e "$ROOT/current"', deploy)
+
+    @unittest.skipUnless(
+        os.name == "posix" and shutil.which("sudo") and shutil.which("runuser"),
+        "requires a POSIX runner with passwordless sudo and runuser",
+    )
+    def test_deploy_preparation_normalizes_restrictive_archive_root(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        temp_root = Path(tempfile.mkdtemp(prefix="ravuna-content-deploy-", dir="/tmp"))
+        runtime_root = temp_root / "runtime"
+        payload = temp_root / "payload"
+        archive = temp_root / "release.tar.gz"
+        revision = "a" * 40
+        current_uid = os.getuid()
+        current_gid = os.getgid()
+        try:
+            temp_root.chmod(0o755)
+            runtime_root.mkdir(mode=0o755)
+            env_file = runtime_root / ".env"
+            env_file.write_text("SYNTHETIC=true\n", encoding="utf-8")
+            env_file.chmod(0o600)
+            data_dir = runtime_root / "data"
+            data_dir.mkdir(mode=0o750)
+            data_sentinel = data_dir / "sentinel"
+            data_sentinel.write_text("unchanged\n", encoding="utf-8")
+            env_before = (env_file.read_bytes(), stat.S_IMODE(env_file.stat().st_mode))
+            data_before = (
+                data_sentinel.read_bytes(),
+                stat.S_IMODE(data_dir.stat().st_mode),
+            )
+            required = {
+                "app/content_studio/cli.py": "# synthetic\n",
+                "marketing/assets/approved/manifest.json": "{}\n",
+                "marketing/content/library.json": "{}\n",
+                "ops/ravuna-content-publisher.service": "[Service]\n",
+                "ops/ravuna-content-publisher.timer": "[Timer]\n",
+                "requirements.txt": "\n",
+                "ops/synthetic-helper.sh": "#!/bin/sh\nexit 0\n",
+            }
+            payload.mkdir(mode=0o700)
+            for relative, content in required.items():
+                target = payload / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            (payload / "ops/synthetic-helper.sh").chmod(0o755)
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(payload, arcname=".")
+
+            command = [
+                "sudo",
+                "-n",
+                "env",
+                "RAVUNA_CONTENT_DEPLOY_PREPARE_ONLY=1",
+                f"RAVUNA_CONTENT_DEPLOY_ROOT={runtime_root}",
+                "RAVUNA_CONTENT_DEPLOY_RUNTIME_USER=nobody",
+                "bash",
+                str(project_root / "ops" / "deploy_ravuna_content_studio.sh"),
+                str(archive),
+                revision,
+            ]
+            result = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            release = runtime_root / "releases" / revision
+            self.assertIn("content_studio_preflight=PASS", result.stdout)
+            self.assertEqual(release.stat().st_uid, 0)
+            self.assertEqual(stat.S_IMODE(release.stat().st_mode), 0o755)
+            self.assertEqual(
+                stat.S_IMODE((release / "app/content_studio/cli.py").stat().st_mode),
+                0o644,
+            )
+            self.assertEqual(
+                stat.S_IMODE((release / "ops/synthetic-helper.sh").stat().st_mode),
+                0o755,
+            )
+            self.assertEqual(
+                (env_file.read_bytes(), stat.S_IMODE(env_file.stat().st_mode)),
+                env_before,
+            )
+            self.assertEqual(
+                (data_sentinel.read_bytes(), stat.S_IMODE(data_dir.stat().st_mode)),
+                data_before,
+            )
+        finally:
+            subprocess.run(
+                ["sudo", "-n", "chown", "-R", f"{current_uid}:{current_gid}", temp_root],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            shutil.rmtree(temp_root, ignore_errors=True)
 
     def test_category_catalog_contains_every_required_category(self) -> None:
         required = {
