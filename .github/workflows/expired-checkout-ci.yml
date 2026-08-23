@@ -1,0 +1,46 @@
+name: Expired checkout isolated CI
+
+on:
+  pull_request:
+    branches:
+      - ci/expired-checkout-base-20260823
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expired-checkout-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APP_ENV: ci
+      BASE_DIR: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+
+      - name: Scan secrets and asset licenses
+        run: |
+          python scripts/scan_secrets.py
+          python scripts/check_asset_licenses.py
+
+      - name: Run payment and MAX profiles
+        run: |
+          python scripts/test_fast.py payments
+          python scripts/test_fast.py max
+
+      - name: Run full release suite
+        run: python scripts/test_release.py
