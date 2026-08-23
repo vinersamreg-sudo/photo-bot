@@ -51,6 +51,8 @@ class DeployPolicyTests(TestCase):
     def test_site_ci_and_manual_deploy_are_separated(self) -> None:
         self.assertIn("pull_request:", self.site_ci_workflow)
         self.assertIn("push:", self.site_ci_workflow)
+        site_ci_header = self.site_ci_workflow.split("permissions:", 1)[0]
+        self.assertNotIn("paths:", site_ci_header)
         self.assertNotIn("environment: production", self.site_ci_workflow)
         self.assertNotIn("secrets.", self.site_ci_workflow)
         self.assertNotIn("  deploy:", self.site_ci_workflow)
