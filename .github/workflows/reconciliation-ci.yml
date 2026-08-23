@@ -1,0 +1,46 @@
+name: Canonical reconciliation CI
+
+on:
+  pull_request:
+    branches: [ci/canonical-reconcile-base-20260823]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canonical-reconciliation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Reconciliation release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+      - name: Run tracked-file and license scans
+        run: |
+          python scripts/scan_secrets.py
+          python scripts/check_asset_licenses.py
+      - name: Run release-sensitive profiles
+        run: |
+          python scripts/test_fast.py payments
+          python scripts/test_fast.py max
+          python scripts/test_fast.py providers
+          python scripts/test_fast.py site
+          python -m unittest -q \
+            tests.test_content_studio \
+            tests.test_content_studio_growth \
+            tests.test_content_studio_transports \
+            tests.test_deploy_policy \
+            tests.test_release_lineage
+      - name: Run full release suite
+        run: python scripts/test_release.py
