@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -32,6 +33,7 @@ FLAG_KEYS = (
     "IMAGE_FACE_PRESERVE_GUARD_ENABLED",
     "PILOT_USER_LIMIT",
 )
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _read_env(path: Path) -> dict[str, str]:
@@ -129,19 +131,87 @@ def _resulturl_status(url: str) -> str:
         return "unavailable"
 
 
-def _sha(root: Path) -> str:
+def _deployed_sha(root: Path) -> str:
     for path in (root / ".deploy-sha", root / "data" / "deployed_commit.txt"):
         if path.is_file():
             value = path.read_text(encoding="utf-8").strip()
             if value:
-                return value[:12]
-    code, output = _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=root)
+                return value
+    code, output = _run(["git", "rev-parse", "HEAD"], cwd=root)
     return output.strip() if code == 0 else "unavailable"
+
+
+def _content_studio_sha(root: Path) -> str:
+    candidates = (
+        root / "current" / "REVISION",
+        root / "REVISION",
+        root / "data" / "deployed_commit.txt",
+    )
+    for path in candidates:
+        if path.is_file():
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+    return "unavailable"
+
+
+def _canonical_lineage(
+    repository: Path | None,
+    canonical_ref: str,
+    deployed: dict[str, str],
+) -> dict[str, str]:
+    result = {"origin_main_sha": "unavailable"}
+    for name in deployed:
+        result[f"{name}_in_canonical_main"] = "unavailable"
+        result[f"main_ahead_of_{name}"] = "unavailable"
+    if repository is None or not repository.is_dir():
+        return result
+    code, canonical_sha = _run(
+        ["git", "rev-parse", "--verify", f"{canonical_ref}^{{commit}}"],
+        cwd=repository,
+    )
+    canonical_sha = canonical_sha.strip()
+    if code or not FULL_SHA.fullmatch(canonical_sha):
+        return result
+    result["origin_main_sha"] = canonical_sha
+    for name, deployed_sha in deployed.items():
+        if not FULL_SHA.fullmatch(deployed_sha):
+            continue
+        object_code, _ = _run(
+            ["git", "cat-file", "-e", f"{deployed_sha}^{{commit}}"], cwd=repository
+        )
+        if object_code:
+            result[f"{name}_in_canonical_main"] = "FAIL"
+            continue
+        ancestor_code, _ = _run(
+            ["git", "merge-base", "--is-ancestor", deployed_sha, canonical_sha],
+            cwd=repository,
+        )
+        if ancestor_code:
+            result[f"{name}_in_canonical_main"] = "FAIL"
+            continue
+        result[f"{name}_in_canonical_main"] = "PASS"
+        count_code, count = _run(
+            ["git", "rev-list", "--count", f"{deployed_sha}..{canonical_sha}"],
+            cwd=repository,
+        )
+        if count_code == 0 and count.strip().isdigit():
+            result[f"main_ahead_of_{name}"] = count.strip()
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--content-studio-root", type=Path, default=Path("/opt/ravuna-content")
+    )
+    parser.add_argument(
+        "--canonical-repository",
+        type=Path,
+        help="read-only Git checkout containing the canonical main history",
+    )
+    parser.add_argument("--canonical-ref", default="origin/main")
     parser.add_argument("--online", action="store_true", help="perform safe ResultURL GET")
     return parser
 
@@ -164,8 +234,26 @@ def main(argv: list[str] | None = None) -> int:
     if orphan is None:
         orphan = cleanup.get("orphan_candidate_count", "unavailable")
 
+    main_bot_sha = _deployed_sha(root)
+    content_studio_sha = _content_studio_sha(args.content_studio_root.resolve())
+    lineage = _canonical_lineage(
+        args.canonical_repository.resolve() if args.canonical_repository else None,
+        args.canonical_ref,
+        {
+            "main_bot": main_bot_sha,
+            "content_studio": content_studio_sha,
+        },
+    )
+
     lines = [
-        f"SHA={_sha(root)}",
+        f"SHA={main_bot_sha[:12] if main_bot_sha != 'unavailable' else main_bot_sha}",
+        f"MAIN_BOT_DEPLOYED_SHA={main_bot_sha}",
+        f"CONTENT_STUDIO_DEPLOYED_SHA={content_studio_sha}",
+        f"ORIGIN_MAIN_SHA={lineage['origin_main_sha']}",
+        f"MAIN_BOT_IN_CANONICAL_MAIN={lineage['main_bot_in_canonical_main']}",
+        f"CONTENT_STUDIO_IN_CANONICAL_MAIN={lineage['content_studio_in_canonical_main']}",
+        f"MAIN_AHEAD_OF_MAIN_BOT={lineage['main_ahead_of_main_bot']}",
+        f"MAIN_AHEAD_OF_CONTENT_STUDIO={lineage['main_ahead_of_content_studio']}",
         f"SYSTEMD={active_state}",
         f"RUNTIME_COUNT={runtime_count}",
         f"RESTARTS={restarts}",
@@ -186,6 +274,11 @@ def main(argv: list[str] | None = None) -> int:
         f"RESULTURL_GET={_resulturl_status(result_url) if args.online and result_url else 'skipped'}"
     )
     print("\n".join(lines))
+    if "FAIL" in (
+        lineage["main_bot_in_canonical_main"],
+        lineage["content_studio_in_canonical_main"],
+    ):
+        return 2
     return 0 if health_code == 0 and database.get("quick_check") == "ok" else 1
 
 

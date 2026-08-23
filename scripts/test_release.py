@@ -29,13 +29,21 @@ def _run(command: list[str]) -> tuple[int, str, float]:
     return completed.returncode, completed.stdout, time.perf_counter() - started
 
 
+def _safe_print(value: str) -> None:
+    try:
+        print(value)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        print(value.encode(encoding, errors="backslashreplace").decode(encoding))
+
+
 def _failed(label: str, command: list[str], output: str) -> int:
     print(f"STATUS=FAIL step={label}")
     print("COMMAND=" + " ".join(command))
     lines = output.rstrip().splitlines()
     if lines:
         print("OUTPUT_TAIL:")
-        print("\n".join(lines[-TAIL_LINES:]))
+        _safe_print("\n".join(lines[-TAIL_LINES:]))
     print("RERUN=" + " ".join(command))
     return 1
 

@@ -2,10 +2,37 @@
 
 ## Workflow
 
-The backend release workflow is `.github/workflows/deploy.yml`. Pull requests run
-the fast T1 profiles and never deploy. Pushes to the approved branch and manual
-dispatches run the full release gate and synchronize application code to
-`/opt/photo-bot`. The static site has its own workflow.
+`.github/workflows/ci.yml` is the canonical main-application CI. Pull requests to
+`main` and pushes to `main` run tests only. It has no production environment,
+production secrets, SSH or deployment steps.
+
+`.github/workflows/deploy.yml` is manual-only. Its required `target_sha` must be a
+full commit SHA in canonical `origin/main` ancestry and must already have a
+successful `Canonical release gate` check for that exact SHA. The validation job
+has no production environment or secrets. Only the gated deployment job may use
+the `production` environment and SSH.
+
+Site testing remains in `.github/workflows/site.yml`; it is also CI-only on pull
+requests and pushes. Site production deployment is separately manual in
+`.github/workflows/site-deploy.yml` with the same exact-SHA ancestry and CI gate.
+Changing or fast-forwarding `main` therefore cannot deploy the application or
+site by itself.
+
+Content Studio is a separate runtime and release procedure using
+`ops/deploy_ravuna_content_studio.sh`, `/opt/ravuna-content/current/REVISION` and
+`ravuna-content-publisher.timer`. Main-bot deployment must not deploy, restart or
+rewrite Content Studio.
+
+## Canonical history contract
+
+- `main` is the canonical release history for both deployed runtime lineages.
+- A deployed SHA may be behind `main`; equality with the current head is not
+  required.
+- Absence of a deployed SHA from canonical `main` ancestry is an operational
+  error.
+- Production deployment uses the explicit validated `target_sha`, never the
+  workflow source SHA implicitly.
+- Force-push and destructive history repair are prohibited.
 
 ## Preservation contract
 
@@ -34,21 +61,25 @@ Production secrets alone must not silently make a fresh server public.
 2. Run the required targeted profile during development.
 3. Run `python scripts/test_release.py` once.
 4. Commit one coherent change and push once.
-5. Wait for the existing workflow; do not start a duplicate run.
-   The one-time `activate_gemini=true` manual input applies the approved Gemini
-   flags; later deploys preserve an explicit environment rollback.
-6. Workflow requires idle production before stopping the service.
-7. Synchronize code while preserving mutable paths.
-8. Install/check dependencies and run migrations.
-9. Install/restart one hardened systemd service.
-10. Before the application workflow, a root operator installs the exact Ravuna
+5. Wait for `Ravuna CI / Canonical release gate` on the exact release SHA; do not
+   start a duplicate run.
+6. Start the manual deploy workflow with that full `target_sha`. The optional
+   one-time `activate_gemini=true` input applies the approved Gemini flags; later
+   deploys preserve an explicit environment rollback.
+7. Workflow revalidates canonical ancestry and exact-SHA CI before entering the
+   production environment, then requires idle production before stopping the
+   service.
+8. Synchronize code while preserving mutable paths.
+9. Install/check dependencies and run migrations.
+10. Install/restart one hardened systemd service.
+11. Before the application workflow, a root operator installs the exact Ravuna
     payment/return nginx routes with `ops/deploy_nginx_ravuna_payment.sh`; the
     workflow verifies the nginx-owned route marker before stopping the service.
     This marker is deliberately independent of the backend SHA, so routes can be
     published safely while the previous backend still serves the established flow.
-11. Run health, migration, ledger, storage and runtime audits.
-12. Record exact deployed SHA only after successful health checks.
-13. Verify ResultURL transport without creating payment state.
+12. Run health, migration, ledger, storage and runtime audits.
+13. Record the exact validated `target_sha` only after successful health checks.
+14. Verify ResultURL transport without creating payment state.
 
 ## Production snapshot
 

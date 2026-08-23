@@ -1,0 +1,163 @@
+name: Ravuna site production deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact 40-character commit SHA from canonical main history
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: ravuna-site-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate canonical site target
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require target in canonical main ancestry
+        run: |
+          git fetch --no-tags origin main
+          python scripts/validate_deploy_target.py \
+            --target-sha "$TARGET_SHA" \
+            --canonical-ref origin/main
+      - name: Require successful canonical CI for exact target
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100" \
+            > "$RUNNER_TEMP/check-runs.json"
+          python - <<'PY'
+          import json
+          import os
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "check-runs.json"), encoding="utf-8") as stream:
+              payload = json.load(stream)
+          target = os.environ["TARGET_SHA"]
+          passed = any(
+              run.get("name") == "Canonical release gate"
+              and run.get("head_sha") == target
+              and run.get("conclusion") == "success"
+              for run in payload.get("check_runs", ())
+          )
+          if not passed:
+              raise SystemExit("Exact target has no successful canonical CI check")
+          print("canonical_ci_for_target=success")
+          PY
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
+      - name: Stamp release version
+        run: printf '%s\n' "$TARGET_SHA" > site/public/version.txt
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_HOST" && test -n "$SSH_PORT"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Deploy Ravuna-branded legacy ResultURL surface
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          RELEASE="/opt/pixora-site/releases/$TARGET_SHA"
+          STAGING="/opt/pixora-site/releases/.${TARGET_SHA}.staging"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
+            mkdir -p /opt/pixora-site/releases /opt/pixora-site/shared/acme
+            rm -rf '$STAGING'
+            mkdir '$STAGING'"
+          rsync -az --delete --chmod=D755,F644 -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$STAGING/"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
+            BASE=/opt/pixora-site
+            test -f '$STAGING/index.html'
+            test -f '$STAGING/styles.css'
+            test \"\$(cat '$STAGING/version.txt')\" = '$TARGET_SHA'
+            test -z \"\$(find '$STAGING' -type l -print -quit)\"
+            test -z \"\$(find '$STAGING' -type f \\( -name '.env' -o -name '*.sqlite*' -o -name '*.log' -o -name '*.map' -o -name '*.bak' \\) -print -quit)\"
+            chmod -R a-w '$STAGING'
+            if test -d '$RELEASE'; then
+              diff -qr '$STAGING' '$RELEASE' >/dev/null
+              chmod -R u+w '$STAGING'
+              rm -rf '$STAGING'
+            else
+              mv '$STAGING' '$RELEASE'
+            fi
+            OLD=\"\$(readlink -f \"\$BASE/current\" 2>/dev/null || true)\"
+            case \"\$OLD\" in \"\$BASE\"/releases/*) ln -sfn \"\$OLD\" \"\$BASE/previous.tmp\"; mv -Tf \"\$BASE/previous.tmp\" \"\$BASE/previous\" ;; '') ;; *) echo 'Unsafe current target' >&2; exit 1 ;; esac
+            ln -sfn '$RELEASE' \"\$BASE/current.tmp\"
+            mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"
+            printf '%s\n' '$TARGET_SHA' > \"\$BASE/deployed_commit.txt\"
+            if ! curl --fail --silent --show-error --resolve pixoraai.ru:443:127.0.0.1 https://pixoraai.ru/ >/dev/null; then
+              if test -n \"\$OLD\"; then ln -sfn \"\$OLD\" \"\$BASE/current.tmp\"; mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"; fi
+              echo 'Legacy ResultURL surface smoke failed; current restored' >&2
+              exit 1
+            fi"
+      - name: Deploy Ravuna immutable release
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          RELEASE="/opt/ravuna-site/releases/$TARGET_SHA"
+          STAGING="/opt/ravuna-site/releases/.${TARGET_SHA}.staging"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
+            mkdir -p /opt/ravuna-site/releases /opt/ravuna-site/shared/acme
+            rm -rf '$STAGING'
+            mkdir '$STAGING'"
+          rsync -az --delete --chmod=D755,F644 -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$STAGING/"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
+            BASE=/opt/ravuna-site
+            test -f '$STAGING/index.html'
+            test -f '$STAGING/styles.css'
+            test \"\$(cat '$STAGING/version.txt')\" = '$TARGET_SHA'
+            test -z \"\$(find '$STAGING' -type l -print -quit)\"
+            test -z \"\$(find '$STAGING' -type f \\( -name '.env' -o -name '*.sqlite*' -o -name '*.log' -o -name '*.map' -o -name '*.bak' \\) -print -quit)\"
+            test -z \"\$(grep -RIlE 'Pixora|pixoraai\\.ru' '$STAGING' --include='*.html' --include='*.txt' --include='*.xml' --include='*.json' --include='*.webmanifest' || true)\"
+            chmod -R a-w '$STAGING'
+            if test -d '$RELEASE'; then
+              diff -qr '$STAGING' '$RELEASE' >/dev/null
+              chmod -R u+w '$STAGING'
+              rm -rf '$STAGING'
+            else
+              mv '$STAGING' '$RELEASE'
+            fi
+            OLD=\"\$(if test -L \"\$BASE/current\"; then readlink -f \"\$BASE/current\"; fi)\"
+            case \"\$OLD\" in \"\$BASE\"/releases/*) ln -sfn \"\$OLD\" \"\$BASE/previous.tmp\"; mv -Tf \"\$BASE/previous.tmp\" \"\$BASE/previous\" ;; '') ;; *) echo 'Unsafe current target' >&2; exit 1 ;; esac
+            ln -sfn '$RELEASE' \"\$BASE/current.tmp\"
+            mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"
+            printf '%s\n' '$TARGET_SHA' > \"\$BASE/deployed_commit.txt\"
+            if ! curl --fail --silent --show-error --resolve ravuna.ru:80:127.0.0.1 http://ravuna.ru/ >/dev/null; then
+              if test -n \"\$OLD\"; then ln -sfn \"\$OLD\" \"\$BASE/current.tmp\"; mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"; fi
+              echo 'Ravuna release smoke failed; current restored' >&2
+              exit 1
+            fi"

@@ -12,6 +12,22 @@ venv/bin/python scripts/production_status.py --root /opt/photo-bot
 It reports SHA, systemd/runtime/restarts, health, SQLite, processing, orphan state
 and non-secret operating flags. It must not mutate `.env`, SQLite or storage.
 
+The report distinguishes `MAIN_BOT_DEPLOYED_SHA` from
+`CONTENT_STUDIO_DEPLOYED_SHA`. Canonical ancestry requires a read-only Git
+checkout with current `origin/main` objects:
+
+```bash
+venv/bin/python scripts/production_status.py \
+  --root /opt/photo-bot \
+  --content-studio-root /opt/ravuna-content \
+  --canonical-repository /path/to/read-only/canonical-checkout
+```
+
+It then reports `ORIGIN_MAIN_SHA`, ancestry `PASS/FAIL` for both deployed SHAs
+and the informational number of commits by which `main` is ahead. Production is
+not required to equal `main` head. A deployed SHA missing from canonical history
+is an error; unavailable Git evidence is reported as `unavailable`, never guessed.
+
 ## Built-in reports
 
 ```bash

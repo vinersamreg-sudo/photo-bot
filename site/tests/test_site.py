@@ -424,12 +424,18 @@ class RavunaSiteTests(unittest.TestCase):
 
     # 46
     def test_site_workflow_is_gated_and_atomic(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
-        self.assertIn("RAVUNA_SITE_DEPLOY_ENABLED == 'true'", workflow)
-        self.assertIn("/opt/ravuna-site/releases/$GITHUB_SHA", workflow)
-        self.assertIn("BASE=/opt/ravuna-site", workflow)
-        self.assertIn("$BASE/current", workflow)
-        self.assertIn("$BASE/previous", workflow)
+        ci = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
+        deploy = (ROOT / ".github" / "workflows" / "site-deploy.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("environment: production", ci)
+        self.assertNotIn("  deploy:", ci)
+        self.assertIn("workflow_dispatch:", deploy)
+        self.assertIn("target_sha:", deploy)
+        self.assertIn("/opt/ravuna-site/releases/$TARGET_SHA", deploy)
+        self.assertIn("BASE=/opt/ravuna-site", deploy)
+        self.assertIn("$BASE/current", deploy)
+        self.assertIn("$BASE/previous", deploy)
 
     def test_lighthouse_keeps_network_emulation_without_flaky_cpu_multiplier(self) -> None:
         package = json.loads((SITE / "package.json").read_text(encoding="utf-8"))
@@ -440,9 +446,12 @@ class RavunaSiteTests(unittest.TestCase):
 
     # 47
     def test_site_workflow_does_not_touch_backend(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
-        self.assertNotIn("systemctl restart photo-bot", workflow)
-        self.assertNotIn("/opt/photo-bot", workflow)
+        for name in ("site.yml", "site-deploy.yml"):
+            workflow = (ROOT / ".github" / "workflows" / name).read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("systemctl restart photo-bot", workflow)
+            self.assertNotIn("/opt/photo-bot", workflow)
 
 
 class RavunaInfrastructureTests(unittest.TestCase):
@@ -501,15 +510,17 @@ class RavunaInfrastructureTests(unittest.TestCase):
             self.assertIn(f"'sha256-{digest}'", nginx, name)
 
     def test_workflow_deploys_ravuna_source_to_primary_and_legacy_surfaces(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "site-deploy.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("build_ravuna.py", workflow)
-        self.assertIn("/opt/ravuna-site/releases/$GITHUB_SHA", workflow)
+        self.assertIn("/opt/ravuna-site/releases/$TARGET_SHA", workflow)
         self.assertIn("BASE=/opt/ravuna-site", workflow)
         self.assertGreaterEqual(workflow.count("site/public/"), 2)
 
     def test_legacy_resulturl_vhost_preserves_exact_callback_boundary(self) -> None:
         nginx = (SITE / "nginx" / "pixoraai.ru.conf").read_text(encoding="utf-8")
-        workflow = (ROOT / ".github" / "workflows" / "site.yml").read_text(
+        workflow = (ROOT / ".github" / "workflows" / "site-deploy.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("server_name pixoraai.ru", nginx)

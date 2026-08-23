@@ -1,12 +1,12 @@
-name: Test and deploy
+name: Ravuna production deploy
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      target_sha:
+        description: Exact 40-character commit SHA from canonical main history
+        required: true
+        type: string
       activate_gemini:
         description: Apply the approved Gemini Nano Banana Pro production flags
         required: false
@@ -37,36 +37,85 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: photo-bot-production
   cancel-in-progress: false
 
 jobs:
-  test:
+  validate:
+    name: Validate canonical deployment target
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require target in canonical main ancestry
+        run: |
+          git fetch --no-tags origin main
+          python scripts/validate_deploy_target.py \
+            --target-sha "$TARGET_SHA" \
+            --canonical-ref origin/main
+      - name: Require successful canonical CI for exact target
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100" \
+            > "$RUNNER_TEMP/check-runs.json"
+          python - <<'PY'
+          import json
+          import os
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "check-runs.json"), encoding="utf-8") as stream:
+              payload = json.load(stream)
+          target = os.environ["TARGET_SHA"]
+          passed = any(
+              run.get("name") == "Canonical release gate"
+              and run.get("head_sha") == target
+              and run.get("conclusion") == "success"
+              for run in payload.get("check_runs", ())
+          )
+          if not passed:
+              raise SystemExit("Exact target has no successful canonical CI check")
+          print("canonical_ci_for_target=success")
+          PY
+  deploy:
+    needs: validate
     runs-on: ubuntu-latest
     environment: production
     env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      DEPLOY_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' }}
       OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
       GEMINI_KEY_CONFIGURED: ${{ secrets.GEMINI_API_KEY != '' }}
       MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
       MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
       ROBOKASSA_PRODUCTION_CONFIGURED: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN != '' && secrets.ROBOKASSA_PASSWORD_1 != '' && secrets.ROBOKASSA_PASSWORD_2 != '' }}
-      MAX_PILOT_CONFIGURED: ${{ secrets.MAX_PILOT_USER_IDS != '' }}
-      MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install dependencies
+      - name: Require Hetzner deployment configuration
+        if: env.DEPLOY_CONFIGURED != 'true'
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip check
+          echo "Hetzner production secrets are incomplete." >&2
+          exit 1
+      - name: Require Gemini credential for activation
+        if: inputs.activate_gemini == true && env.GEMINI_KEY_CONFIGURED != 'true'
+        run: |
+          echo "Gemini production credential is not configured." >&2
+          exit 1
+      - uses: actions/checkout@v7
+        if: env.DEPLOY_CONFIGURED == 'true'
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
       - name: Validate closed-pilot rollout configuration
-        if: github.event_name == 'workflow_dispatch' && inputs.pilot_user_limit != '0'
+        if: env.DEPLOY_CONFIGURED == 'true' && inputs.pilot_user_limit != '0'
         env:
           PILOT_USER_LIMIT: ${{ inputs.pilot_user_limit }}
           MAX_PILOT_USER_IDS: ${{ secrets.MAX_PILOT_USER_IDS }}
@@ -88,72 +137,6 @@ jobs:
               raise SystemExit("Pilot allowlist must not contain the owner")
           print(f"pilot_rollout_validated={limit}")
           PY
-      - name: Scan tracked files for secrets
-        run: |
-          python scripts/scan_secrets.py
-          python scripts/check_asset_licenses.py
-      - name: Validate Ravuna nginx candidate with nginx
-        run: |
-          CERT_DIR="$RUNNER_TEMP/ravuna-nginx-cert"
-          install -d "$CERT_DIR"
-          openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
-            -keyout "$CERT_DIR/privkey.pem" \
-            -out "$CERT_DIR/fullchain.pem" \
-            -subj '/CN=ravuna.ru' >/dev/null 2>&1
-          docker run --rm \
-            --volume "$GITHUB_WORKSPACE/site/nginx/ravuna.ru.conf:/etc/nginx/conf.d/ravuna.conf:ro" \
-            --volume "$CERT_DIR:/etc/letsencrypt/live/ravuna.ru:ro" \
-            nginx:1.27-alpine nginx -t
-      - name: Run fast pull-request profiles
-        if: github.event_name == 'pull_request'
-        env:
-          APP_ENV: ci
-          BASE_DIR: ${{ github.workspace }}
-        run: |
-          python scripts/test_fast.py max
-          python scripts/test_fast.py payments
-          python scripts/test_fast.py openai
-          python scripts/test_fast.py storage
-          python scripts/test_fast.py site
-      - name: Run full tests and healthcheck
-        if: github.event_name != 'pull_request'
-        env:
-          APP_ENV: ci
-          BASE_DIR: ${{ github.workspace }}
-        run: |
-          python -m unittest discover -v
-          python -m app.main health
-      - name: Confirm OpenAI credential is configured without an API request
-        if: env.OPENAI_KEY_CONFIGURED == 'true'
-        run: echo "OpenAI credential is configured; external validation is intentionally skipped."
-      - name: Confirm Gemini credential is configured without an API request
-        if: env.GEMINI_KEY_CONFIGURED == 'true'
-        run: echo "Gemini credential is configured; external validation is intentionally skipped."
-  deploy:
-    needs: test
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    environment: production
-    env:
-      DEPLOY_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' }}
-      OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
-      GEMINI_KEY_CONFIGURED: ${{ secrets.GEMINI_API_KEY != '' }}
-      MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
-      MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
-      ROBOKASSA_PRODUCTION_CONFIGURED: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN != '' && secrets.ROBOKASSA_PASSWORD_1 != '' && secrets.ROBOKASSA_PASSWORD_2 != '' }}
-    steps:
-      - name: Require Hetzner deployment configuration
-        if: env.DEPLOY_CONFIGURED != 'true'
-        run: |
-          echo "Hetzner production secrets are incomplete." >&2
-          exit 1
-      - name: Require Gemini credential for activation
-        if: inputs.activate_gemini == true && env.GEMINI_KEY_CONFIGURED != 'true'
-        run: |
-          echo "Gemini production credential is not configured." >&2
-          exit 1
-      - uses: actions/checkout@v7
-        if: env.DEPLOY_CONFIGURED == 'true'
       - name: Configure SSH
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -298,6 +281,11 @@ jobs:
             --exclude='data/' \
             --exclude='logs/' \
             --exclude='temp/' \
+            --exclude='/app/content_studio/' \
+            --exclude='/marketing/' \
+            --exclude='/ops/deploy_ravuna_content_studio.sh' \
+            --exclude='/ops/ravuna-content-publisher.service' \
+            --exclude='/ops/ravuna-content-publisher.timer' \
             --include='/site/' \
             --include='/site/nginx/' \
             --include='/site/nginx/ravuna.ru.conf' \
@@ -431,14 +419,14 @@ jobs:
       - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          ACTIVATE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_gemini == true }}
-          MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_owner_handlers == true }}
-          PILOT_USER_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.pilot_user_limit || '0' }}
+          ACTIVATE_GEMINI: ${{ inputs.activate_gemini == true }}
+          MAX_OWNER_HANDLERS_ENABLED: ${{ inputs.enable_owner_handlers == true }}
+          PILOT_USER_LIMIT: ${{ inputs.pilot_user_limit }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" "$ACTIVATE_GEMINI" <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$TARGET_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" "$ACTIVATE_GEMINI" <<'REMOTE'
             set -euo pipefail
             ROOT=/opt/photo-bot
             DEPLOY_SHA="$1"
@@ -552,7 +540,6 @@ jobs:
             ensure_env PAYMENT_REFUNDS_ENABLED false
             ensure_env ROBOKASSA_MODE sandbox
             ensure_env ROBOKASSA_PRODUCTION_APPROVED false
-            set_env CONTENT_STUDIO_PUBLISHING_ENABLED false
             ensure_env ROBOKASSA_COMMISSION_PERCENT 0
             set_env APP_ENV production
             set_env BASE_DIR /opt/photo-bot
@@ -790,7 +777,6 @@ jobs:
               assert settings.image_subject_preserve_guard_enabled is True
               assert settings.image_face_preserve_guard_enabled is True
               assert settings.gemini_api_key
-          assert os.environ.get("CONTENT_STUDIO_PUBLISHING_ENABLED", "").lower() == "false"
           stale_processing_orphans = 0
           cutoff = time.time() - 3600
           for path in settings.temp_dir.iterdir():
@@ -866,7 +852,6 @@ jobs:
               "payment_webhook_listener_enabled": settings.payment_webhook_listener_enabled,
               "payment_webhook_enabled": settings.payment_webhook_enabled,
               "payment_refunds_enabled": settings.payment_refunds_enabled,
-              "content_studio_publishing_enabled": False,
               "robokassa_mode": settings.robokassa_mode,
               "robokassa_hash_algorithm": settings.robokassa_hash_algorithm,
               "robokassa_merchant_login_configured": bool(settings.robokassa_merchant_login),
@@ -884,20 +869,6 @@ jobs:
                   settings.openai_conversation_retention_enabled
               ),
           }, sort_keys=True))
-          PY
-            "$ROOT"/venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          from app.content_studio.config import ContentStudioSettings
-          from app.content_studio.service import ContentStudioService
-
-          settings = ContentStudioSettings.from_environment(Path("/opt/photo-bot"))
-          status = ContentStudioService(settings).status()
-          assert status["quick_check"] == "ok"
-          assert status["publishing_enabled"] is False
-          assert status["published_posts"] == 0
-          assert status["external_ai_requests"] == 0
-          print("content_studio_audit=" + json.dumps(status, sort_keys=True))
           PY
             "$ROOT"/venv/bin/python -m app.main payment-status --format json
             "$ROOT"/venv/bin/python -m app.main launch-status
@@ -934,8 +905,7 @@ jobs:
           REMOTE
       - name: Reset owner dialog to a clean main-menu state
         if: >-
-          env.DEPLOY_CONFIGURED == 'true' && github.event_name == 'workflow_dispatch' &&
-          inputs.reset_owner_dialog == true
+          env.DEPLOY_CONFIGURED == 'true' && inputs.reset_owner_dialog == true
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
@@ -977,8 +947,7 @@ jobs:
           REMOTE
       - name: Grant bounded owner E2E attempts
         if: >-
-          env.DEPLOY_CONFIGURED == 'true' && github.event_name == 'workflow_dispatch' &&
-          inputs.grant_owner_e2e_attempts == '5'
+          env.DEPLOY_CONFIGURED == 'true' && inputs.grant_owner_e2e_attempts == '5'
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}

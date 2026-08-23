@@ -1,22 +1,29 @@
-name: Ravuna site CI and deploy
+name: Ravuna site CI
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+      - ".github/workflows/site-deploy.yml"
   push:
     branches: [main]
     paths:
       - "site/**"
       - ".github/workflows/site.yml"
-  workflow_dispatch:
+      - ".github/workflows/site-deploy.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ravuna-site-production
-  cancel-in-progress: false
+  group: ravuna-site-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
+    name: Site release gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -70,101 +77,3 @@ jobs:
           name: ravuna-site-${{ github.sha }}
           path: site/public
           if-no-files-found: error
-
-  deploy:
-    needs: test
-    if: vars.RAVUNA_SITE_DEPLOY_ENABLED == 'true'
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v7
-      - name: Stamp release version
-        run: printf '%s\n' "$GITHUB_SHA" > site/public/version.txt
-      - name: Configure SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_HOST" && test -n "$SSH_PORT"
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
-      - name: Deploy Ravuna-branded legacy ResultURL surface
-        env:
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          RELEASE="/opt/pixora-site/releases/$GITHUB_SHA"
-          STAGING="/opt/pixora-site/releases/.${GITHUB_SHA}.staging"
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
-            mkdir -p /opt/pixora-site/releases /opt/pixora-site/shared/acme
-            rm -rf '$STAGING'
-            mkdir '$STAGING'"
-          rsync -az --delete --chmod=D755,F644 -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$STAGING/"
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
-            BASE=/opt/pixora-site
-            test -f '$STAGING/index.html'
-            test -f '$STAGING/styles.css'
-            test \"\$(cat '$STAGING/version.txt')\" = '$GITHUB_SHA'
-            test -z \"\$(find '$STAGING' -type l -print -quit)\"
-            test -z \"\$(find '$STAGING' -type f \\( -name '.env' -o -name '*.sqlite*' -o -name '*.log' -o -name '*.map' -o -name '*.bak' \\) -print -quit)\"
-            chmod -R a-w '$STAGING'
-            if test -d '$RELEASE'; then
-              diff -qr '$STAGING' '$RELEASE' >/dev/null
-              chmod -R u+w '$STAGING'
-              rm -rf '$STAGING'
-            else
-              mv '$STAGING' '$RELEASE'
-            fi
-            OLD=\"\$(readlink -f \"\$BASE/current\" 2>/dev/null || true)\"
-            case \"\$OLD\" in \"\$BASE\"/releases/*) ln -sfn \"\$OLD\" \"\$BASE/previous.tmp\"; mv -Tf \"\$BASE/previous.tmp\" \"\$BASE/previous\" ;; '') ;; *) echo 'Unsafe current target' >&2; exit 1 ;; esac
-            ln -sfn '$RELEASE' \"\$BASE/current.tmp\"
-            mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"
-            printf '%s\n' '$GITHUB_SHA' > \"\$BASE/deployed_commit.txt\"
-            if ! curl --fail --silent --show-error --resolve pixoraai.ru:443:127.0.0.1 https://pixoraai.ru/ >/dev/null; then
-              if test -n \"\$OLD\"; then ln -sfn \"\$OLD\" \"\$BASE/current.tmp\"; mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"; fi
-              echo 'Legacy ResultURL surface smoke failed; current restored' >&2
-              exit 1
-            fi"
-      - name: Deploy Ravuna immutable release
-        env:
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          RELEASE="/opt/ravuna-site/releases/$GITHUB_SHA"
-          STAGING="/opt/ravuna-site/releases/.${GITHUB_SHA}.staging"
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
-            mkdir -p /opt/ravuna-site/releases /opt/ravuna-site/shared/acme
-            rm -rf '$STAGING'
-            mkdir '$STAGING'"
-          rsync -az --delete --chmod=D755,F644 -e "ssh -p $SSH_PORT" site/public/ "$SSH_USER@$SSH_HOST:$STAGING/"
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu
-            BASE=/opt/ravuna-site
-            test -f '$STAGING/index.html'
-            test -f '$STAGING/styles.css'
-            test \"\$(cat '$STAGING/version.txt')\" = '$GITHUB_SHA'
-            test -z \"\$(find '$STAGING' -type l -print -quit)\"
-            test -z \"\$(find '$STAGING' -type f \\( -name '.env' -o -name '*.sqlite*' -o -name '*.log' -o -name '*.map' -o -name '*.bak' \\) -print -quit)\"
-            test -z \"\$(grep -RIlE 'Pixora|pixoraai\\.ru' '$STAGING' --include='*.html' --include='*.txt' --include='*.xml' --include='*.json' --include='*.webmanifest' || true)\"
-            chmod -R a-w '$STAGING'
-            if test -d '$RELEASE'; then
-              diff -qr '$STAGING' '$RELEASE' >/dev/null
-              chmod -R u+w '$STAGING'
-              rm -rf '$STAGING'
-            else
-              mv '$STAGING' '$RELEASE'
-            fi
-            OLD=\"\$(if test -L \"\$BASE/current\"; then readlink -f \"\$BASE/current\"; fi)\"
-            case \"\$OLD\" in \"\$BASE\"/releases/*) ln -sfn \"\$OLD\" \"\$BASE/previous.tmp\"; mv -Tf \"\$BASE/previous.tmp\" \"\$BASE/previous\" ;; '') ;; *) echo 'Unsafe current target' >&2; exit 1 ;; esac
-            ln -sfn '$RELEASE' \"\$BASE/current.tmp\"
-            mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"
-            printf '%s\n' '$GITHUB_SHA' > \"\$BASE/deployed_commit.txt\"
-            if ! curl --fail --silent --show-error --resolve ravuna.ru:80:127.0.0.1 http://ravuna.ru/ >/dev/null; then
-              if test -n \"\$OLD\"; then ln -sfn \"\$OLD\" \"\$BASE/current.tmp\"; mv -Tf \"\$BASE/current.tmp\" \"\$BASE/current\"; fi
-              echo 'Ravuna release smoke failed; current restored' >&2
-              exit 1
-            fi"

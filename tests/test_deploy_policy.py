@@ -4,6 +4,9 @@ from unittest import TestCase
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+SITE_CI_WORKFLOW = ROOT / ".github" / "workflows" / "site.yml"
+SITE_DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "site-deploy.yml"
 ENV_EXAMPLE = ROOT / ".env.example"
 SERVICE = ROOT / "ops" / "photo-bot.service"
 NGINX_RESULTURL_DEPLOY = ROOT / "ops" / "deploy_nginx_resulturl.sh"
@@ -14,17 +17,50 @@ class DeployPolicyTests(TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        cls.site_ci_workflow = SITE_CI_WORKFLOW.read_text(encoding="utf-8")
+        cls.site_deploy_workflow = SITE_DEPLOY_WORKFLOW.read_text(encoding="utf-8")
         cls.nginx_resulturl_deploy = NGINX_RESULTURL_DEPLOY.read_text(encoding="utf-8")
 
     def test_supports_manual_deploy(self) -> None:
         self.assertIn("workflow_dispatch:", self.workflow)
+        self.assertIn("target_sha:", self.workflow)
+        self.assertIn("--target-sha \"$TARGET_SHA\"", self.workflow)
+        self.assertIn("--canonical-ref origin/main", self.workflow)
+        self.assertIn("Canonical release gate", self.workflow)
 
-    def test_pull_requests_use_fast_profiles_without_deploy(self) -> None:
-        self.assertIn("pull_request:", self.workflow)
-        self.assertIn("Run fast pull-request profiles", self.workflow)
-        self.assertIn("python scripts/test_fast.py payments", self.workflow)
-        self.assertIn("Run full tests and healthcheck", self.workflow)
-        self.assertIn("if: github.event_name != 'pull_request'", self.workflow)
+    def test_ci_and_deployment_triggers_are_separated(self) -> None:
+        self.assertIn("pull_request:", self.ci_workflow)
+        self.assertIn("push:", self.ci_workflow)
+        self.assertIn("branches: [main]", self.ci_workflow)
+        self.assertIn("Canonical release gate", self.ci_workflow)
+        self.assertIn("python scripts/test_fast.py payments", self.ci_workflow)
+        self.assertIn("Run full release suite", self.ci_workflow)
+        deploy_header = self.workflow.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", deploy_header)
+        self.assertNotIn("pull_request:", deploy_header)
+        self.assertNotIn("push:", deploy_header)
+
+    def test_ci_has_no_production_authority(self) -> None:
+        self.assertNotIn("environment: production", self.ci_workflow)
+        self.assertNotIn("${{ secrets.", self.ci_workflow)
+        self.assertNotIn("ssh ", self.ci_workflow)
+        self.assertNotIn("rsync", self.ci_workflow)
+        self.assertNotIn("systemctl", self.ci_workflow)
+
+    def test_site_ci_and_manual_deploy_are_separated(self) -> None:
+        self.assertIn("pull_request:", self.site_ci_workflow)
+        self.assertIn("push:", self.site_ci_workflow)
+        self.assertNotIn("environment: production", self.site_ci_workflow)
+        self.assertNotIn("secrets.", self.site_ci_workflow)
+        self.assertNotIn("  deploy:", self.site_ci_workflow)
+        site_deploy_header = self.site_deploy_workflow.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", site_deploy_header)
+        self.assertNotIn("pull_request:", site_deploy_header)
+        self.assertNotIn("push:", site_deploy_header)
+        self.assertIn("target_sha:", self.site_deploy_workflow)
+        self.assertIn("environment: production", self.site_deploy_workflow)
+        self.assertIn("--canonical-ref origin/main", self.site_deploy_workflow)
 
     def test_preserves_runtime_state(self) -> None:
         for protected_path in (".env", "venv/", "data/", "logs/", "temp/"):
@@ -45,8 +81,8 @@ class DeployPolicyTests(TestCase):
         self.assertIn("Require preinstalled Ravuna payment routes", self.workflow)
         self.assertIn("https://ravuna.ru/p/00000000000000000000000000000000", self.workflow)
         self.assertIn("X-Ravuna-Payment-Route: active", self.workflow)
-        self.assertIn("Validate Ravuna nginx candidate with nginx", self.workflow)
-        self.assertIn("nginx:1.27-alpine nginx -t", self.workflow)
+        self.assertIn("Validate Ravuna nginx candidate with nginx", self.ci_workflow)
+        self.assertIn("nginx:1.27-alpine nginx -t", self.ci_workflow)
         self.assertIn(
             'location ~ "^/(?:p|payment/(?:success|fail))/[0-9a-f]{32}/?$" {',
             script,
@@ -106,9 +142,9 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("TripDay", self.workflow)
 
     def test_uses_python_312_and_scans_for_secrets(self) -> None:
-        self.assertIn('python-version: "3.12"', self.workflow)
-        self.assertIn("python scripts/scan_secrets.py", self.workflow)
-        self.assertIn("python scripts/check_asset_licenses.py", self.workflow)
+        self.assertIn('python-version: "3.12"', self.ci_workflow)
+        self.assertIn("python scripts/scan_secrets.py", self.ci_workflow)
+        self.assertIn("python scripts/check_asset_licenses.py", self.ci_workflow)
 
     def test_gemini_activation_is_explicit_secret_safe_and_audited(self) -> None:
         install_block = self.workflow.split(
@@ -127,8 +163,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true", self.workflow)
         self.assertIn("set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED true", self.workflow)
         self.assertIn(
-            "ACTIVATE_GEMINI: ${{ github.event_name == 'workflow_dispatch' "
-            "&& inputs.activate_gemini == true }}",
+            "ACTIVATE_GEMINI: ${{ inputs.activate_gemini == true }}",
             install_block,
         )
         self.assertIn("subject_preserve_guard_enabled", self.workflow)
@@ -215,9 +250,16 @@ class DeployPolicyTests(TestCase):
         self.assertIn("set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true", self.workflow)
         self.assertIn("ensure_env PAYMENT_WEBHOOK_ENABLED false", self.workflow)
         self.assertIn("ensure_env PAYMENT_REFUNDS_ENABLED false", self.workflow)
-        self.assertIn("set_env CONTENT_STUDIO_PUBLISHING_ENABLED false", self.workflow)
-        self.assertIn('status["publishing_enabled"] is False', self.workflow)
-        self.assertIn('status["published_posts"] == 0', self.workflow)
+        self.assertNotIn("set_env CONTENT_STUDIO_PUBLISHING_ENABLED", self.workflow)
+        self.assertNotIn("ContentStudioService", self.workflow)
+        for excluded in (
+            "/app/content_studio/",
+            "/marketing/",
+            "/ops/deploy_ravuna_content_studio.sh",
+            "/ops/ravuna-content-publisher.service",
+            "/ops/ravuna-content-publisher.timer",
+        ):
+            self.assertIn(f"--exclude='{excluded}'", self.workflow)
         self.assertIn("ensure_env ROBOKASSA_MODE sandbox", self.workflow)
         self.assertIn("ensure_env ROBOKASSA_PRODUCTION_APPROVED false", self.workflow)
         self.assertIn(
@@ -265,7 +307,6 @@ class DeployPolicyTests(TestCase):
         self.assertIn('test "$POST_STATUS" = 503', script)
 
     def test_transfers_openai_key_via_stdin_without_external_validation(self) -> None:
-        self.assertIn("Confirm OpenAI credential is configured without an API request", self.workflow)
         self.assertIn("Configure OpenAI credential", self.workflow)
         self.assertIn("secrets.OPENAI_API_KEY", self.workflow)
         self.assertIn('printf \'%s\' "$OPENAI_API_KEY" |', self.workflow)
@@ -297,7 +338,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("python -m app.main max-check", self.workflow)
 
     def test_owner_allowlist_is_secret_and_fail_closed(self) -> None:
-        self.assertGreaterEqual(self.workflow.count("MAX_OWNER_CONFIGURED:"), 2)
+        self.assertGreaterEqual(self.workflow.count("MAX_OWNER_CONFIGURED:"), 1)
         self.assertIn("secrets.MAX_OWNER_USER_ID", self.workflow)
         self.assertIn('printf \'%s\' "$MAX_OWNER_USER_ID" |', self.workflow)
         self.assertIn("MAX_OWNER_USER_IDS=$OWNER_ID", self.workflow)
@@ -306,7 +347,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn('MAX_OWNER_HANDLERS_ENABLED', self.workflow)
         self.assertIn('[ "$MAX_OWNER_HANDLERS_ENABLED" = true ]', self.workflow)
         self.assertIn(
-            '"$GITHUB_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" "$ACTIVATE_GEMINI"',
+            '"$TARGET_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" "$ACTIVATE_GEMINI"',
             self.workflow,
         )
         self.assertIn('MAX_OWNER_HANDLERS_ENABLED="${2:-false}"', self.workflow)
@@ -315,12 +356,9 @@ class DeployPolicyTests(TestCase):
             "MAX_OWNER_HANDLERS_ENABLED: ${{ env.MAX_OWNER_HANDLERS_ENABLED }}",
             self.workflow,
         )
-        self.assertGreaterEqual(
-            self.workflow.count(
-                "MAX_OWNER_HANDLERS_ENABLED: ${{ github.event_name == 'workflow_dispatch' "
-                "&& inputs.enable_owner_handlers == true }}"
-            ),
-            2,
+        self.assertIn(
+            "MAX_OWNER_HANDLERS_ENABLED: ${{ inputs.enable_owner_handlers == true }}",
+            self.workflow,
         )
 
     def test_manual_deploy_can_reset_owner_dialog_without_logging_identifiers(self) -> None:
