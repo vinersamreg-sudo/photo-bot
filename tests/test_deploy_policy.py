@@ -1,5 +1,10 @@
+import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
 from unittest import TestCase
+
+from scripts.build_content_studio_release import REQUIRED_MEMBERS, build_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +52,70 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("ssh ", self.ci_workflow)
         self.assertNotIn("rsync", self.ci_workflow)
         self.assertNotIn("systemctl", self.ci_workflow)
+
+    def test_shell_scripts_and_committed_release_archive_are_lf_only(self) -> None:
+        attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+        self.assertIn("*.sh text eol=lf", attributes)
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        shell_paths = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", revision],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        for relative in (path for path in shell_paths if path.endswith(".sh")):
+            content = subprocess.run(
+                ["git", "cat-file", "blob", f"{revision}:{relative}"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            ).stdout
+            self.assertNotIn(b"\r\n", content, relative)
+
+    def test_release_builder_uses_committed_lf_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory) / "repository"
+            repository.mkdir()
+            self._git(repository, "init", "--quiet")
+            self._git(repository, "config", "user.name", "Ravuna CI")
+            self._git(repository, "config", "user.email", "ci@invalid.example")
+            self._git(repository, "config", "core.autocrlf", "true")
+            files = {member: b"synthetic\n" for member in REQUIRED_MEMBERS}
+            files[".gitattributes"] = b"*.sh text eol=lf\n"
+            for relative, content in files.items():
+                target = repository / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            self._git(repository, "add", ".")
+            self._git(repository, "commit", "--quiet", "-m", "synthetic release")
+            revision = self._git(repository, "rev-parse", "HEAD").strip()
+            dirty_script = repository / "ops" / "deploy_ravuna_content_studio.sh"
+            dirty_script.write_bytes(b"#!/bin/sh\r\nexit 0\r\n")
+
+            archive = Path(directory) / "release.tar.gz"
+            report = build_release(repository, revision, archive)
+            self.assertEqual(report["source"], "committed_git_content")
+            with tarfile.open(archive, "r:gz") as bundle:
+                archived = bundle.extractfile("ops/deploy_ravuna_content_studio.sh")
+                self.assertIsNotNone(archived)
+                self.assertNotIn(b"\r\n", archived.read())
+
+    @staticmethod
+    def _git(repository: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
 
     def test_site_ci_and_manual_deploy_are_separated(self) -> None:
         self.assertIn("pull_request:", self.site_ci_workflow)
