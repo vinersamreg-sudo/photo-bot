@@ -160,6 +160,13 @@ Use exactly the product language:
 Do not call the package “generations”. Browser return pages explain that only the
 server ResultURL confirms payment.
 
+If a 30-minute short checkout link has expired, the browser page says:
+“Ссылка на оплату устарела. Обновить её можно в Ravuna” and offers a return to
+MAX. The browser does not create a replacement order. After the return, Ravuna
+verifies the MAX owner and replaces the payment screen with one fresh,
+purpose-scoped link. “Повторить оплату” and reopening a package screen must
+never reuse a `pending` order whose `expires_at` has passed.
+
 ## Post-payment state
 
 - A confirmed original purchase automatically delivers the original for the

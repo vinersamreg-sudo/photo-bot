@@ -227,7 +227,15 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
         ).fetchone()[0])
         expired_unpaid_orders = int(connection.execute(
             """SELECT COUNT(*) FROM payment_orders
-               WHERE status='pending' AND datetime(expires_at)<datetime('now')"""
+               WHERE status='pending' AND datetime(expires_at)<=datetime('now')"""
+        ).fetchone()[0])
+        expired_checkout_events = int(connection.execute(
+            """SELECT COUNT(*) FROM payment_audit
+               WHERE event_type='checkout_expired'"""
+        ).fetchone()[0])
+        refreshed_checkout_events = int(connection.execute(
+            """SELECT COUNT(*) FROM payment_audit
+               WHERE event_type='checkout_refreshed'"""
         ).fetchone()[0])
         paid_without_grant = int(connection.execute(
             f"""SELECT COUNT(*) FROM payment_orders o
@@ -307,6 +315,8 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
         "rejected_callbacks": rejected_callbacks,
         "rejected_callbacks_recent": rejected_callbacks_recent,
         "expired_unpaid_orders": expired_unpaid_orders,
+        "expired_checkout_events": expired_checkout_events,
+        "refreshed_checkout_events": refreshed_checkout_events,
         "paid_without_grant": paid_without_grant,
         "grant_without_paid_order": grant_without_paid_order,
         "original_entitlement_mismatches": original_entitlement_mismatches,

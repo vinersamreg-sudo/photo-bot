@@ -70,6 +70,7 @@ from app.telemetry import TelemetryRecorder
 from app.work_gallery import GalleryPage, WorkGallery
 from app.payments import (
     PaymentError,
+    PaymentOrder,
     PaymentService,
     PaymentStatus,
     PaymentUnavailable,
@@ -575,7 +576,7 @@ class MaxApplication:
 
     def _start(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         return_token = (event.start_payload or "").strip()
-        if return_token.startswith(("pay_", "payfail_")):
+        if return_token.startswith(("pay_", "payfail_", "payrefresh_")):
             self._show_payment_return(event, dialog, return_token)
             return
         relationship_id = None
@@ -608,6 +609,7 @@ class MaxApplication:
     def _show_payment_return(
         self, event: MaxIncomingEvent, dialog: MaxDialog, payload: str
     ) -> None:
+        refresh_requested = payload.startswith("payrefresh_")
         failed = payload.startswith("payfail_")
         token = payload.split("_", 1)[1] if "_" in payload else ""
         try:
@@ -620,22 +622,38 @@ class MaxApplication:
                 screen="payment_return_invalid",
             )
             return
+        if refresh_requested:
+            self._refresh_checkout(event, token)
+            return
         if failed:
+            repeat = None
+            if self.payments.is_reusable_order(order):
+                repeat = Button(
+                    "Повторить оплату", self.payments.short_payment_url(order)
+                )
+            elif order.status in {PaymentStatus.PENDING, PaymentStatus.EXPIRED}:
+                repeat = Button(
+                    "Обновить ссылку на оплату", f"payment:renew:{token}"
+                )
             self._send_message(
                 event.user_id,
                 "Оплата отменена или не завершена. Фотография и запрос сохранены.",
-                ((Button("Повторить оплату", self.payments.short_payment_url(order)),)
-                 if order.status is PaymentStatus.PENDING else ())
+                ((repeat,) if repeat is not None else ())
                 + (Button("← Назад", "nav:back:main"),),
                 screen="payment_return_failed",
             )
             return
         if order.status is PaymentStatus.PENDING:
+            refresh_button = (
+                Button("Обновить ссылку на оплату", f"payment:renew:{token}")
+                if not self.payments.is_reusable_order(order)
+                else Button("Обновить состояние", f"payment:refresh:{token}")
+            )
             self._send_message(
                 event.user_id,
                 "Проверяем оплату…",
                 (
-                    Button("Обновить состояние", f"payment:refresh:{token}"),
+                    refresh_button,
                     Button("← Назад", "nav:back:main"),
                 ),
                 screen="payment_return_pending",
@@ -649,12 +667,127 @@ class MaxApplication:
         }:
             self.notify_continuation_pack_paid(order.id)
             return
+        if order.status is PaymentStatus.EXPIRED:
+            self._send_message(
+                event.user_id,
+                "Ссылка на оплату устарела. Обновить её можно в Ravuna.",
+                (
+                    Button("Обновить ссылку на оплату", f"payment:renew:{token}"),
+                    Button("← Назад", "nav:back:main"),
+                ),
+                screen="payment_return_expired",
+            )
+            return
         self._send_message(
             event.user_id,
             "Оплата не завершена. Начислений не было.",
             (Button("← Назад", "nav:back:main"),),
             screen="payment_return_failed",
         )
+
+    def _refresh_checkout(self, event: MaxIncomingEvent, token: str) -> None:
+        try:
+            order = self.payments.refresh_order_for_platform_user(
+                token, event.user_id
+            )
+            self._render_refreshed_checkout(event, order)
+        except (PaymentError, PaymentUnavailable, AssetUnavailableError):
+            self._send_message(
+                event.user_id,
+                "Не удалось обновить ссылку на оплату.",
+                (Button("← Назад", "nav:back:main"),),
+                screen="payment_refresh_failed",
+            )
+
+    def _render_refreshed_checkout(
+        self, event: MaxIncomingEvent, order: PaymentOrder
+    ) -> None:
+        payment_url = self.payments.short_payment_url(order)
+        if order.purpose == "account_topup":
+            balance = self.demo.commerce.balance(order.user_id).available
+            self._reset_dialog_to_main(event.user_id, event.event_key)
+            self.store.update(event.user_id, user_id=order.user_id)
+            self._send_view(event.user_id, main_menu(balance, payment_url))
+            return
+
+        if order.purpose == "original_download" and order.version_id:
+            with self.database.read() as connection:
+                version = connection.execute(
+                    """SELECT v.gallery_item_id
+                       FROM gallery_versions v
+                       JOIN gallery_items i ON i.id=v.gallery_item_id
+                       WHERE v.id=? AND i.user_id=?""",
+                    (order.version_id, order.user_id),
+                ).fetchone()
+            if version is None:
+                raise AssetUnavailableError("Checkout version is unavailable")
+            updated = self.store.transition(
+                event.user_id,
+                "result_ready",
+                event_key=event.event_key,
+                force=True,
+                user_id=order.user_id,
+                current_gallery_item_id=version["gallery_item_id"],
+                current_version_id=order.version_id,
+                pending_action="checkout",
+                pending_request_id=None,
+                pending_prompt=None,
+            )
+            self._send_image(
+                event.user_id,
+                self._selected_preview_path(updated),
+                PAYMENT_OFFER_TEXT,
+                (
+                    Button("Оплатить 49 ₽", payment_url),
+                    Button("← Назад", "nav:back:work"),
+                ),
+                screen="payment_offer",
+            )
+            return
+
+        if order.purpose == "processing_request" and order.pending_request_id:
+            with self.database.read() as connection:
+                pending = connection.execute(
+                    """SELECT * FROM pending_edit_requests
+                       WHERE id=? AND user_id=? AND platform_user_id=?
+                         AND status IN ('awaiting_payment','paid')""",
+                    (order.pending_request_id, order.user_id, event.user_id),
+                ).fetchone()
+            if pending is None:
+                raise AssetUnavailableError("Pending checkout is unavailable")
+            source_path = Path(pending["primary_source_path"])
+            if not source_path.is_file():
+                raise AssetUnavailableError("Pending checkout source is unavailable")
+            updated = self.store.transition(
+                event.user_id,
+                "result_ready",
+                event_key=event.event_key,
+                force=True,
+                user_id=order.user_id,
+                session_id=pending["session_id"],
+                current_gallery_item_id=pending["gallery_item_id"],
+                current_version_id=None,
+                pending_prompt=pending["prompt"],
+                pending_action="checkout",
+                pending_request_id=order.pending_request_id,
+            )
+            self._send_image(
+                event.user_id,
+                source_path,
+                PENDING_EDIT_PAYMENT_TEXT,
+                (
+                    Button("Оплатить 49 ₽", payment_url),
+                    Button("← Назад", "nav:back:main"),
+                ),
+                screen="pending_payment_offer",
+                context={
+                    "gallery_item_id": updated.current_gallery_item_id,
+                    "version_id": None,
+                },
+            )
+            return
+
+        raise PaymentError("Payment target is invalid")
 
     def _send_view(self, user_id: str, view: View) -> str:
         return self._send_message(user_id, view.text, view.buttons)
@@ -1088,6 +1221,11 @@ class MaxApplication:
                 event,
                 dialog,
                 f"pay_{action.rsplit(':', 1)[-1]}",
+            )
+        elif action.startswith("payment:renew:"):
+            self._refresh_checkout(
+                event,
+                action.rsplit(":", 1)[-1],
             )
         elif action == "source:one":
             updated = self.store.transition(
@@ -2209,7 +2347,13 @@ class MaxApplication:
 
         current = self.store.get(event.user_id) or dialog
         if current.pending_action == "checkout":
-            return
+            if current.user_id and current.current_version_id:
+                reusable = self.payments.reusable_order_for_target(
+                    current.user_id,
+                    current.current_version_id,
+                )
+                if reusable is not None:
+                    return
         dialog = current
         if not dialog.current_version_id:
             self._send_message(

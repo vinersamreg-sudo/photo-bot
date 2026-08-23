@@ -2,6 +2,7 @@ import hashlib
 import json
 import sqlite3
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
@@ -24,6 +25,7 @@ from app.demo_service import DemoService
 from app.image_provider import FakeImageProvider
 from app.payments import (
     PaymentError,
+    PaymentExpired,
     PaymentStatus,
     PaymentUnavailable,
     build_payment_service,
@@ -115,6 +117,232 @@ class PaymentTests(TestCase):
             "Shp_order": token,
             "PaymentMethod": "BankCard",
         }
+
+    def pending_request(self, request_id: str = "pending-refresh") -> str:
+        with self.database.transaction() as connection:
+            item = connection.execute(
+                """SELECT id,original_source_path,secondary_source_path
+                   FROM gallery_items WHERE user_id=? ORDER BY created_at LIMIT 1""",
+                (self.user_id,),
+            ).fetchone()
+            connection.execute(
+                """INSERT INTO pending_edit_requests(
+                       id,platform_user_id,user_id,session_id,gallery_item_id,
+                       prompt,primary_source_path,secondary_source_path,status,
+                       created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    request_id,
+                    "owner",
+                    self.user_id,
+                    self.session.session_id,
+                    item["id"],
+                    "Соедини фотографии",
+                    item["original_source_path"],
+                    item["secondary_source_path"],
+                    "awaiting_payment",
+                    self.clock().isoformat(),
+                    self.clock().isoformat(),
+                ),
+            )
+        return request_id
+
+    def test_reusable_order_excludes_exact_expiry_boundary_and_expires_idempotently(self) -> None:
+        order = self.service.create_order(
+            self.user_id, None, "expiry-boundary", account_purchase=True
+        )
+        self.clock.advance(minutes=30)
+
+        self.assertFalse(self.service.is_reusable_order(order))
+        with self.assertRaises(PaymentExpired):
+            self.service.payment_redirect_form(order.public_token)
+        with self.assertRaises(PaymentExpired):
+            self.service.payment_redirect_form(order.public_token)
+
+        with self.database.read() as connection:
+            statuses = connection.execute(
+                """SELECT o.status AS order_status,i.status AS intent_status
+                   FROM payment_orders o JOIN payment_intents i ON i.id=o.intent_id
+                   WHERE o.id=?""",
+                (order.id,),
+            ).fetchone()
+            expired_events = connection.execute(
+                """SELECT COUNT(*) FROM payment_audit
+                   WHERE order_id=? AND event_type='checkout_expired'""",
+                (order.id,),
+            ).fetchone()[0]
+        self.assertEqual(statuses["order_status"], "expired")
+        self.assertEqual(statuses["intent_status"], "expired")
+        self.assertEqual(expired_events, 1)
+
+    def test_expired_idempotency_replay_is_not_reused(self) -> None:
+        order = self.service.create_order(
+            self.user_id, None, "expired-replay", account_purchase=True
+        )
+        self.clock.advance(minutes=30)
+
+        with self.assertRaises(PaymentExpired):
+            self.service.create_order(
+                self.user_id, None, "expired-replay", account_purchase=True
+            )
+        fresh = self.service.create_order(
+            self.user_id, None, "expired-replay-new-event", account_purchase=True
+        )
+
+        self.assertNotEqual(fresh.id, order.id)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                2,
+            )
+
+    def test_owner_refresh_preserves_all_three_exact_payment_targets(self) -> None:
+        pending_request_id = self.pending_request()
+        originals = [
+            self.service.create_order(
+                self.user_id, self.versions[0]["id"], "refresh-original"
+            ),
+            self.service.create_order(
+                self.user_id,
+                None,
+                "refresh-processing",
+                pending_request_id=pending_request_id,
+            ),
+            self.service.create_order(
+                self.user_id, None, "refresh-account", account_purchase=True
+            ),
+        ]
+        self.clock.advance(minutes=31)
+        refreshed = []
+        for order in originals:
+            refreshed.append(
+                self.service.refresh_order_for_platform_user(
+                    order.public_token, "owner"
+                )
+            )
+
+        self.assertEqual(refreshed[0].purpose, "original_download")
+        self.assertEqual(refreshed[0].version_id, originals[0].version_id)
+        self.assertIsNone(refreshed[0].pending_request_id)
+        self.assertEqual(refreshed[1].purpose, "processing_request")
+        self.assertEqual(
+            refreshed[1].pending_request_id, originals[1].pending_request_id
+        )
+        self.assertIsNone(refreshed[1].version_id)
+        self.assertEqual(refreshed[2].purpose, "account_topup")
+        self.assertIsNone(refreshed[2].version_id)
+        self.assertIsNone(refreshed[2].pending_request_id)
+        with self.database.read() as connection:
+            old_statuses = {
+                row["status"]
+                for row in connection.execute(
+                    "SELECT status FROM payment_orders WHERE id IN (?,?,?)",
+                    tuple(order.id for order in originals),
+                )
+            }
+            grants = connection.execute(
+                "SELECT COUNT(*) FROM continuation_pack_grants"
+            ).fetchone()[0]
+        metrics = payment_reconciliation_summary(self.database)
+        self.assertEqual(old_statuses, {"expired"})
+        self.assertEqual(grants, 0)
+        self.assertEqual(metrics["expired_checkout_events"], 3)
+        self.assertEqual(metrics["refreshed_checkout_events"], 3)
+        self.assertNotIn(self.user_id, json.dumps(metrics))
+
+    def test_wrong_max_user_cannot_refresh_or_create_an_order(self) -> None:
+        order = self.service.create_order(
+            self.user_id, None, "wrong-owner-refresh", account_purchase=True
+        )
+        self.clock.advance(minutes=31)
+
+        with self.assertRaisesRegex(PaymentError, "not found"):
+            self.service.refresh_order_for_platform_user(
+                order.public_token, "different-user"
+            )
+
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    """SELECT COUNT(*) FROM payment_audit
+                       WHERE event_type='checkout_refreshed'"""
+                ).fetchone()[0],
+                0,
+            )
+
+    def test_concurrent_owner_refresh_reuses_one_fresh_order(self) -> None:
+        order = self.service.create_order(
+            self.user_id, None, "concurrent-refresh", account_purchase=True
+        )
+        self.clock.advance(minutes=31)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            refreshed = list(
+                executor.map(
+                    lambda _value: self.service.refresh_order_for_platform_user(
+                        order.public_token, "owner"
+                    ),
+                    range(2),
+                )
+            )
+
+        self.assertEqual(refreshed[0].id, refreshed[1].id)
+        self.assertNotEqual(refreshed[0].id, order.id)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                2,
+            )
+            self.assertEqual(
+                connection.execute(
+                    """SELECT COUNT(*) FROM payment_audit
+                       WHERE order_id=? AND event_type='checkout_refreshed'""",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+
+    def test_late_and_duplicate_result_for_old_refreshed_order_remain_idempotent(self) -> None:
+        old = self.service.create_order(
+            self.user_id, None, "late-result-refresh", account_purchase=True
+        )
+        self.clock.advance(minutes=31)
+        fresh = self.service.refresh_order_for_platform_user(
+            old.public_token, "owner"
+        )
+
+        first = self.service.process_webhook(
+            self.signed_callback(old),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        duplicate = self.service.process_webhook(
+            self.signed_callback(old),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+
+        self.assertTrue(first.accepted)
+        self.assertFalse(first.duplicate)
+        self.assertTrue(duplicate.accepted)
+        self.assertTrue(duplicate.duplicate)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT status FROM payment_orders WHERE id=?", (fresh.id,)
+                ).fetchone()[0],
+                "pending",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants"
+                ).fetchone()[0],
+                1,
+            )
 
     def test_aggregate_reconciliation_detects_mismatch_without_mutation(self) -> None:
         order = self.service.create_order(
@@ -1147,6 +1375,48 @@ class PaymentTests(TestCase):
             ).fetchone()[0]
         self.assertEqual(status, "pending")
         self.assertEqual(webhooks, 0)
+
+    def test_expired_browser_checkout_only_offers_bounded_max_refresh(self) -> None:
+        order = self.service.create_order(
+            self.user_id, None, "expired-browser", account_purchase=True
+        )
+        self.clock.advance(minutes=31)
+        server = PaymentWebhookServer(
+            self.service, "127.0.0.1", 0, "/payments/robokassa/result"
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        base = f"http://127.0.0.1:{server.bound_port}"
+
+        response = httpx.get(f"{base}/p/{order.public_token}")
+
+        self.assertEqual(response.status_code, 410)
+        self.assertIn("Ссылка на оплату устарела", response.text)
+        self.assertIn("Обновить её можно в Ravuna", response.text)
+        self.assertIn("Вернуться в Ravuna", response.text)
+        self.assertIn(f"start=payrefresh_{order.public_token}", response.text)
+        self.assertNotIn("robokassa", response.text.casefold())
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT status FROM payment_orders WHERE id=?", (order.id,)
+                ).fetchone()[0],
+                "expired",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants"
+                ).fetchone()[0],
+                0,
+            )
 
     def test_receipt_omits_self_employed_receipt_fields(self) -> None:
         request = RobokassaPaymentRequest(

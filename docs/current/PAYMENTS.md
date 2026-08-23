@@ -29,6 +29,9 @@
 3. The short endpoint resolves only an active owned order and returns an
    auto-submitted POST form to Robokassa. Provider parameters are hidden form
    fields, so the browser address bar does not contain the long signed query.
+   An order is active/reusable only while its status is `pending` and
+   `expires_at` is strictly in the future. The current checkout TTL remains 30
+   minutes.
 4. Robokassa POSTs ResultURL.
 5. Ravuna verifies Password #2 signature, amount, invoice and order state.
 6. One transaction marks the order paid and grants +2 edits and +1 original.
@@ -42,6 +45,13 @@ entitlement. Confirmed `original_download` resumes the exact version and
 delivers its original; confirmed `processing_request` restores the exact saved
 prompt and one or two sources. Missing context fails closed without substituting
 the latest work. A cancelled payment retains the pending context.
+
+An expired `/p/<opaque-token>` request never creates a PaymentOrder from the
+anonymous browser. It marks a still-pending order expired idempotently and shows
+a bounded return link to MAX. MAX verifies the current platform user against the
+original order owner before creating or reusing one fresh order with the same
+purpose and exact version/pending-request/account context. A wrong user fails
+closed. The old order remains expired, and only ResultURL can grant the package.
 
 ## Signature contracts
 
@@ -63,6 +73,8 @@ contract. Never print canonical strings containing real passwords.
 ## Idempotency
 
 - Duplicate button taps should reuse an applicable pending purchase.
+- Every reuse path applies the same reusable-order predicate: `pending` status
+  and `expires_at > now`. Status alone is insufficient.
 - Pending purchases are target-scoped; an absent target must fail closed and
   must never fall back to the latest completed work.
 - Duplicate ResultURL callbacks return the expected acknowledgement without a
@@ -71,14 +83,22 @@ contract. Never print canonical strings containing real passwords.
   keys/constraints.
 - Browser redirects cannot race the server callback into a grant.
 - Restart does not lose paid state or entitlement.
+- A valid signed ResultURL may arrive after the local checkout TTL; it remains
+  authoritative and idempotent so received money cannot be left without the
+  purchased package.
 
 ## Failure behavior
 
 - Invalid signature/amount/invoice: reject and log a privacy-safe event.
 - Webhook disabled: POST returns 503; GET remains 405.
 - Payment pending: explain that confirmation may be delayed.
+- Expired checkout: explain that the link is stale and return the owner to MAX
+  to refresh it; never create a new order from an anonymous GET.
 - Paid but original delivery failed: preserve entitlement and allow retry.
 - Refund execution stays disabled unless explicitly approved.
+
+Aggregate reconciliation exposes `expired_checkout_events` and
+`refreshed_checkout_events`; these metrics contain no user identifiers.
 
 ## Production flags
 
