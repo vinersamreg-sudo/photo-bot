@@ -10,6 +10,35 @@ from typing import Iterator
 from uuid import NAMESPACE_URL, uuid5
 
 
+CURRENT_SCHEMA_VERSION = 14
+
+
+class UnsupportedSchemaVersionError(RuntimeError):
+    """Raised before writes when a database is newer than this application."""
+
+
+def schema_version(connection: sqlite3.Connection) -> int:
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+    ).fetchone()
+    if table is None:
+        return 0
+    return int(
+        connection.execute(
+            "SELECT COALESCE(MAX(version),0) FROM schema_migrations"
+        ).fetchone()[0]
+    )
+
+
+def require_supported_schema(connection: sqlite3.Connection) -> int:
+    version = schema_version(connection)
+    if version > CURRENT_SCHEMA_VERSION:
+        raise UnsupportedSchemaVersionError(
+            "Database schema is newer than this application supports"
+        )
+    return version
+
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
@@ -823,6 +852,7 @@ class Database:
     def initialize(self) -> None:
         connection = self.connect()
         try:
+            require_supported_schema(connection)
             connection.executescript(SCHEMA)
             existing = {
                 row[1] for row in connection.execute("PRAGMA table_info(generation_attempts)")
@@ -1202,6 +1232,8 @@ class Database:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
+            if schema_version(connection) != CURRENT_SCHEMA_VERSION:
+                raise RuntimeError("Database did not reach the required schema version")
         finally:
             connection.close()
 

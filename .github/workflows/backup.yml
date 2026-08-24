@@ -46,6 +46,7 @@ jobs:
             ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -euo pipefail
               IFS= read -r PASSPHRASE
               cd /opt/photo-bot
+              EXPECTED_SCHEMA=$(venv/bin/python -c "import sqlite3,tempfile; from pathlib import Path; import app.database as d; t=tempfile.TemporaryDirectory(); p=Path(t.name)/\"schema.sqlite3\"; d.Database(p); c=sqlite3.connect(p); actual=int(c.execute(\"SELECT COALESCE(MAX(version),0) FROM schema_migrations\").fetchone()[0]); c.close(); declared=int(getattr(d,\"CURRENT_SCHEMA_VERSION\",actual)); assert actual==declared; print(declared); t.cleanup()")
               REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-create --passphrase-stdin)
               NAME=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"backup_name\"])")
               SHA=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
@@ -55,7 +56,7 @@ jobs:
               SQLITE_MIGRATION=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
               test "$SQLITE_RESTORE_OK" = True
               test "$SQLITE_QUICK_CHECK" = ok
-              test "$SQLITE_MIGRATION" = 13
+              test "$SQLITE_MIGRATION" = "$EXPECTED_SCHEMA"
               RECOVERY_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-create --passphrase-stdin)
               RECOVERY_NAME=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"recovery_bundle_name\"])")
               RECOVERY_SHA=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
@@ -76,7 +77,7 @@ jobs:
               test "$RESTORE_OVERALL" = PASS
               test "$RESTORE_ARTIFACT" = PASS
               test "$RESTORE_SQLITE" = PASS
-              test "$RESTORE_MIGRATION" = 13
+              test "$RESTORE_MIGRATION" = "$EXPECTED_SCHEMA"
               test "$RESTORE_REVISION" = "$(cat .deploy-sha)"
               printf "%s\t%s\t%s\t%s\n" "$NAME" "$SHA" "$RECOVERY_NAME" "$RECOVERY_SHA"')
           IFS=$'\t' read -r BACKUP_NAME BACKUP_SHA RECOVERY_NAME RECOVERY_SHA <<< "$BACKUP_NAMES"

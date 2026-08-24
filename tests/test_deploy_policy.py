@@ -281,6 +281,18 @@ class DeployPolicyTests(TestCase):
         marker_position = self.workflow.rindex("data/deployed_commit.txt")
         self.assertGreater(marker_position, health_position)
 
+    def test_migration_copy_gate_runs_before_service_stop(self) -> None:
+        gate = self.workflow.index(
+            "Verify migration on isolated production database copy"
+        )
+        stop = self.workflow.index("systemctl stop photo-bot.service")
+        self.assertLess(gate, stop)
+        self.assertIn("scripts/check_migration_copy.py", self.workflow)
+        self.assertIn("--source /opt/photo-bot/data/photo_bot.sqlite3", self.workflow)
+        self.assertIn("--copy \"$STAGE_ROOT/photo_bot.migrated.sqlite3\"", self.workflow)
+        self.assertIn("CURRENT_SCHEMA_VERSION", self.workflow)
+        self.assertIn("assert current_schema == CURRENT_SCHEMA_VERSION", self.workflow)
+
     def test_runtime_audit_python_heredoc_terminates_at_remote_column(self) -> None:
         lines = self.workflow.splitlines()
         start = next(
