@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
+from app.commerce import LARGE_PACKAGE, SMALL_PACKAGE
 from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
@@ -394,6 +395,80 @@ class MaxApplicationTests(TestCase):
         )
         self.assertFalse(any("Я понял задачу" in message[1] for message in self.transport.messages))
         self.assertFalse(any("Бесплатных вариантов доступно" in message[1] for message in self.transport.messages))
+
+    def test_main_menu_reads_live_cumulative_balances_from_database(self) -> None:
+        self.app.handle(self.event("bot_started"))
+        account_id = self.store.get("u1").user_id
+        self.assertIn(
+            "Ваш баланс:\n⚡ Обработки: 2\n"
+            "🖼 Оригиналы без водяного знака: 0",
+            self.transport.messages[-1][1],
+        )
+
+        with self.database.transaction() as connection:
+            self.demo.commerce.grant_continuation_pack(
+                connection,
+                user_id=account_id,
+                payment_order_id="balance-small-order",
+                payment_intent_id="balance-small-intent",
+                generation_credit_quantity=SMALL_PACKAGE.generation_credits,
+                unlock_entitlement_quantity=SMALL_PACKAGE.unlock_entitlements,
+            )
+            self.demo.commerce.grant_continuation_pack(
+                connection,
+                user_id=account_id,
+                payment_order_id="balance-large-order",
+                payment_intent_id="balance-large-intent",
+                generation_credit_quantity=LARGE_PACKAGE.generation_credits,
+                unlock_entitlement_quantity=LARGE_PACKAGE.unlock_entitlements,
+            )
+
+        self.app.handle(self.event("message_created", text="/start"))
+        self.assertIn(
+            "Ваш баланс:\n⚡ Обработки: 104\n"
+            "🖼 Оригиналы без водяного знака: 51",
+            self.transport.messages[-1][1],
+        )
+
+    def test_main_menu_refreshes_after_processing_failure_and_original_delivery(self) -> None:
+        self.generate_first()
+        dialog = self.store.get("u1")
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_unlock_entitlements(
+                connection,
+                user_id=dialog.user_id,
+                delta=1,
+                reason="test original balance",
+                idempotency_key="test-main-balance-original",
+            )
+        self.assertEqual(
+            self.demo.commerce.entitlement_balance(dialog.user_id).available, 1
+        )
+
+        self.callback("result:unlock")
+        self.assertTrue(self.transport.files)
+        self.app.handle(self.event("message_created", text="/start"))
+        self.assertIn(
+            "Ваш баланс:\n⚡ Обработки: 1\n"
+            "🖼 Оригиналы без водяного знака: 0",
+            self.transport.messages[-1][1],
+        )
+
+        self.provider.fail = RuntimeError("provider unavailable")
+        self.clock.advance(2)
+        self.app.handle(
+            self.event(
+                "message_created",
+                text="Измени фон",
+                image_url="https://iu.oneme.ru/failed-source",
+            )
+        )
+        self.app.handle(self.event("message_created", text="/start"))
+        self.assertIn(
+            "Ваш баланс:\n⚡ Обработки: 1\n"
+            "🖼 Оригиналы без водяного знака: 0",
+            self.transport.messages[-1][1],
+        )
 
     def paid_application(self):
         paid_settings = replace(
