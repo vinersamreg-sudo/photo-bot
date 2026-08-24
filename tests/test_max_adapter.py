@@ -134,6 +134,7 @@ class MaxAdapterTests(TestCase):
             [
                 "⬇️ Получить оригинал",
                 "💳 Купить 2 обработки — 49 ₽",
+                "💳 100 обработок + 50 оригиналов — 1990 ₽",
                 "🎁 Пригласить друга — получить +2 обработки",
                 "⭐ Оценить",
                 "💬 Отзыв о Ravuna",
@@ -143,7 +144,7 @@ class MaxAdapterTests(TestCase):
         )
         self.assertEqual(
             [button.row for button in result_actions(0).buttons],
-            [0, 1, 2, 3, 3, 4, 5],
+            [0, 1, 2, 3, 4, 4, 5, 6],
         )
         self.assertEqual(
             [button.text for button in paid_actions()],
@@ -178,6 +179,7 @@ class MaxAdapterTests(TestCase):
                 "⬇ Получить оригинал",
                 "🎁 Поделиться и получить бонус",
                 "💳 Купить ещё 2 обработки — 49 ₽",
+                "💳 100 обработок + 50 оригиналов — 1990 ₽",
                 "История версий",
                 "Ещё",
                 "← Назад",
@@ -187,6 +189,18 @@ class MaxAdapterTests(TestCase):
         self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])
         self.assertNotIn("👎 Не то", [button.text for button in gallery_item_actions()])
         self.assertEqual(len(version_history_actions()), 4)
+
+    def test_zero_balance_main_menu_offers_both_one_time_packages(self) -> None:
+        menu = main_menu(0, "https://ravuna.ru/p/" + "a" * 32)
+        actions = {button.text: button.action for button in menu.buttons}
+        self.assertEqual(
+            actions["Купить пакет — 49 ₽"],
+            "https://ravuna.ru/p/" + "a" * 32,
+        )
+        self.assertEqual(
+            actions["Купить 100 обработок + 50 оригиналов — 1990 ₽"],
+            "package:buy:large",
+        )
 
     def test_every_nested_menu_ends_with_exact_back_button(self) -> None:
         views = (

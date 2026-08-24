@@ -20,7 +20,7 @@ from uuid import uuid4
 
 from app.config import Settings, load_settings
 from app.attribution import AttributionService
-from app.commerce import CommerceService, PRODUCT_CODE
+from app.commerce import CONTINUATION_PACKAGES, CommerceService
 from app.openai_client import (
     OpenAICheckError,
     OpenAIConfigurationError,
@@ -595,8 +595,11 @@ def run_package_status(
 ) -> int:
     try:
         database = Database(settings.database_path)
-        clauses = ["o.product_code=?"]
-        values: list[object] = [PRODUCT_CODE]
+        package_codes = tuple(CONTINUATION_PACKAGES)
+        clauses = [
+            f"o.product_code IN ({','.join('?' for _ in package_codes)})"
+        ]
+        values: list[object] = list(package_codes)
         user_ref = None
         if platform_user_id:
             user = _commerce_user(database, platform_user_id)
@@ -608,9 +611,12 @@ def run_package_status(
             values.append(invoice)
         with database.read() as connection:
             rows = connection.execute(
-                f"""SELECT o.provider_invoice_id,o.status,o.amount_minor,o.created_at,
+                f"""SELECT o.provider_invoice_id,o.product_code,o.status,o.amount_minor,o.created_at,
                             g.status AS grant_status,l.available_credits,l.reserved_credits,
-                            l.consumed_credits,e.status AS entitlement_status
+                            l.consumed_credits,
+                            (SELECT COUNT(*) FROM unlock_entitlements owned
+                             WHERE owned.source_payment_order_id=o.id)
+                             AS entitlement_count
                      FROM payment_orders o
                      LEFT JOIN continuation_pack_grants g ON g.payment_order_id=o.id
                      LEFT JOIN generation_credit_lots l ON l.id=g.credit_lot_id
@@ -620,18 +626,19 @@ def run_package_status(
             ).fetchall()
         _print_operator(
             {
-                "product_code": PRODUCT_CODE,
+                "product_codes": list(package_codes),
                 "user_ref": user_ref,
                 "packages": [
                     {
                         "invoice_ref": mask_reference(row["provider_invoice_id"], prefix="inv"),
                         "payment_status": row["status"],
+                        "product_code": row["product_code"],
                         "grant_status": row["grant_status"],
                         "price_rub": row["amount_minor"] / 100,
                         "variants_available": row["available_credits"],
                         "variants_reserved": row["reserved_credits"],
                         "variants_consumed": row["consumed_credits"],
-                        "original_status": row["entitlement_status"],
+                        "original_quantity": row["entitlement_count"],
                         "created_at": row["created_at"],
                     }
                     for row in rows

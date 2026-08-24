@@ -7,8 +7,9 @@ reports live in `docs/archive/`.
 ## System
 
 Ravuna is a MAX-based AI photo editor. A user sends a photo and instruction,
-receives a watermarked preview, can correct/repeat the work, and can buy the
-49 ₽ access package containing two edits and one unwatermarked original.
+receives a watermarked preview, can correct/repeat the work, and can buy either
+the 49 ₽ access package containing two edits and one unwatermarked original or
+the one-time 1990 ₽ package containing 100 edits and 50 originals.
 
 ```text
 MAX user
@@ -22,7 +23,8 @@ MAX user
 Robokassa
   -> POST ResultURL
   -> signature verification + idempotent order transition
-  -> credit ledger (+2) + entitlement ledger (+1) + one sale receipt
+  -> package-specific credit/entitlement ledgers (+2/+1 or +100/+50)
+  -> one sale receipt
 ```
 
 ## Main modules

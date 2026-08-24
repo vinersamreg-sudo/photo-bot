@@ -1,17 +1,21 @@
 # Payments
 
-## Product
+## Products
 
-- Public name: **Пакет доступа Ravuna**.
-- Price: **49 ₽**.
-- Grant: **two edits and one original**.
-- Internal product/ledger identifiers remain stable for compatibility.
+- **49 ₽** one-time package: two edits and one original. Its public/fiscal
+  name remains **Пакет доступа Ravuna** and its identifiers are unchanged.
+- **1990 ₽** one-time package: 100 edits and 50 originals. Its fiscal item is
+  **Пакет Ravuna: 100 обработок и 50 оригиналов**.
+- Neither package is a subscription and neither creates recurring charges.
+- Every PaymentOrder persists the exact package code, amount and grant
+  quantities; reuse and expired-checkout recovery preserve all four values.
 
 ## Provider configuration
 
 - Provider: Robokassa.
 - Production mode uses SHA-256.
-- Receipt item: “Пакет доступа Ravuna”, quantity 1, sum 49.00, tax `none`.
+- Receipt item is package-specific, quantity 1, tax `none`, with exact sum
+  49.00 or 1990.00.
 - Existing fiscal fields and self-employed receipt configuration must not be
   changed without a separate fiscal review.
 - Static SuccessURL and FailURL remain configured in the Robokassa cabinet.
@@ -23,7 +27,7 @@
 1. Ravuna shows one payment offer for an explicit completed version, durable
    pending edit request or account top-up. Rendering the offer creates/reuses
    one target-scoped PaymentIntent and PaymentOrder.
-2. The “Оплатить 49 ₽” button contains only Ravuna's short opaque URL
+2. The package-specific pay button contains only Ravuna's short opaque URL
    `https://ravuna.ru/p/<opaque-token>`; no long provider URL or intermediate
    “link ready” screen is shown.
 3. The short endpoint resolves only an active owned order and returns an
@@ -33,8 +37,9 @@
    `expires_at` is strictly in the future. The current checkout TTL remains 30
    minutes.
 4. Robokassa POSTs ResultURL.
-5. Ravuna verifies Password #2 signature, amount, invoice and order state.
-6. One transaction marks the order paid and grants +2 edits and +1 original.
+5. Ravuna verifies Password #2 signature, invoice, order state, package code,
+   exact package amount and persisted grant quantities.
+6. One transaction marks the order paid and grants exactly +2/+1 or +100/+50.
 7. Exactly one sale receipt/audit record is associated with the payment.
 8. The browser return opens Ravuna in MAX. A return before ResultURL shows
    “Проверяем оплату…” and does not grant or consume anything.
@@ -50,7 +55,7 @@ An expired `/p/<opaque-token>` request never creates a PaymentOrder from the
 anonymous browser. It marks a still-pending order expired idempotently and shows
 a bounded return link to MAX. MAX verifies the current platform user against the
 original order owner before creating or reusing one fresh order with the same
-purpose and exact version/pending-request/account context. A wrong user fails
+package, purpose and exact version/pending-request/account context. A wrong user fails
 closed. The old order remains expired, and only ResultURL can grant the package.
 
 ## Signature contracts
@@ -77,8 +82,8 @@ contract. Never print canonical strings containing real passwords.
   and `expires_at > now`. Status alone is insufficient.
 - Pending purchases are target-scoped; an absent target must fail closed and
   must never fall back to the latest completed work.
-- Duplicate ResultURL callbacks return the expected acknowledgement without a
-  second grant, entitlement, receipt or ledger mutation.
+- Duplicate/concurrent ResultURL callbacks return the expected acknowledgement
+  without a second grant, entitlement, receipt or ledger mutation.
 - PaymentIntent, provider order, grant and receipt have independent idempotency
   keys/constraints.
 - Browser redirects cannot race the server callback into a grant.

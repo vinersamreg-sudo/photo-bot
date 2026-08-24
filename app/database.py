@@ -658,7 +658,7 @@ CREATE TABLE IF NOT EXISTS unlock_entitlements (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     source_payment_intent_id TEXT,
-    source_payment_order_id TEXT NOT NULL UNIQUE,
+    source_payment_order_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('available','reserved','consumed','cancelled','refunded')),
     gallery_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
     reserved_at TEXT,
@@ -668,6 +668,8 @@ CREATE TABLE IF NOT EXISTS unlock_entitlements (
 );
 CREATE INDEX IF NOT EXISTS idx_unlock_entitlements_user_status
 ON unlock_entitlements(user_id,status,created_at);
+CREATE INDEX IF NOT EXISTS idx_unlock_entitlements_payment_order
+ON unlock_entitlements(source_payment_order_id);
 CREATE TABLE IF NOT EXISTS continuation_pack_grants (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -675,8 +677,8 @@ CREATE TABLE IF NOT EXISTS continuation_pack_grants (
     payment_intent_id TEXT,
     credit_lot_id TEXT NOT NULL UNIQUE REFERENCES generation_credit_lots(id),
     entitlement_id TEXT NOT NULL UNIQUE REFERENCES unlock_entitlements(id),
-    generation_credit_quantity INTEGER NOT NULL CHECK(generation_credit_quantity=2),
-    unlock_entitlement_quantity INTEGER NOT NULL CHECK(unlock_entitlement_quantity=1),
+    generation_credit_quantity INTEGER NOT NULL CHECK(generation_credit_quantity>0),
+    unlock_entitlement_quantity INTEGER NOT NULL CHECK(unlock_entitlement_quantity>0),
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','refunded')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -1188,8 +1190,93 @@ class Database:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
+            package_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=14"
+            ).fetchone()
+            if package_migration is None:
+                self._allow_multi_entitlement_packages(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(14,?,?)",
+                    (
+                        "multiple_continuation_packages",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
         finally:
             connection.close()
+
+    @staticmethod
+    def _allow_multi_entitlement_packages(connection: sqlite3.Connection) -> None:
+        """Relax the original 2+1-only commerce schema without changing existing rows."""
+
+        unlock_sql = str(
+            connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='unlock_entitlements'"
+            ).fetchone()[0]
+        )
+        grant_sql = str(
+            connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='continuation_pack_grants'"
+            ).fetchone()[0]
+        )
+        normalized_unlock = "".join(unlock_sql.split())
+        normalized_grant = "".join(grant_sql.split())
+        if (
+            "source_payment_order_idTEXTNOTNULLUNIQUE" not in normalized_unlock
+            and "CHECK(generation_credit_quantity=2)" not in normalized_grant
+            and "CHECK(unlock_entitlement_quantity=1)" not in normalized_grant
+        ):
+            return
+        connection.executescript(
+            """
+            PRAGMA foreign_keys=OFF;
+            PRAGMA legacy_alter_table=ON;
+            BEGIN IMMEDIATE;
+            ALTER TABLE continuation_pack_grants RENAME TO continuation_pack_grants_v13;
+            ALTER TABLE unlock_entitlements RENAME TO unlock_entitlements_v13;
+            DROP INDEX IF EXISTS idx_pack_grants_user_time;
+            DROP INDEX IF EXISTS idx_unlock_entitlements_user_status;
+            DROP INDEX IF EXISTS idx_unlock_entitlements_payment_order;
+            CREATE TABLE unlock_entitlements (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                source_payment_intent_id TEXT,
+                source_payment_order_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('available','reserved','consumed','cancelled','refunded')),
+                gallery_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
+                reserved_at TEXT,
+                consumed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO unlock_entitlements SELECT * FROM unlock_entitlements_v13;
+            CREATE INDEX idx_unlock_entitlements_user_status
+            ON unlock_entitlements(user_id,status,created_at);
+            CREATE INDEX idx_unlock_entitlements_payment_order
+            ON unlock_entitlements(source_payment_order_id);
+            CREATE TABLE continuation_pack_grants (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                payment_order_id TEXT NOT NULL UNIQUE,
+                payment_intent_id TEXT,
+                credit_lot_id TEXT NOT NULL UNIQUE REFERENCES generation_credit_lots(id),
+                entitlement_id TEXT NOT NULL UNIQUE REFERENCES unlock_entitlements(id),
+                generation_credit_quantity INTEGER NOT NULL CHECK(generation_credit_quantity>0),
+                unlock_entitlement_quantity INTEGER NOT NULL CHECK(unlock_entitlement_quantity>0),
+                status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','refunded')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO continuation_pack_grants SELECT * FROM continuation_pack_grants_v13;
+            CREATE INDEX idx_pack_grants_user_time
+            ON continuation_pack_grants(user_id,created_at DESC);
+            DROP TABLE continuation_pack_grants_v13;
+            DROP TABLE unlock_entitlements_v13;
+            COMMIT;
+            PRAGMA legacy_alter_table=OFF;
+            PRAGMA foreign_keys=ON;
+            """
+        )
 
     def recover_interrupted_runtime(self) -> dict[str, int]:
         """Recover crash state only from the primary runtime after it owns the lock."""

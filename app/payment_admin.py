@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.database import Database
-from app.commerce import PRODUCT_CODE
+from app.commerce import CONTINUATION_PACKAGES, is_continuation_package
 from app.payments import PaymentError, PaymentStatus
 
 
@@ -43,7 +43,16 @@ def _order_row(database: Database, invoice: int):
                       a.user_id AS attempt_user_id,
                       r.amount_minor AS receipt_amount_minor,r.status AS receipt_status,
                       g.status AS grant_status,l.available_credits,l.reserved_credits,
-                      l.consumed_credits,e.status AS entitlement_status
+                      l.consumed_credits,e.status AS entitlement_status,
+                      (SELECT COUNT(*) FROM unlock_entitlements owned
+                       WHERE owned.source_payment_order_id=o.id) AS entitlement_count,
+                      (SELECT COUNT(*) FROM unlock_entitlements owned
+                       WHERE owned.source_payment_order_id=o.id
+                         AND owned.status IN ('available','reserved','consumed'))
+                         AS active_entitlement_count,
+                      (SELECT COUNT(*) FROM unlock_entitlements owned
+                       WHERE owned.source_payment_order_id=o.id
+                         AND owned.status='refunded') AS refunded_entitlement_count
                FROM payment_orders o
                LEFT JOIN gallery_versions v ON v.id=o.version_id
                LEFT JOIN gallery_items i ON i.id=v.gallery_item_id
@@ -75,32 +84,45 @@ def payment_show(database: Database, invoice: int) -> dict[str, Any]:
         ).fetchall()
     status = str(row["status"])
     original_available = bool(row["original_path"] and Path(row["original_path"]).is_file())
-    ownership_consistent = bool(
-        row["user_id"]
-        and row["user_id"] == row["item_user_id"] == row["attempt_user_id"]
-    )
-    exact_version_consistent = bool(
-        row["version_attempt_id"] and row["version_attempt_id"] == row["attempt_id"]
-    )
+    if row["payment_purpose"] == "account_topup":
+        ownership_consistent = bool(
+            row["user_id"] and not row["version_id"] and not row["attempt_id"]
+        )
+        exact_version_consistent = True
+    else:
+        ownership_consistent = bool(
+            row["user_id"]
+            and row["user_id"] == row["item_user_id"] == row["attempt_user_id"]
+        )
+        exact_version_consistent = bool(
+            row["version_attempt_id"]
+            and row["version_attempt_id"] == row["attempt_id"]
+        )
     receipt_consistent = bool(
         row["receipt_amount_minor"] is not None
         and int(row["receipt_amount_minor"]) == int(row["amount_minor"])
         and row["currency"] == "RUB"
     )
-    is_pack = row["product_code"] == PRODUCT_CODE
+    is_pack = is_continuation_package(str(row["product_code"]))
     if is_pack and status in PAID_STATES:
         unlock_consistent = bool(
             row["grant_status"] == "active"
-            and row["entitlement_status"] in {"available", "reserved", "consumed"}
+            and int(row["entitlement_count"] or 0)
+            == int(row["unlock_entitlement_quantity"] or 0)
+            and int(row["active_entitlement_count"] or 0)
+            == int(row["unlock_entitlement_quantity"] or 0)
             and int(row["available_credits"] or 0)
             + int(row["reserved_credits"] or 0)
             + int(row["consumed_credits"] or 0)
-            == 2
+            == int(row["generation_credit_quantity"] or 0)
         )
     elif is_pack and status == PaymentStatus.REFUNDED.value:
         unlock_consistent = bool(
             row["grant_status"] == "refunded"
-            and row["entitlement_status"] == "refunded"
+            and int(row["entitlement_count"] or 0)
+            == int(row["unlock_entitlement_quantity"] or 0)
+            and int(row["refunded_entitlement_count"] or 0)
+            == int(row["unlock_entitlement_quantity"] or 0)
         )
     elif status in PAID_STATES:
         unlock_consistent = row["unlock_status"] == "unlocked"
@@ -138,6 +160,7 @@ def payment_show(database: Database, invoice: int) -> dict[str, Any]:
             "variants_reserved": row["reserved_credits"],
             "variants_consumed": row["consumed_credits"],
             "original_status": row["entitlement_status"],
+            "original_quantity": row["entitlement_count"],
         } if is_pack else None,
         "receipt_status": row["receipt_status"],
         "refunded_rub": int(row["refunded_amount_minor"] or 0) / 100,
@@ -237,14 +260,17 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
             """SELECT COUNT(*) FROM payment_audit
                WHERE event_type='checkout_refreshed'"""
         ).fetchone()[0])
+        package_codes = tuple(CONTINUATION_PACKAGES)
+        package_placeholders = ",".join("?" for _ in package_codes)
         paid_without_grant = int(connection.execute(
             f"""SELECT COUNT(*) FROM payment_orders o
-                WHERE o.product_code=? AND o.status IN ({paid_placeholders})
+                WHERE o.product_code IN ({package_placeholders})
+                  AND o.status IN ({paid_placeholders})
                   AND NOT EXISTS(
                       SELECT 1 FROM continuation_pack_grants g
                       WHERE g.payment_order_id=o.id
                   )""",
-            (PRODUCT_CODE, *ECONOMICALLY_PAID_STATES),
+            (*package_codes, *ECONOMICALLY_PAID_STATES),
         ).fetchone()[0])
         grant_without_paid_order = int(connection.execute(
             f"""SELECT COUNT(*) FROM continuation_pack_grants g
@@ -254,13 +280,17 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
         ).fetchone()[0])
         original_entitlement_mismatches = int(connection.execute(
             """SELECT COUNT(*) FROM continuation_pack_grants g
-               LEFT JOIN unlock_entitlements e ON e.id=g.entitlement_id
                LEFT JOIN payment_orders o ON o.id=g.payment_order_id
-               WHERE e.id IS NULL
-                  OR e.source_payment_order_id<>g.payment_order_id
-                  OR e.user_id<>g.user_id
+               WHERE (SELECT COUNT(*) FROM unlock_entitlements e
+                      WHERE e.source_payment_order_id=g.payment_order_id)
+                        <>g.unlock_entitlement_quantity
+                  OR EXISTS(
+                      SELECT 1 FROM unlock_entitlements e
+                      WHERE e.source_payment_order_id=g.payment_order_id
+                        AND e.user_id<>g.user_id
+                  )
                   OR o.user_id<>g.user_id
-                  OR g.unlock_entitlement_quantity<>1"""
+                  OR g.unlock_entitlement_quantity<=0"""
         ).fetchone()[0])
         receipt_mismatches = int(connection.execute(
             f"""SELECT COUNT(*) FROM payment_orders o
@@ -275,8 +305,12 @@ def payment_reconciliation_summary(database: Database) -> dict[str, Any]:
                    SELECT COUNT(*)-1 AS extra FROM continuation_pack_grants
                    GROUP BY payment_order_id HAVING COUNT(*)>1
                    UNION ALL
-                   SELECT COUNT(*)-1 AS extra FROM unlock_entitlements
-                   GROUP BY source_payment_order_id HAVING COUNT(*)>1
+                   SELECT COUNT(*)-g.unlock_entitlement_quantity AS extra
+                   FROM continuation_pack_grants g
+                   JOIN unlock_entitlements e
+                     ON e.source_payment_order_id=g.payment_order_id
+                   GROUP BY g.id
+                   HAVING COUNT(*)>g.unlock_entitlement_quantity
                    UNION ALL
                    SELECT COUNT(*)-1 AS extra FROM payment_receipts
                    WHERE receipt_type='payment'
