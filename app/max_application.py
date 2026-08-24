@@ -1029,6 +1029,7 @@ class MaxApplication:
     def _show_main(self, user_id: str, dialog: MaxDialog, event_key: str) -> None:
         account_id = self.adapter.ensure_account(user_id)
         balance = self.demo.commerce.balance(account_id).available
+        originals = self.demo.commerce.entitlement_balance(account_id).available
         self._reset_dialog_to_main(user_id, event_key)
         self.store.update(user_id, user_id=account_id)
         payment_url = None
@@ -1044,7 +1045,7 @@ class MaxApplication:
             except (PaymentError, PaymentUnavailable) as exc:
                 self._record_payment_preparation_failure(exc)
                 LOGGER.warning("Start payment offer is temporarily unavailable")
-        self._send_view(user_id, main_menu(balance, payment_url))
+        self._send_view(user_id, main_menu(balance, originals, payment_url))
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
         self.store.transition(
@@ -2713,12 +2714,11 @@ class MaxApplication:
                 pending_request_id=None,
                 status_message_id=None,
             )
-            menu = main_menu(balance.available)
+            menu = main_menu(balance.available, entitlements.available)
             self._send_view(
                 row["platform_user_id"],
                 View(
                     "✅ Оплата прошла успешно\n\n"
-                    f"Доступно обработок: {balance.available}\n\n"
                     + menu.text,
                     menu.buttons,
                 ),

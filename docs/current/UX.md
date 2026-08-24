@@ -82,9 +82,11 @@ pending request; a previous or latest completed work is never used as fallback.
 - Do not add a separate “Фото принято” screen when the caption is sufficient.
 - Invalid or unsupported media receives a concrete recovery instruction.
 - `/start` clears stale dialog binding but not gallery/payment history.
-- The main screen shows `Доступно обработок: N`. At zero it shows the exhausted
-  balance explanation and a direct package purchase button; stale upload state
-  cannot call the image provider.
+- The main screen always reads both current balances from SQLite and shows
+  `Ваш баланс:`, `⚡ Обработки: N` and
+  `🖼 Оригиналы без водяного знака: M`. It does not use dialog/session cache.
+  At zero edits it also shows the exhausted-balance explanation and direct
+  package purchase buttons; stale upload state cannot call the image provider.
 
 ## Source input
 

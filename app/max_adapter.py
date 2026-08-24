@@ -107,10 +107,19 @@ def new_source_view() -> View:
     )
 
 
-def main_menu(remaining: int | None = None, payment_url: str | None = None) -> View:
+def main_menu(
+    remaining: int, originals: int, payment_url: str | None = None
+) -> View:
+    balance_text = (
+        "Ваш баланс:\n"
+        f"⚡ Обработки: {remaining}\n"
+        f"🖼 Оригиналы без водяного знака: {originals}"
+    )
     if remaining == 0:
         text = (
             WELCOME_TEXT
+            + "\n\n"
+            + balance_text
             + "\n\nУ вас закончились обработки.\n"
             "Чтобы обработать новую фотографию, приобретите пакет Ravuna — 49 ₽."
         )
@@ -128,9 +137,7 @@ def main_menu(remaining: int | None = None, payment_url: str | None = None) -> V
             ),
         )
         return View(text, buttons)
-    text = WELCOME_TEXT
-    if remaining is not None:
-        text += f"\n\nДоступно обработок: {remaining}"
+    text = WELCOME_TEXT + "\n\n" + balance_text
     return View(
         text,
         (

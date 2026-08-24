@@ -44,7 +44,7 @@ class Transport:
 
 class MaxAdapterTests(TestCase):
     def test_menu_order_catalog_and_required_copy(self) -> None:
-        menu = main_menu()
+        menu = main_menu(2, 0)
         self.assertEqual(
             [button.text for button in menu.buttons],
             [
@@ -191,7 +191,7 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(len(version_history_actions()), 4)
 
     def test_zero_balance_main_menu_offers_both_one_time_packages(self) -> None:
-        menu = main_menu(0, "https://ravuna.ru/p/" + "a" * 32)
+        menu = main_menu(0, 0, "https://ravuna.ru/p/" + "a" * 32)
         actions = {button.text: button.action for button in menu.buttons}
         self.assertEqual(
             actions["Купить пакет — 49 ₽"],
@@ -201,6 +201,16 @@ class MaxAdapterTests(TestCase):
             actions["Купить 100 обработок + 50 оригиналов — 1990 ₽"],
             "package:buy:large",
         )
+
+    def test_main_menu_shows_processing_and_original_balances(self) -> None:
+        for processing, originals in ((2, 0), (4, 1), (104, 51)):
+            with self.subTest(processing=processing, originals=originals):
+                self.assertIn(
+                    "Ваш баланс:\n"
+                    f"⚡ Обработки: {processing}\n"
+                    f"🖼 Оригиналы без водяного знака: {originals}",
+                    main_menu(processing, originals).text,
+                )
 
     def test_every_nested_menu_ends_with_exact_back_button(self) -> None:
         views = (
@@ -228,18 +238,18 @@ class MaxAdapterTests(TestCase):
         for buttons in button_groups:
             self.assertTrue(buttons)
             self.assertEqual(buttons[-1].text, "← Назад")
-        self.assertNotIn("← Назад", [button.text for button in main_menu().buttons])
+        self.assertNotIn("← Назад", [button.text for button in main_menu(2, 0).buttons])
 
     def test_user_screens_are_short_and_hide_internal_vocabulary(self) -> None:
         views = (
-            main_menu(),
-            legal_view(),
-            legal_details_view(),
-            settings_view(),
-            photoshoot_catalog(),
-            result_actions(4),
-            result_actions(0),
-            delete_confirmation_view(),
+            (main_menu(2, 0), 380),
+            (legal_view(), 300),
+            (legal_details_view(), 300),
+            (settings_view(), 300),
+            (photoshoot_catalog(), 300),
+            (result_actions(4), 300),
+            (result_actions(0), 300),
+            (delete_confirmation_view(), 300),
         )
         forbidden = (
             "demo session",
@@ -251,11 +261,11 @@ class MaxAdapterTests(TestCase):
             "gpt",
             "генерац",
         )
-        for view in views:
+        for view, max_length in views:
             normalized = view.text.lower()
             for term in forbidden:
                 self.assertNotIn(term, normalized)
-            self.assertLessEqual(len(view.text), 300)
+            self.assertLessEqual(len(view.text), max_length)
 
     def test_consent_is_required_and_only_preview_is_delivered(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
