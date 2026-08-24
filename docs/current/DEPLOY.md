@@ -69,17 +69,20 @@ Production secrets alone must not silently make a fresh server public.
 7. Workflow revalidates canonical ancestry and exact-SHA CI before entering the
    production environment, then requires idle production before stopping the
    service.
-8. Synchronize code while preserving mutable paths.
-9. Install/check dependencies and run migrations.
-10. Install/restart one hardened systemd service.
-11. Before the application workflow, a root operator installs the exact Ravuna
+8. Stage the target database code under `/var/tmp`, create a consistent SQLite
+   copy, migrate only that copy to the code-declared schema version, and require
+   `quick_check=ok`, foreign-key integrity and unchanged commerce fingerprints.
+9. Synchronize code while preserving mutable paths.
+10. Install/check dependencies and run migrations.
+11. Install/restart one hardened systemd service.
+12. Before the application workflow, a root operator installs the exact Ravuna
     payment/return nginx routes with `ops/deploy_nginx_ravuna_payment.sh`; the
     workflow verifies the nginx-owned route marker before stopping the service.
     This marker is deliberately independent of the backend SHA, so routes can be
     published safely while the previous backend still serves the established flow.
-12. Run health, migration, ledger, storage and runtime audits.
-13. Record the exact validated `target_sha` only after successful health checks.
-14. Verify ResultURL transport without creating payment state.
+13. Run health, migration, ledger, storage and runtime audits.
+14. Record the exact validated `target_sha` only after successful health checks.
+15. Verify ResultURL transport without creating payment state.
 
 ## Production snapshot
 
@@ -106,6 +109,8 @@ For migrations, storage layout, retention or original delivery changes:
 - verify both the SQLite artifact and encrypted DB + private-storage recovery bundle;
 - prove restore in a separate synthetic/temporary root when the risk warrants it;
 - test migrations from the supported prior schema;
+- derive the expected schema from `app.database.CURRENT_SCHEMA_VERSION`; backup
+  and deploy checks fail closed for a newer or otherwise unsupported schema;
 - verify no negative credits, duplicate entitlements or stale processing;
 - verify orphan candidates before and after.
 

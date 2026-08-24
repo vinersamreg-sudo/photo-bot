@@ -13,7 +13,7 @@ from PIL import Image
 
 from app.backup import BackupError, BackupManager
 from app.config import Settings, load_settings
-from app.database import Database
+from app.database import CURRENT_SCHEMA_VERSION, Database
 from app.image_service import build_demo_service
 from app.maintenance import run_maintenance
 from app.operations import collect_launch_status
@@ -51,7 +51,7 @@ class BackupMaintenanceOperationsTests(TestCase):
             self.assertTrue(created["encrypted"])
             self.assertTrue(restored["restore_ok"])
             self.assertEqual(restored["quick_check"], "ok")
-            self.assertGreaterEqual(restored["migration"], 6)
+            self.assertEqual(restored["migration"], CURRENT_SCHEMA_VERSION)
             self.assertNotIn("passphrase", json.dumps(created))
             with self.assertRaisesRegex(BackupError, "file name"):
                 manager.restore_test(
@@ -358,6 +358,11 @@ class BackupMaintenanceOperationsTests(TestCase):
         self.assertIn("recovery-create --passphrase-stdin", workflow)
         self.assertIn("recovery-mark-offsite", workflow)
         self.assertIn("artifact/*.enc", workflow)
+        self.assertIn("CURRENT_SCHEMA_VERSION", workflow)
+        self.assertIn('test "$SQLITE_MIGRATION" = "$EXPECTED_SCHEMA"', workflow)
+        self.assertIn('test "$RESTORE_MIGRATION" = "$EXPECTED_SCHEMA"', workflow)
+        self.assertNotIn('test "$SQLITE_MIGRATION" = 13', workflow)
+        self.assertNotIn('test "$RESTORE_MIGRATION" = 13', workflow)
 
         uploaded = workflow.index("actions/upload-artifact@v4")
         confirmed = workflow.index("backup-mark-offsite")

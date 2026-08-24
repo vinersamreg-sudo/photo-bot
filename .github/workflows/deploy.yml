@@ -237,6 +237,35 @@ jobs:
           PY
             fi
           REMOTE
+      - name: Verify migration on isolated production database copy
+        if: env.DEPLOY_CONFIGURED == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          STAGE_ROOT="/var/tmp/ravuna-migration-${GITHUB_RUN_ID}"
+          cleanup_stage() {
+            ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+              "case '$STAGE_ROOT' in /var/tmp/ravuna-migration-[0-9]*) rm -rf -- '$STAGE_ROOT' ;; *) exit 1 ;; esac"
+          }
+          trap cleanup_stage EXIT
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "install -m 700 -d '$STAGE_ROOT' '$STAGE_ROOT/scripts'"
+          rsync -az --delete --exclude='/content_studio/' \
+            -e "ssh -p $SSH_PORT" app/ "$SSH_USER@$SSH_HOST:$STAGE_ROOT/app/"
+          rsync -az -e "ssh -p $SSH_PORT" scripts/check_migration_copy.py \
+            "$SSH_USER@$SSH_HOST:$STAGE_ROOT/scripts/check_migration_copy.py"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE'
+            set -euo pipefail
+            STAGE_ROOT="$1"
+            cd "$STAGE_ROOT"
+            PYTHONPATH="$STAGE_ROOT" /opt/photo-bot/venv/bin/python \
+              scripts/check_migration_copy.py \
+              --source /opt/photo-bot/data/photo_bot.sqlite3 \
+              --copy "$STAGE_ROOT/photo_bot.migrated.sqlite3"
+          REMOTE
       - name: Synchronize application files
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -677,11 +706,15 @@ jobs:
           import sqlite3
           import time
           from app.config import load_settings
+          from app.database import CURRENT_SCHEMA_VERSION
 
           settings = load_settings()
           connection = sqlite3.connect(settings.database_path)
           try:
               quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+              current_schema = int(connection.execute(
+                  "SELECT COALESCE(MAX(version),0) FROM schema_migrations"
+              ).fetchone()[0])
               migration_v6 = bool(connection.execute(
                   "SELECT 1 FROM schema_migrations WHERE version=6"
               ).fetchone())
@@ -730,6 +763,7 @@ jobs:
           finally:
               connection.close()
           assert quick_check == "ok"
+          assert current_schema == CURRENT_SCHEMA_VERSION
           assert migration_v6
           assert migration_v7
           assert migration_v8
@@ -834,6 +868,7 @@ jobs:
               "memory_total_mb": memory_total_mb,
               "stale_processing_orphans": stale_processing_orphans,
               "sqlite_quick_check": quick_check,
+              "schema_version": current_schema,
               "migration_v6": migration_v6,
               "migration_v7": migration_v7,
               "migration_v8": migration_v8,
