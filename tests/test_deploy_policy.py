@@ -1,3 +1,4 @@
+import io
 import subprocess
 import tarfile
 import tempfile
@@ -5,6 +6,10 @@ from pathlib import Path
 from unittest import TestCase
 
 from scripts.build_content_studio_release import REQUIRED_MEMBERS, build_release
+from scripts.main_bot_production_preflight import (
+    MAIN_BOT_PRODUCTION_TEST_MODULES,
+    run_preflight,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -205,6 +210,49 @@ class DeployPolicyTests(TestCase):
         self.assertIn('"$ROOT"/scripts/healthcheck.sh', self.workflow)
         self.assertIn("sudo -n systemctl", self.workflow)
         self.assertNotIn("sudo", SERVICE.read_text(encoding="utf-8"))
+
+    def test_main_bot_production_preflight_is_explicit_and_git_independent(
+        self,
+    ) -> None:
+        install_block = self.workflow.split(
+            "- name: Install and verify production", 1
+        )[1]
+        self.assertIn(
+            "python -m scripts.main_bot_production_preflight",
+            install_block,
+        )
+        self.assertNotIn("python -m unittest discover", install_block)
+        self.assertNotIn("tests.test_deploy_policy", MAIN_BOT_PRODUCTION_TEST_MODULES)
+        self.assertNotIn("tests.test_efficiency_tooling", MAIN_BOT_PRODUCTION_TEST_MODULES)
+        self.assertNotIn("tests.test_release_lineage", MAIN_BOT_PRODUCTION_TEST_MODULES)
+        self.assertFalse(
+            any(
+                module.startswith("tests.test_content_studio")
+                for module in MAIN_BOT_PRODUCTION_TEST_MODULES
+            )
+        )
+
+    def test_main_bot_preflight_passes_for_artifact_without_git(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory)
+            package = artifact / "artifact_tests"
+            package.mkdir()
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "test_smoke.py").write_text(
+                "import unittest\n\n"
+                "class SmokeTest(unittest.TestCase):\n"
+                "    def test_runtime(self):\n"
+                "        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse((artifact / ".git").exists())
+            result = run_preflight(
+                ("artifact_tests.test_smoke",),
+                artifact_root=artifact,
+                stream=io.StringIO(),
+            )
+            self.assertTrue(result.wasSuccessful())
 
     def test_verifies_log_safety_and_tripday_isolation(self) -> None:
         self.assertIn("scripts.check_runtime_secrets", self.workflow)

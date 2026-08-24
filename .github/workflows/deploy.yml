@@ -614,7 +614,7 @@ jobs:
             "$ROOT"/venv/bin/python --version
             "$ROOT"/venv/bin/pip check
             "$ROOT"/venv/bin/python -c 'from app.config import load_settings; from app.database import Database; Database(load_settings().database_path)'
-            MAX_TRANSPORT_MODE=disabled "$ROOT"/venv/bin/python -m unittest discover -v
+            MAX_TRANSPORT_MODE=disabled "$ROOT"/venv/bin/python -m scripts.main_bot_production_preflight
             "$ROOT"/venv/bin/python "$ROOT/scripts/check_asset_licenses.py"
             "$ROOT"/venv/bin/python "$ROOT/scripts/benchmark_processing.py" --iterations 3 --size 1024
             MAX_TRANSPORT_MODE=disabled "$ROOT"/scripts/healthcheck.sh

@@ -73,7 +73,10 @@ Production secrets alone must not silently make a fresh server public.
    copy, migrate only that copy to the code-declared schema version, and require
    `quick_check=ok`, foreign-key integrity and unchanged commerce fingerprints.
 9. Synchronize code while preserving mutable paths.
-10. Install/check dependencies and run migrations.
+10. Install/check dependencies, run migrations and execute the explicit
+    main-bot production preflight. This preflight does not discover Content
+    Studio or repository-policy tests and does not require `.git`; canonical CI
+    still runs the complete release suite before deployment is allowed.
 11. Install/restart one hardened systemd service.
 12. Before the application workflow, a root operator installs the exact Ravuna
     payment/return nginx routes with `ops/deploy_nginx_ravuna_payment.sh`; the
