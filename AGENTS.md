@@ -11,8 +11,9 @@ source of truth; use the repository and the current production snapshot.
 - The official public site is `https://ravuna.ru`.
 - The application repository and systemd service retain the technical name
   `photo-bot`; do not rename internal identifiers merely for branding.
-- The public product is “Пакет доступа Ravuna”: 49 ₽, two photo edits and one
-  original without a watermark.
+- The 49 ₽ public product remains “Пакет доступа Ravuna”: two photo edits and
+  one original without a watermark. Ravuna also offers a one-time 1990 ₽
+  package with 100 edits and 50 originals; neither package is a subscription.
 - The repository default image provider is Google Gemini Nano Banana Pro using
   `gemini-3-pro-image`; OpenAI `gpt-image-2` remains a selectable option.
 - Robokassa confirms payment through the server-side ResultURL.
@@ -118,8 +119,10 @@ with this list.
 
 ## Product invariants
 
-- Do not change price 49 ₽ without explicit product approval.
-- Do not change the package grant: two edits plus one original.
+- Do not change the 49 ₽ package or its grant of two edits plus one original
+  without explicit product approval.
+- Do not change the 1990 ₽ package or its grant of 100 edits plus 50 originals
+  without explicit product approval.
 - Never grant from SuccessURL/FailURL browser redirects.
 - ResultURL and ledger writes must remain idempotent.
 - Duplicate callbacks must not duplicate credits, entitlements or receipts.

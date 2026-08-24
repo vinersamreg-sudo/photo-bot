@@ -116,6 +116,10 @@ def main_menu(remaining: int | None = None, payment_url: str | None = None) -> V
         )
         buttons = (
             Button("Купить пакет — 49 ₽", payment_url or "package:buy"),
+            Button(
+                "Купить 100 обработок + 50 оригиналов — 1990 ₽",
+                "package:buy:large",
+            ),
             Button("📁 Мои работы", "studio:works"),
             Button("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
             Button(
@@ -261,14 +265,19 @@ def result_actions(remaining: int) -> View:
                 Button("⬇️ Получить оригинал", "result:unlock", 0),
                 Button("💳 Купить 2 обработки — 49 ₽", "package:offer", 1),
                 Button(
-                    "🎁 Пригласить друга — получить +2 обработки",
-                    "result:share",
+                    "💳 100 обработок + 50 оригиналов — 1990 ₽",
+                    "package:offer:large",
                     2,
                 ),
-                Button("⭐ Оценить", "result:rate", 3),
-                Button("💬 Отзыв о Ravuna", "result:feedback", 3),
-                Button("📁 Мои работы", "studio:works", 4),
-                Button("← Назад", "nav:back:main", 5),
+                Button(
+                    "🎁 Пригласить друга — получить +2 обработки",
+                    "result:share",
+                    3,
+                ),
+                Button("⭐ Оценить", "result:rate", 4),
+                Button("💬 Отзыв о Ravuna", "result:feedback", 4),
+                Button("📁 Мои работы", "studio:works", 5),
+                Button("← Назад", "nav:back:main", 6),
             ),
         )
     return View(
@@ -332,6 +341,10 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
             Button("⬇ Получить оригинал", "result:unlock"),
             Button("🎁 Поделиться и получить бонус", "result:share"),
             Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
+            Button(
+                "💳 100 обработок + 50 оригиналов — 1990 ₽",
+                "package:offer:large",
+            ),
             Button("История версий", "work:history"),
             Button("Ещё", "work:more"),
             Button("← Назад", "nav:back:works"),

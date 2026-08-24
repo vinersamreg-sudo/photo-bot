@@ -14,7 +14,12 @@ from PIL import Image
 
 from app.config import Settings
 from app.commercial_operations import cost_status, payment_status
-from app.commerce import RECEIPT_ITEM_NAME, USER_PRODUCT_NAME
+from app.commerce import (
+    LARGE_PACKAGE,
+    RECEIPT_ITEM_NAME,
+    SMALL_PACKAGE,
+    USER_PRODUCT_NAME,
+)
 from app.payment_admin import (
     payment_reconcile,
     payment_reconciliation_summary,
@@ -104,7 +109,8 @@ class PaymentTests(TestCase):
             self.settings, self.database, clock=self.clock
         )
 
-    def signed_callback(self, order, *, amount="49.00", token=None):
+    def signed_callback(self, order, *, amount=None, token=None):
+        amount = amount or f"{order.amount_minor / 100:.2f}"
         token = order.public_token if token is None else token
         base = (
             f"{amount}:{order.provider_invoice_id}:password-two:Shp_order={token}"
@@ -515,6 +521,61 @@ class PaymentTests(TestCase):
         self.assertNotIn("password-one", order.payment_url)
         again = self.service.create_order(self.user_id, self.versions[0]["id"], "event-2")
         self.assertEqual(again.id, order.id)
+
+    def test_large_package_order_receipt_and_form_are_exact(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "large-account-package",
+            account_purchase=True,
+            product_code=LARGE_PACKAGE.code,
+        )
+        query = parse_qs(urlparse(order.payment_url).query)
+        receipt = json.loads(unquote_plus(query["Receipt"][0]))
+        self.assertEqual(order.product_code, LARGE_PACKAGE.code)
+        self.assertEqual(order.amount_minor, 199_000)
+        self.assertEqual(order.generation_credit_quantity, 100)
+        self.assertEqual(order.unlock_entitlement_quantity, 50)
+        self.assertEqual(query["OutSum"], ["1990.00"])
+        self.assertEqual(query["Description"], [LARGE_PACKAGE.user_name])
+        for recurring_field in (
+            "Recurring",
+            "SubscriptionId",
+            "PreviousInvoiceID",
+            "AutoPayment",
+        ):
+            self.assertNotIn(recurring_field, query)
+        self.assertEqual(
+            receipt,
+            {
+                "items": [{
+                    "name": LARGE_PACKAGE.receipt_name,
+                    "quantity": 1,
+                    "sum": 1990.0,
+                    "tax": "none",
+                }]
+            },
+        )
+        with self.database.read() as connection:
+            persisted = connection.execute(
+                "SELECT * FROM payment_orders WHERE id=?", (order.id,)
+            ).fetchone()
+            fiscal = connection.execute(
+                "SELECT * FROM payment_receipts WHERE order_id=?", (order.id,)
+            ).fetchone()
+        self.assertEqual(persisted["product_code"], LARGE_PACKAGE.code)
+        self.assertEqual(persisted["amount_minor"], 199_000)
+        self.assertEqual(fiscal["amount_minor"], 199_000)
+        self.assertEqual(fiscal["item_name"], LARGE_PACKAGE.receipt_name)
+
+    def test_small_package_contract_remains_unchanged(self) -> None:
+        order = self.service.create_order(
+            self.user_id, None, "small-account-package", account_purchase=True
+        )
+        self.assertEqual(order.product_code, SMALL_PACKAGE.code)
+        self.assertEqual(order.amount_minor, 4_900)
+        self.assertEqual(order.generation_credit_quantity, 2)
+        self.assertEqual(order.unlock_entitlement_quantity, 1)
 
     def test_account_checkout_is_purpose_scoped_and_uses_only_opaque_short_url(self) -> None:
         order = self.service.create_order(
@@ -931,6 +992,190 @@ class PaymentTests(TestCase):
         with self.assertRaisesRegex(PaymentError, "delivery-pending"):
             self.service.schedule_delivery_retry(
                 self.service.create_order(self.user_id, self.versions[1]["id"], "event-2").id
+            )
+
+    def test_large_package_result_url_grants_once_and_survives_restart(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "large-result-url",
+            account_purchase=True,
+            product_code=LARGE_PACKAGE.code,
+        )
+        first = self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        duplicate = self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        self.assertTrue(first.accepted)
+        self.assertTrue(duplicate.accepted)
+        self.assertTrue(duplicate.duplicate)
+        restarted_database = Database(self.settings.database_path)
+        restarted_commerce = self.demo.commerce.__class__(
+            restarted_database, self.clock
+        )
+        self.assertEqual(restarted_commerce.balance(self.user_id).available, 100)
+        self.assertEqual(
+            restarted_commerce.entitlement_balance(self.user_id).available, 50
+        )
+        with restarted_database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM unlock_entitlements WHERE source_payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                50,
+            )
+        report = payment_show(
+            restarted_database, order.provider_invoice_id
+        )
+        self.assertTrue(report["consistent"])
+
+    def test_large_package_wrong_amount_is_rejected_without_grant(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "large-wrong-amount",
+            account_purchase=True,
+            product_code=LARGE_PACKAGE.code,
+        )
+        result = self.service.process_webhook(
+            self.signed_callback(order, amount="49.00"),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "amount_mismatch")
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available, 0)
+        self.assertEqual(self.demo.commerce.entitlement_balance(self.user_id).available, 0)
+
+    def test_tampered_large_package_order_is_rejected_without_grant(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "large-tampered-order",
+            account_purchase=True,
+            product_code=LARGE_PACKAGE.code,
+        )
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE payment_orders SET unlock_entitlement_quantity=49 WHERE id=?",
+                (order.id,),
+            )
+        result = self.service.process_webhook(
+            self.signed_callback(order),
+            method="POST",
+            path="/payments/robokassa/result",
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "order_package_mismatch")
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                0,
+            )
+
+    def test_concurrent_large_package_callbacks_create_one_atomic_grant(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "large-concurrent-callback",
+            account_purchase=True,
+            product_code=LARGE_PACKAGE.code,
+        )
+        values = self.signed_callback(order)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(
+                pool.map(
+                    lambda _: self.service.process_webhook(
+                        values,
+                        method="POST",
+                        path="/payments/robokassa/result",
+                    ),
+                    range(2),
+                )
+            )
+        self.assertTrue(all(result.accepted for result in results))
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM unlock_entitlements WHERE source_payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                50,
+            )
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available, 100)
+
+    def test_expired_large_package_refresh_preserves_exact_package_and_target(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            self.versions[0]["id"],
+            "large-expired",
+            product_code=LARGE_PACKAGE.code,
+        )
+        self.clock.advance(minutes=31)
+        refreshed = self.service.refresh_order_for_platform_user(
+            order.public_token, "owner"
+        )
+        self.assertNotEqual(refreshed.id, order.id)
+        self.assertEqual(refreshed.product_code, LARGE_PACKAGE.code)
+        self.assertEqual(refreshed.version_id, order.version_id)
+        self.assertEqual(refreshed.amount_minor, 199_000)
+        self.assertEqual(refreshed.generation_credit_quantity, 100)
+        self.assertEqual(refreshed.unlock_entitlement_quantity, 50)
+
+    def test_concurrent_large_package_refresh_reuses_one_fresh_order(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "large-concurrent-refresh",
+            account_purchase=True,
+            product_code=LARGE_PACKAGE.code,
+        )
+        self.clock.advance(minutes=31)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            refreshed = list(
+                pool.map(
+                    lambda _: self.service.refresh_order_for_platform_user(
+                        order.public_token, "owner"
+                    ),
+                    range(3),
+                )
+            )
+        self.assertEqual(len({value.id for value in refreshed}), 1)
+        self.assertTrue(
+            all(value.product_code == LARGE_PACKAGE.code for value in refreshed)
+        )
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    """SELECT COUNT(*) FROM payment_orders
+                       WHERE product_code=? AND status='pending'""",
+                    (LARGE_PACKAGE.code,),
+                ).fetchone()[0],
+                1,
             )
 
     def test_operator_payment_view_is_reconciled_and_privacy_safe(self) -> None:
@@ -1375,6 +1620,39 @@ class PaymentTests(TestCase):
             ).fetchone()[0]
         self.assertEqual(status, "pending")
         self.assertEqual(webhooks, 0)
+
+    def test_large_package_success_url_never_grants_without_result_url(self) -> None:
+        order = self.service.create_order(
+            self.user_id,
+            None,
+            "large-browser-success",
+            account_purchase=True,
+            product_code=LARGE_PACKAGE.code,
+        )
+        server = PaymentWebhookServer(
+            self.service, "127.0.0.1", 0, "/payments/robokassa/result"
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        response = httpx.get(
+            f"http://127.0.0.1:{server.bound_port}/payment/success/{order.public_token}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Проверяем оплату", response.text)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT status FROM payment_orders WHERE id=?", (order.id,)
+                ).fetchone()[0],
+                "pending",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id=?",
+                    (order.id,),
+                ).fetchone()[0],
+                0,
+            )
 
     def test_expired_browser_checkout_only_offers_bounded_max_refresh(self) -> None:
         order = self.service.create_order(

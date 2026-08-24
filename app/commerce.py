@@ -14,13 +14,59 @@ from app.database import Database
 from app.domain import DemoLimitError, InvalidInputError, PaymentRequiredError
 
 
-PRODUCT_CODE = "continuation_pack_2_plus_1"
-PRODUCT_NAME = "Ravuna Access Pack"
-USER_PRODUCT_NAME = "Пакет доступа Ravuna"
-RECEIPT_ITEM_NAME = USER_PRODUCT_NAME
-PRICE_MINOR = 4_900
-GENERATION_CREDITS_PER_PACK = 2
-UNLOCK_ENTITLEMENTS_PER_PACK = 1
+@dataclass(frozen=True)
+class ContinuationPackage:
+    code: str
+    product_name: str
+    user_name: str
+    receipt_name: str
+    price_minor: int
+    generation_credits: int
+    unlock_entitlements: int
+
+
+SMALL_PACKAGE = ContinuationPackage(
+    code="continuation_pack_2_plus_1",
+    product_name="Ravuna Access Pack",
+    user_name="Пакет доступа Ravuna",
+    receipt_name="Пакет доступа Ravuna",
+    price_minor=4_900,
+    generation_credits=2,
+    unlock_entitlements=1,
+)
+LARGE_PACKAGE = ContinuationPackage(
+    code="continuation_pack_100_plus_50",
+    product_name="Ravuna 100 + 50 Pack",
+    user_name="Пакет Ravuna: 100 обработок и 50 оригиналов",
+    receipt_name="Пакет Ravuna: 100 обработок и 50 оригиналов",
+    price_minor=199_000,
+    generation_credits=100,
+    unlock_entitlements=50,
+)
+CONTINUATION_PACKAGES = {
+    package.code: package for package in (SMALL_PACKAGE, LARGE_PACKAGE)
+}
+
+
+def continuation_package(product_code: str) -> ContinuationPackage:
+    try:
+        return CONTINUATION_PACKAGES[product_code]
+    except KeyError as exc:
+        raise InvalidInputError("Unknown continuation package") from exc
+
+
+def is_continuation_package(product_code: str) -> bool:
+    return product_code in CONTINUATION_PACKAGES
+
+
+# Compatibility names for the original public package.
+PRODUCT_CODE = SMALL_PACKAGE.code
+PRODUCT_NAME = SMALL_PACKAGE.product_name
+USER_PRODUCT_NAME = SMALL_PACKAGE.user_name
+RECEIPT_ITEM_NAME = SMALL_PACKAGE.receipt_name
+PRICE_MINOR = SMALL_PACKAGE.price_minor
+GENERATION_CREDITS_PER_PACK = SMALL_PACKAGE.generation_credits
+UNLOCK_ENTITLEMENTS_PER_PACK = SMALL_PACKAGE.unlock_entitlements
 INITIAL_GENERATION_CREDITS = 2
 MAX_ACCOUNT_BALANCE = 1_000_000
 
@@ -640,7 +686,11 @@ class CommerceService:
         user_id: str,
         payment_order_id: str,
         payment_intent_id: Optional[str],
+        generation_credit_quantity: int = GENERATION_CREDITS_PER_PACK,
+        unlock_entitlement_quantity: int = UNLOCK_ENTITLEMENTS_PER_PACK,
     ) -> tuple[str, str]:
+        if generation_credit_quantity <= 0 or unlock_entitlement_quantity <= 0:
+            raise InvalidInputError("Package quantities must be positive")
         existing = connection.execute(
             "SELECT credit_lot_id,entitlement_id FROM continuation_pack_grants WHERE payment_order_id=?",
             (payment_order_id,),
@@ -648,11 +698,12 @@ class CommerceService:
         if existing:
             return existing["credit_lot_id"], existing["entitlement_id"]
         account = self.ensure_initial_grant(connection, user_id)
-        if account.available + account.reserved + GENERATION_CREDITS_PER_PACK > MAX_ACCOUNT_BALANCE:
+        if account.available + account.reserved + generation_credit_quantity > MAX_ACCOUNT_BALANCE:
             raise InvalidInputError("Generation balance safety limit exceeded")
         now = _iso(self.clock())
         lot_id = uuid4().hex
-        entitlement_id = uuid4().hex
+        entitlement_ids = [uuid4().hex for _ in range(unlock_entitlement_quantity)]
+        entitlement_id = entitlement_ids[0]
         grant_id = uuid4().hex
         connection.execute(
             """INSERT INTO generation_credit_lots(
@@ -663,8 +714,8 @@ class CommerceService:
                 lot_id,
                 user_id,
                 payment_order_id,
-                GENERATION_CREDITS_PER_PACK,
-                GENERATION_CREDITS_PER_PACK,
+                generation_credit_quantity,
+                generation_credit_quantity,
                 now,
                 now,
             ),
@@ -674,20 +725,23 @@ class CommerceService:
                SET available_generation_credits=available_generation_credits+?,
                    total_generation_credits_granted=total_generation_credits_granted+?,
                    updated_at=?,version=version+1 WHERE user_id=?""",
-            (GENERATION_CREDITS_PER_PACK, GENERATION_CREDITS_PER_PACK, now, user_id),
+            (generation_credit_quantity, generation_credit_quantity, now, user_id),
         )
-        connection.execute(
+        connection.executemany(
             """INSERT INTO unlock_entitlements(
                    id,user_id,source_payment_intent_id,source_payment_order_id,status,
                    created_at,updated_at
                ) VALUES(?,?,?,?,'available',?,?)""",
-            (entitlement_id, user_id, payment_intent_id, payment_order_id, now, now),
+            [
+                (value, user_id, payment_intent_id, payment_order_id, now, now)
+                for value in entitlement_ids
+            ],
         )
         connection.execute(
             """INSERT INTO continuation_pack_grants(
                    id,user_id,payment_order_id,payment_intent_id,credit_lot_id,entitlement_id,
                    generation_credit_quantity,unlock_entitlement_quantity,created_at,updated_at
-               ) VALUES(?,?,?,?,?,?,2,1,?,?)""",
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (
                 grant_id,
                 user_id,
@@ -695,11 +749,13 @@ class CommerceService:
                 payment_intent_id,
                 lot_id,
                 entitlement_id,
+                generation_credit_quantity,
+                unlock_entitlement_quantity,
                 now,
                 now,
             ),
         )
-        new_balance = account.available + GENERATION_CREDITS_PER_PACK
+        new_balance = account.available + generation_credit_quantity
         connection.execute(
             """INSERT INTO credit_ledger(
                    user_id,delta,event_type,reference_type,reference_id,idempotency_key,
@@ -707,7 +763,7 @@ class CommerceService:
                ) VALUES(?,?,'continuation_pack_granted','payment_order',?,?,?, ?,?)""",
             (
                 user_id,
-                GENERATION_CREDITS_PER_PACK,
+                generation_credit_quantity,
                 payment_order_id,
                 f"continuation-pack:{payment_order_id}",
                 new_balance,
@@ -716,7 +772,13 @@ class CommerceService:
             ),
         )
         _event(connection, "continuation_pack_paid", now, user_id=user_id, value_integer=new_balance)
-        _event(connection, "unlock_entitlement_granted", now, user_id=user_id, value_integer=1)
+        _event(
+            connection,
+            "unlock_entitlement_granted",
+            now,
+            user_id=user_id,
+            value_integer=unlock_entitlement_quantity,
+        )
         previous = int(
             connection.execute(
                 """SELECT COUNT(*) FROM continuation_pack_grants
@@ -960,11 +1022,14 @@ class CommerceService:
         with self.database.read() as connection:
             grant = connection.execute(
                 """SELECT g.*,l.available_credits,l.reserved_credits,l.consumed_credits,
-                          e.status AS entitlement_status
+                          COUNT(e.id) AS entitlement_count,
+                          SUM(CASE WHEN e.status='available' THEN 1 ELSE 0 END)
+                              AS available_entitlements
                    FROM continuation_pack_grants g
                    JOIN generation_credit_lots l ON l.id=g.credit_lot_id
-                   JOIN unlock_entitlements e ON e.id=g.entitlement_id
-                   WHERE g.payment_order_id=?""",
+                   LEFT JOIN unlock_entitlements e
+                     ON e.source_payment_order_id=g.payment_order_id
+                   WHERE g.payment_order_id=? GROUP BY g.id""",
                 (payment_order_id,),
             ).fetchone()
         if grant is None:
@@ -973,9 +1038,12 @@ class CommerceService:
             return RefundEligibility(True, "already_refunded")
         if grant["consumed_credits"] or grant["reserved_credits"]:
             return RefundEligibility(False, "generation_credits_used_or_reserved_manual_review")
-        if grant["entitlement_status"] != "available":
+        if grant["available_entitlements"] != grant["unlock_entitlement_quantity"]:
             return RefundEligibility(False, "unlock_entitlement_used_manual_review")
-        if grant["available_credits"] != GENERATION_CREDITS_PER_PACK:
+        if (
+            grant["entitlement_count"] != grant["unlock_entitlement_quantity"]
+            or grant["available_credits"] != grant["generation_credit_quantity"]
+        ):
             return RefundEligibility(False, "package_ledger_inconsistent")
         return RefundEligibility(True, "unused_package")
 
@@ -984,11 +1052,14 @@ class CommerceService:
     ) -> bool:
         grant = connection.execute(
             """SELECT g.*,l.available_credits,l.reserved_credits,l.consumed_credits,
-                      e.status AS entitlement_status
+                      COUNT(e.id) AS entitlement_count,
+                      SUM(CASE WHEN e.status IN ('available','reserved') THEN 1 ELSE 0 END)
+                          AS refundable_entitlements
                FROM continuation_pack_grants g
                JOIN generation_credit_lots l ON l.id=g.credit_lot_id
-               JOIN unlock_entitlements e ON e.id=g.entitlement_id
-               WHERE g.payment_order_id=?""",
+               LEFT JOIN unlock_entitlements e
+                 ON e.source_payment_order_id=g.payment_order_id
+               WHERE g.payment_order_id=? GROUP BY g.id""",
             (payment_order_id,),
         ).fetchone()
         if grant is None:
@@ -998,32 +1069,34 @@ class CommerceService:
         if (
             grant["consumed_credits"]
             or grant["reserved_credits"]
-            or grant["available_credits"] != GENERATION_CREDITS_PER_PACK
-            or grant["entitlement_status"] not in {"available", "reserved"}
+            or grant["available_credits"] != grant["generation_credit_quantity"]
+            or grant["entitlement_count"] != grant["unlock_entitlement_quantity"]
+            or grant["refundable_entitlements"] != grant["unlock_entitlement_quantity"]
         ):
             raise PaymentRequiredError("Used package requires manual refund review")
         account = connection.execute(
             "SELECT * FROM user_credit_accounts WHERE user_id=?", (grant["user_id"],)
         ).fetchone()
-        if account["available_generation_credits"] < GENERATION_CREDITS_PER_PACK:
+        credit_quantity = int(grant["generation_credit_quantity"])
+        if account["available_generation_credits"] < credit_quantity:
             raise InvalidInputError("Package rollback would make balance negative")
         now = _iso(self.clock())
         connection.execute(
-            """UPDATE generation_credit_lots SET available_credits=0,refunded_credits=2,
+            """UPDATE generation_credit_lots SET available_credits=0,refunded_credits=?,
                status='refunded',updated_at=? WHERE id=?""",
-            (now, grant["credit_lot_id"]),
+            (credit_quantity, now, grant["credit_lot_id"]),
         )
         connection.execute(
             """UPDATE user_credit_accounts SET
-               available_generation_credits=available_generation_credits-2,
-               total_generation_credits_refunded=total_generation_credits_refunded+2,
+               available_generation_credits=available_generation_credits-?,
+               total_generation_credits_refunded=total_generation_credits_refunded+?,
                updated_at=?,version=version+1 WHERE user_id=?""",
-            (now, grant["user_id"]),
+            (credit_quantity, credit_quantity, now, grant["user_id"]),
         )
         connection.execute(
             """UPDATE unlock_entitlements SET status='refunded',reserved_at=NULL,updated_at=?
-               WHERE id=? AND status IN ('available','reserved')""",
-            (now, grant["entitlement_id"]),
+               WHERE source_payment_order_id=? AND status IN ('available','reserved')""",
+            (now, payment_order_id),
         )
         connection.execute(
             """UPDATE continuation_pack_grants SET status='refunded',updated_at=? WHERE id=?""",
@@ -1033,12 +1106,13 @@ class CommerceService:
             """INSERT INTO credit_ledger(
                    user_id,delta,event_type,reference_type,reference_id,idempotency_key,
                    balance_after,reserved_after,created_at
-               ) VALUES(?,-2,'continuation_pack_refunded','payment_order',?,?,?, ?,?)""",
+               ) VALUES(?,?,'continuation_pack_refunded','payment_order',?,?,?, ?,?)""",
             (
                 grant["user_id"],
+                -credit_quantity,
                 payment_order_id,
                 f"continuation-pack-refund:{payment_order_id}",
-                account["available_generation_credits"] - GENERATION_CREDITS_PER_PACK,
+                account["available_generation_credits"] - credit_quantity,
                 account["reserved_generation_credits"],
                 now,
             ),
@@ -1048,7 +1122,7 @@ class CommerceService:
             "unlock_entitlement_unused",
             now,
             user_id=grant["user_id"],
-            value_integer=1,
+            value_integer=int(grant["unlock_entitlement_quantity"]),
         )
         return True
 
@@ -1057,23 +1131,29 @@ class CommerceService:
     ) -> None:
         grant = connection.execute(
             """SELECT g.*,l.available_credits,l.reserved_credits,l.consumed_credits,
-                      e.status AS entitlement_status
+                      COUNT(e.id) AS entitlement_count,
+                      SUM(CASE WHEN e.status='available' THEN 1 ELSE 0 END)
+                          AS available_entitlements,
+                      SUM(CASE WHEN e.status='reserved' THEN 1 ELSE 0 END)
+                          AS reserved_entitlements
                FROM continuation_pack_grants g
                JOIN generation_credit_lots l ON l.id=g.credit_lot_id
-               JOIN unlock_entitlements e ON e.id=g.entitlement_id
-               WHERE g.payment_order_id=?""",
+               LEFT JOIN unlock_entitlements e
+                 ON e.source_payment_order_id=g.payment_order_id
+               WHERE g.payment_order_id=? GROUP BY g.id""",
             (payment_order_id,),
         ).fetchone()
         if grant is None:
             raise InvalidInputError("Package grant is missing")
-        if grant["entitlement_status"] == "reserved":
+        if grant["reserved_entitlements"] == grant["unlock_entitlement_quantity"]:
             return
         if (
             grant["status"] != "active"
-            or grant["available_credits"] != GENERATION_CREDITS_PER_PACK
+            or grant["available_credits"] != grant["generation_credit_quantity"]
             or grant["reserved_credits"]
             or grant["consumed_credits"]
-            or grant["entitlement_status"] != "available"
+            or grant["entitlement_count"] != grant["unlock_entitlement_quantity"]
+            or grant["available_entitlements"] != grant["unlock_entitlement_quantity"]
         ):
             raise PaymentRequiredError("Used package requires manual refund review")
         now = _iso(self.clock())
@@ -1083,8 +1163,8 @@ class CommerceService:
         )
         connection.execute(
             """UPDATE unlock_entitlements SET status='reserved',reserved_at=?,updated_at=?
-               WHERE id=? AND status='available'""",
-            (now, now, grant["entitlement_id"]),
+               WHERE source_payment_order_id=? AND status='available'""",
+            (now, now, payment_order_id),
         )
 
     def release_refund_hold(
@@ -1104,8 +1184,9 @@ class CommerceService:
         )
         connection.execute(
             """UPDATE unlock_entitlements SET status='available',reserved_at=NULL,updated_at=?
-               WHERE id=? AND status='reserved' AND gallery_version_id IS NULL""",
-            (now, grant["entitlement_id"]),
+               WHERE source_payment_order_id=? AND status='reserved'
+                 AND gallery_version_id IS NULL""",
+            (now, payment_order_id),
         )
 
     @staticmethod

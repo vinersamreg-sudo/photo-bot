@@ -157,6 +157,24 @@ Use exactly the product language:
 Пакет начислится сразу после оплаты.
 ```
 
+The large-package alternative is shown at the same paywall entry points:
+
+```text
+Пакет Ravuna — 1990 ₽
+
+В пакет входит:
+• 100 обработок фотографий
+• 50 оригиналов без водяного знака
+
+Разовая покупка. Автосписаний и подписки нет.
+
+Пакет начислится сразу после оплаты.
+```
+
+Selecting either offer binds checkout to that exact package. A refreshed link
+must render the same price and package; it must never fall back to the 49 ₽
+package or to another photo/request.
+
 Do not call the package “generations”. Browser return pages explain that only the
 server ResultURL confirms payment.
 

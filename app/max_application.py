@@ -13,7 +13,12 @@ from uuid import uuid4
 
 from app.attribution import AttributionService, parse_start_payload
 from app.config import Settings
-from app.commerce import CommerceService
+from app.commerce import (
+    LARGE_PACKAGE,
+    PRODUCT_CODE,
+    CommerceService,
+    continuation_package,
+)
 from app.database import Database
 from app.demo_service import DemoService
 from app.direct_prompt import build_direct_edit_plan
@@ -113,6 +118,24 @@ PAYMENT_OFFER_TEXT = (
     "• оригинал этой фотографии без водяного знака\n\n"
     "Пакет начислится сразу после оплаты."
 )
+
+
+def _package_offer_text(product_code: str) -> str:
+    if product_code == PRODUCT_CODE:
+        return PAYMENT_OFFER_TEXT
+    package = continuation_package(product_code)
+    return (
+        f"Пакет Ravuna — {package.price_minor // 100} ₽\n\n"
+        "В пакет входит:\n"
+        f"• {package.generation_credits} обработок фотографий\n"
+        f"• {package.unlock_entitlements} оригиналов без водяного знака\n\n"
+        "Разовая покупка. Автосписаний и подписки нет.\n\n"
+        "Пакет начислится сразу после оплаты."
+    )
+
+
+def _pay_button_text(product_code: str) -> str:
+    return f"Оплатить {continuation_package(product_code).price_minor // 100} ₽"
 PENDING_EDIT_PAYMENT_TEXT = (
     "У вас закончились обработки.\n\n"
     "Чтобы обработать эту фотографию, приобретите пакет Ravuna.\n\n"
@@ -704,10 +727,22 @@ class MaxApplication:
     ) -> None:
         payment_url = self.payments.short_payment_url(order)
         if order.purpose == "account_topup":
-            balance = self.demo.commerce.balance(order.user_id).available
             self._reset_dialog_to_main(event.user_id, event.event_key)
             self.store.update(event.user_id, user_id=order.user_id)
-            self._send_view(event.user_id, main_menu(balance, payment_url))
+            self._send_message(
+                event.user_id,
+                _package_offer_text(order.product_code),
+                (
+                    Button(
+                        "Купить пакет — 49 ₽"
+                        if order.product_code == PRODUCT_CODE
+                        else _pay_button_text(order.product_code),
+                        payment_url,
+                    ),
+                    Button("← Назад", "nav:back:main"),
+                ),
+                screen="payment_offer",
+            )
             return
 
         if order.purpose == "original_download" and order.version_id:
@@ -736,9 +771,9 @@ class MaxApplication:
             self._send_image(
                 event.user_id,
                 self._selected_preview_path(updated),
-                PAYMENT_OFFER_TEXT,
+                _package_offer_text(order.product_code),
                 (
-                    Button("Оплатить 49 ₽", payment_url),
+                    Button(_pay_button_text(order.product_code), payment_url),
                     Button("← Назад", "nav:back:work"),
                 ),
                 screen="payment_offer",
@@ -774,9 +809,15 @@ class MaxApplication:
             self._send_image(
                 event.user_id,
                 source_path,
-                PENDING_EDIT_PAYMENT_TEXT,
                 (
-                    Button("Оплатить 49 ₽", payment_url),
+                    PENDING_EDIT_PAYMENT_TEXT
+                    if order.product_code == PRODUCT_CODE
+                    else "У вас закончились обработки.\n\n"
+                    "Чтобы обработать эту фотографию, приобретите пакет Ravuna.\n\n"
+                    + _package_offer_text(order.product_code)
+                ),
+                (
+                    Button(_pay_button_text(order.product_code), payment_url),
                     Button("← Назад", "nav:back:main"),
                 ),
                 screen="pending_payment_offer",
@@ -1215,7 +1256,9 @@ class MaxApplication:
         elif action in {"result:feedback", "result:feedback:comment"}:
             self._show_feedback_prompt(event, dialog)
         elif action == "package:buy":
-            self._buy_continuation_pack(event, dialog)
+            self._buy_continuation_pack(event, dialog, PRODUCT_CODE)
+        elif action == "package:buy:large":
+            self._buy_continuation_pack(event, dialog, LARGE_PACKAGE.code)
         elif action.startswith("payment:refresh:"):
             self._show_payment_return(
                 event,
@@ -1260,7 +1303,9 @@ class MaxApplication:
         elif action == "pending:process":
             self._process_paid_pending_request(event, dialog)
         elif action == "package:offer":
-            self._show_continuation_pack_offer(event, dialog)
+            self._show_continuation_pack_offer(event, dialog, PRODUCT_CODE)
+        elif action == "package:offer:large":
+            self._show_continuation_pack_offer(event, dialog, LARGE_PACKAGE.code)
         elif action == "result:correct":
             if not dialog.session_id or self._remaining(dialog.session_id) <= 0:
                 self._show_continuation_pack_offer(event, dialog)
@@ -2279,6 +2324,10 @@ class MaxApplication:
             PENDING_EDIT_PAYMENT_TEXT,
             (
                 Button("Оплатить 49 ₽", payment_url),
+                Button(
+                    "100 обработок + 50 оригиналов — 1990 ₽",
+                    "package:buy:large",
+                ),
                 Button("← Назад", "nav:back:main"),
             ),
             screen="pending_payment_offer",
@@ -2341,7 +2390,10 @@ class MaxApplication:
         self._generate(event, updated, correction=False)
 
     def _show_continuation_pack_offer(
-        self, event: MaxIncomingEvent, dialog: MaxDialog
+        self,
+        event: MaxIncomingEvent,
+        dialog: MaxDialog,
+        product_code: str = PRODUCT_CODE,
     ) -> None:
         """Show the selected result with its direct, idempotent checkout link."""
 
@@ -2351,8 +2403,10 @@ class MaxApplication:
                 reusable = self.payments.reusable_order_for_target(
                     current.user_id,
                     current.current_version_id,
+                    product_code=product_code,
                 )
                 if reusable is not None:
+                    self._render_refreshed_checkout(event, reusable)
                     return
         dialog = current
         if not dialog.current_version_id:
@@ -2379,27 +2433,35 @@ class MaxApplication:
                 dialog.user_id,
                 dialog.current_version_id,
                 f"max:{event.event_key}",
+                product_code=product_code,
             )
             payment_url = self.payments.short_payment_url(order)
         except (PaymentError, PaymentUnavailable) as exc:
             self._record_payment_preparation_failure(exc)
             payment_url = "package:buy"
         offer_buttons = (
-            Button("Оплатить 49 ₽", payment_url),
+            Button(_pay_button_text(product_code), payment_url),
+            Button(
+                "100 обработок + 50 оригиналов — 1990 ₽",
+                "package:offer:large",
+            ) if product_code == PRODUCT_CODE else Button(
+                "2 обработки + 1 оригинал — 49 ₽",
+                "package:offer",
+            ),
             Button("← Назад", "nav:back:work"),
         )
         if self.settings.max_single_screen_ui_enabled and dialog.current_version_id:
             self._send_image(
                 event.user_id,
                 self._selected_preview_path(dialog),
-                PAYMENT_OFFER_TEXT,
+                _package_offer_text(product_code),
                 offer_buttons,
                 screen="payment_offer",
             )
         else:
             self._send_message(
                 event.user_id,
-                PAYMENT_OFFER_TEXT,
+                _package_offer_text(product_code),
                 offer_buttons,
             )
         self.attribution.record_event(
@@ -2410,7 +2472,10 @@ class MaxApplication:
         )
 
     def _buy_continuation_pack(
-        self, event: MaxIncomingEvent, dialog: MaxDialog
+        self,
+        event: MaxIncomingEvent,
+        dialog: MaxDialog,
+        product_code: str = PRODUCT_CODE,
     ) -> None:
         self._track(
             "continuation_pack_clicked",
@@ -2419,7 +2484,12 @@ class MaxApplication:
         )
         with self._checkout_lock:
             current = self.store.get(event.user_id) or dialog
-            if current.pending_action != "checkout":
+            account_purchase = (
+                current.state == "main_menu"
+                and not current.current_version_id
+                and not current.pending_request_id
+            )
+            if current.pending_action != "checkout" and not account_purchase:
                 self._show_main(event.user_id, current, event.event_key)
                 return
             if not self.settings.payments_enabled:
@@ -2433,16 +2503,9 @@ class MaxApplication:
                 raise InvalidInputError("No Ravuna account is selected")
             version_id = current.current_version_id
             pending_request_id = current.pending_request_id
-            if not version_id and not pending_request_id:
-                raise InvalidInputError(
-                    "A current Ravuna payment target is required for checkout"
-                )
             if version_id and self._paid_order_exists(current.user_id, version_id):
-                current = self.store.update(
-                    event.user_id,
-                    current_version_id=version_id,
-                )
-                self._unlock_or_deliver(event, current)
+                # ResultURL processing owns post-payment delivery. A delayed or
+                # repeated purchase callback must not deliver or consume again.
                 return
             try:
                 order = self.payments.create_order(
@@ -2450,6 +2513,8 @@ class MaxApplication:
                     version_id,
                     f"max:{event.event_key}",
                     pending_request_id=pending_request_id,
+                    account_purchase=account_purchase,
+                    product_code=product_code,
                 )
             except PaymentUnavailable as exc:
                 self._record_payment_preparation_failure(exc)
@@ -2459,7 +2524,9 @@ class MaxApplication:
                     (
                         Button(
                             "← Назад",
-                            "nav:back:main" if pending_request_id else "nav:back:work",
+                            "nav:back:main"
+                            if pending_request_id or account_purchase
+                            else "nav:back:work",
                         ),
                     ),
                 )
@@ -2472,7 +2539,9 @@ class MaxApplication:
                     (
                         Button(
                             "← Назад",
-                            "nav:back:main" if pending_request_id else "nav:back:work",
+                            "nav:back:main"
+                            if pending_request_id or account_purchase
+                            else "nav:back:work",
                         ),
                     ),
                 )
@@ -2485,12 +2554,7 @@ class MaxApplication:
             )
             # Compatibility path for an old callback: render the same paywall,
             # never a second "link ready" screen.
-            if pending_request_id:
-                self._show_pending_edit_offer(
-                    event, current, current.pending_prompt or ""
-                )
-            else:
-                self._show_continuation_pack_offer(event, current)
+            self._render_refreshed_checkout(event, order)
 
     def _paid_order_exists(self, user_id: str, version_id: str) -> bool:
         with self.database.read() as connection:

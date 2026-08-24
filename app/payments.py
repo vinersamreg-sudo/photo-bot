@@ -21,7 +21,8 @@ from app.commerce import (
     PRICE_MINOR,
     PRODUCT_CODE,
     UNLOCK_ENTITLEMENTS_PER_PACK,
-    USER_PRODUCT_NAME,
+    continuation_package,
+    is_continuation_package,
 )
 from app.database import Database
 from app.domain import InvalidInputError, PaymentRequiredError
@@ -385,13 +386,13 @@ class PaymentService:
         return True
 
     def _expire_pending_orders_locked(
-        self, connection, user_id: str, now: datetime
+        self, connection, user_id: str, now: datetime, product_code: str = PRODUCT_CODE
     ) -> int:
         rows = connection.execute(
             """SELECT * FROM payment_orders
                WHERE user_id=? AND product_code=? AND status='pending'
                  AND expires_at<=?""",
-            (user_id, PRODUCT_CODE, _iso(now)),
+            (user_id, product_code, _iso(now)),
         ).fetchall()
         return sum(
             int(self._expire_order_locked(connection, row, now)) for row in rows
@@ -405,6 +406,7 @@ class PaymentService:
         pending_request_id: str | None,
         account_purchase: bool,
         now: datetime,
+        product_code: str = PRODUCT_CODE,
     ):
         if account_purchase:
             return connection.execute(
@@ -413,7 +415,7 @@ class PaymentService:
                      AND expires_at>? AND pending_request_id IS NULL
                      AND COALESCE(version_id,'')=''
                    ORDER BY created_at DESC LIMIT 1""",
-                (user_id, PRODUCT_CODE, _iso(now)),
+                (user_id, product_code, _iso(now)),
             ).fetchone()
         return connection.execute(
             """SELECT * FROM payment_orders
@@ -424,7 +426,7 @@ class PaymentService:
                ORDER BY created_at DESC LIMIT 1""",
             (
                 user_id,
-                PRODUCT_CODE,
+                product_code,
                 _iso(now),
                 pending_request_id,
                 pending_request_id,
@@ -440,6 +442,7 @@ class PaymentService:
         *,
         pending_request_id: str | None = None,
         account_purchase: bool = False,
+        product_code: str = PRODUCT_CODE,
     ) -> PaymentOrder | None:
         """Find an exact target-scoped reusable order and expire stale rows."""
 
@@ -447,7 +450,7 @@ class PaymentService:
             raise PaymentError("Exactly one payment target is required")
         now = self.clock()
         with self.database.transaction() as connection:
-            self._expire_pending_orders_locked(connection, user_id, now)
+            self._expire_pending_orders_locked(connection, user_id, now, product_code)
             row = self._reusable_order_row_locked(
                 connection,
                 user_id,
@@ -455,6 +458,7 @@ class PaymentService:
                 pending_request_id,
                 account_purchase,
                 now,
+                product_code,
             )
         order = _row_order(row) if row is not None else None
         return order if order is not None and self.is_reusable_order(order, now=now) else None
@@ -542,14 +546,24 @@ class PaymentService:
 
     def _provider_payment_form(self, order: PaymentOrder) -> RobokassaPaymentForm:
         provider = self._require_provider()
+        try:
+            package = continuation_package(order.product_code)
+        except InvalidInputError as exc:
+            raise PaymentError("Payment package is invalid") from exc
+        if (
+            order.amount_minor != package.price_minor
+            or order.generation_credit_quantity != package.generation_credits
+            or order.unlock_entitlement_quantity != package.unlock_entitlements
+        ):
+            raise PaymentError("Payment package data is inconsistent")
         origin = self._public_origin()
         request = RobokassaPaymentRequest(
             invoice_id=order.provider_invoice_id,
             amount_minor=order.amount_minor,
-            description=USER_PRODUCT_NAME,
+            description=package.user_name,
             public_token=order.public_token,
             expires_at=order.expires_at,
-            receipt_name=self.settings.payment_receipt_item_name,
+            receipt_name=package.receipt_name,
             receipt_tax=self.settings.payment_receipt_tax,
             success_url=f"{origin}/payment/success/{order.public_token}",
             fail_url=f"{origin}/payment/fail/{order.public_token}",
@@ -593,6 +607,7 @@ class PaymentService:
                 None,
                 f"checkout-refresh:{previous.id}",
                 account_purchase=True,
+                product_code=previous.product_code,
             )
         elif previous.purpose == "processing_request":
             if previous.version_id or not previous.pending_request_id:
@@ -602,6 +617,7 @@ class PaymentService:
                 None,
                 f"checkout-refresh:{previous.id}",
                 pending_request_id=previous.pending_request_id,
+                product_code=previous.product_code,
             )
         elif previous.purpose == "original_download":
             if previous.pending_request_id or not previous.version_id:
@@ -610,6 +626,7 @@ class PaymentService:
                 previous.user_id,
                 previous.version_id,
                 f"checkout-refresh:{previous.id}",
+                product_code=previous.product_code,
             )
         else:
             raise PaymentError("Payment purpose is invalid")
@@ -640,13 +657,21 @@ class PaymentService:
         *,
         pending_request_id: str | None = None,
         account_purchase: bool = False,
+        product_code: str = PRODUCT_CODE,
     ) -> PaymentOrder:
         """Create a package order; the selected version is context, not an unlock target."""
 
         provider = self._require_provider()
         if not idempotency_key:
             raise PaymentError("Payment idempotency key is required")
-        if self.settings.continuation_pack_price_rub * 100 != PRICE_MINOR:
+        try:
+            package = continuation_package(product_code)
+        except InvalidInputError as exc:
+            raise PaymentError("Payment package is invalid") from exc
+        if (
+            product_code == PRODUCT_CODE
+            and self.settings.continuation_pack_price_rub * 100 != PRICE_MINOR
+        ):
             raise PaymentError("Continuation pack price must be exactly 49 RUB")
         if sum(bool(value) for value in (version_id, pending_request_id, account_purchase)) != 1:
             raise PaymentError("Exactly one payment target is required")
@@ -709,7 +734,7 @@ class PaymentService:
             if replay is not None:
                 if (
                     replay["user_id"] != user_id
-                    or replay["product_code"] != PRODUCT_CODE
+                    or replay["product_code"] != product_code
                     or replay["payment_purpose"] != purpose
                     or (replay["pending_request_id"] or None) != pending_request_id
                     or (
@@ -724,7 +749,7 @@ class PaymentService:
                     self._expire_order_locked(connection, replay, now)
                     raise PaymentExpired("Payment order is no longer reusable")
             else:
-                self._expire_pending_orders_locked(connection, user_id, now)
+                self._expire_pending_orders_locked(connection, user_id, now, product_code)
                 existing = self._reusable_order_row_locked(
                     connection,
                     user_id,
@@ -732,6 +757,7 @@ class PaymentService:
                     pending_request_id,
                     account_purchase,
                     now,
+                    product_code,
                 )
                 if existing is not None:
                     order = _row_order(existing)
@@ -758,10 +784,10 @@ class PaymentService:
                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             intent_id, attempt_id, pending_request_id, idempotency_key,
-                            self.settings.continuation_pack_price_rub,
+                            package.price_minor // 100,
                             PaymentStatus.PENDING.value, _iso(now), version_id, user_id,
                             provider.name, self.settings.payment_currency, _iso(now),
-                            _iso(expires_at), PRODUCT_CODE, purpose,
+                            _iso(expires_at), package.code, purpose,
                         ),
                     )
                     invoice_id = _next_provider_invoice_id(connection, now)
@@ -779,11 +805,11 @@ class PaymentService:
                             order_id, public_token, intent_id, attempt_id or "", version_id or "", user_id,
                             provider.name,
                             hashlib.sha256(provider.merchant_login.encode("utf-8")).hexdigest(),
-                            invoice_id, PRICE_MINOR, self.settings.payment_currency,
+                            invoice_id, package.price_minor, self.settings.payment_currency,
                             PaymentStatus.PENDING.value,
-                            self.settings.payment_receipt_item_name, _iso(now), _iso(now),
-                            _iso(expires_at), PRODUCT_CODE, GENERATION_CREDITS_PER_PACK,
-                            UNLOCK_ENTITLEMENTS_PER_PACK, pending_request_id, purpose,
+                            package.receipt_name, _iso(now), _iso(now),
+                            _iso(expires_at), package.code, package.generation_credits,
+                            package.unlock_entitlements, pending_request_id, purpose,
                         ),
                     )
                     receipt_id = uuid4().hex
@@ -794,7 +820,7 @@ class PaymentService:
                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             receipt_id, order_id, "payment",
-                            self.settings.payment_receipt_item_name, "1", PRICE_MINOR,
+                            package.receipt_name, "1", package.price_minor,
                             self.settings.payment_receipt_tax,
                             "",
                             "",
@@ -815,7 +841,7 @@ class PaymentService:
                             """SELECT COUNT(*) FROM payment_orders
                                WHERE user_id=? AND product_code=? AND status IN
                                ('paid','delivery_pending','delivered','refund_pending','partially_refunded')""",
-                            (user_id, PRODUCT_CODE),
+                            (user_id, package.code),
                         ).fetchone()[0]
                     )
                     if previous_paid == 0:
@@ -835,11 +861,11 @@ class PaymentService:
                         version_id=version_id, attempt_id=attempt_id,
                         pending_request_id=pending_request_id, user_id=user_id,
                         provider=provider.name, provider_invoice_id=invoice_id,
-                        amount_minor=PRICE_MINOR, currency=self.settings.payment_currency,
+                        amount_minor=package.price_minor, currency=self.settings.payment_currency,
                         status=PaymentStatus.PENDING, expires_at=expires_at,
-                        product_code=PRODUCT_CODE,
-                        generation_credit_quantity=GENERATION_CREDITS_PER_PACK,
-                        unlock_entitlement_quantity=UNLOCK_ENTITLEMENTS_PER_PACK,
+                        product_code=package.code,
+                        generation_credit_quantity=package.generation_credits,
+                        unlock_entitlement_quantity=package.unlock_entitlements,
                         purpose=purpose,
                     )
             if pending_request_id:
@@ -947,6 +973,16 @@ class PaymentService:
                 ).hexdigest()
             )
             amount_valid = bool(order and notification.amount_minor == order["amount_minor"])
+            package_valid = False
+            if order and is_continuation_package(str(order["product_code"])):
+                expected_package = continuation_package(str(order["product_code"]))
+                package_valid = bool(
+                    int(order["amount_minor"]) == expected_package.price_minor
+                    and int(order["generation_credit_quantity"])
+                    == expected_package.generation_credits
+                    and int(order["unlock_entitlement_quantity"])
+                    == expected_package.unlock_entitlements
+                )
             currency_valid = bool(order and order["currency"] == "RUB")
             status_valid = True  # Classic ResultURL is the provider's success notification.
             # A signed ResultURL for a known invoice may arrive after the local link
@@ -960,6 +996,7 @@ class PaymentService:
                 ("invalid_signature", signature_valid),
                 ("merchant_mismatch", merchant_valid),
                 ("amount_mismatch", amount_valid),
+                ("order_package_mismatch", package_valid),
                 ("currency_mismatch", currency_valid),
                 ("invalid_status", status_valid),
                 ("expired_invoice", timestamp_valid),
@@ -1060,6 +1097,12 @@ class PaymentService:
                     user_id=order["user_id"],
                     payment_order_id=order_id,
                     payment_intent_id=order["intent_id"],
+                    generation_credit_quantity=int(
+                        order["generation_credit_quantity"]
+                    ),
+                    unlock_entitlement_quantity=int(
+                        order["unlock_entitlement_quantity"]
+                    ),
                 )
                 self._record_product_event(
                     connection, "packs_per_payer", attempt_id=order["attempt_id"] or None,
@@ -1236,7 +1279,7 @@ class PaymentService:
         available = int(order["amount_minor"]) - int(order["refunded_amount_minor"])
         if amount_minor > available:
             raise PaymentError("Refund exceeds the remaining paid amount")
-        if order["product_code"] == PRODUCT_CODE:
+        if is_continuation_package(str(order["product_code"])):
             if amount_minor != int(order["amount_minor"]):
                 raise PaymentError("Continuation pack partial refund requires manual review")
             eligibility = self.commerce.refund_eligibility(order_id)
@@ -1333,7 +1376,7 @@ class PaymentService:
             raise PaymentError("Refund is not in draft state")
         if not row["provider_payment_id"]:
             raise PaymentError("Refund requires the Robokassa operation key")
-        if row["product_code"] == PRODUCT_CODE:
+        if is_continuation_package(str(row["product_code"])):
             with self.database.transaction() as connection:
                 try:
                     self.commerce.hold_pack_for_refund(
@@ -1349,7 +1392,7 @@ class PaymentService:
                 tax=str(row["tax"]),
             ))
         except RobokassaError as exc:
-            if row["product_code"] == PRODUCT_CODE:
+            if is_continuation_package(str(row["product_code"])):
                 with self.database.transaction() as connection:
                     self.commerce.release_refund_hold(
                         connection, str(row["order_id"])
@@ -1386,7 +1429,7 @@ class PaymentService:
                     (_iso(now), row["order_id"]),
                 )
             else:
-                if row["product_code"] == PRODUCT_CODE:
+                if is_continuation_package(str(row["product_code"])):
                     self.commerce.release_refund_hold(
                         connection, str(row["order_id"])
                     )
@@ -1462,7 +1505,7 @@ class PaymentService:
                 )
                 if (
                     order_status == PaymentStatus.REFUNDED.value
-                    and order["product_code"] == PRODUCT_CODE
+                    and is_continuation_package(str(order["product_code"]))
                 ):
                     try:
                         self.commerce.rollback_unused_pack(
@@ -1511,7 +1554,9 @@ class PaymentService:
                     "SELECT product_code FROM payment_orders WHERE id=?",
                     (row["order_id"],),
                 ).fetchone()
-                if order_for_hold and order_for_hold["product_code"] == PRODUCT_CODE:
+                if order_for_hold and is_continuation_package(
+                    str(order_for_hold["product_code"])
+                ):
                     self.commerce.release_refund_hold(
                         connection, str(row["order_id"])
                     )

@@ -2121,6 +2121,10 @@ class MaxApplicationTests(TestCase):
             [(button.text, button.action) for button in offers[0][2]],
             [
                 ("Оплатить 49 ₽", offers[0][2][0].action),
+                (
+                    "100 обработок + 50 оригиналов — 1990 ₽",
+                    "package:offer:large",
+                ),
                 ("← Назад", "nav:back:work"),
             ],
         )
@@ -2173,6 +2177,34 @@ class MaxApplicationTests(TestCase):
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 1,
             )
+
+    def test_large_package_offer_uses_same_selected_version_and_exact_price(self) -> None:
+        self.generate_first()
+        paid_app, _payments = self.paid_application()
+        selected_version_id = self.store.get("u1").current_version_id
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+
+        paid_app.handle(
+            self.event("message_callback", action="package:offer:large")
+        )
+
+        offer = self.transport.messages[-1]
+        self.assertIn("1990 ₽", offer[1])
+        self.assertIn("100 обработок", offer[1])
+        self.assertIn("50 оригиналов", offer[1])
+        self.assertIn("Автосписаний и подписки нет", offer[1])
+        self.assertEqual(offer[2][0].text, "Оплатить 1990 ₽")
+        self.assertRegex(offer[2][0].action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
+        with self.database.read() as connection:
+            order = connection.execute(
+                """SELECT * FROM payment_orders
+                   WHERE product_code='continuation_pack_100_plus_50'"""
+            ).fetchone()
+        self.assertIsNotNone(order)
+        self.assertEqual(order["version_id"], selected_version_id)
+        self.assertEqual(order["amount_minor"], 199_000)
+        self.assertEqual(order["generation_credit_quantity"], 100)
+        self.assertEqual(order["unlock_entitlement_quantity"], 50)
 
     def test_back_from_correction_clears_transient_state_without_generation_or_debit(self) -> None:
         self.generate_first()

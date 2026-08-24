@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ from app.commerce import (
     GENERATION_CREDITS_PER_PACK,
     INITIAL_GENERATION_CREDITS,
     MAX_ACCOUNT_BALANCE,
+    LARGE_PACKAGE,
     PRICE_MINOR,
     PRODUCT_CODE,
     PRODUCT_NAME,
@@ -287,6 +289,144 @@ class CommerceLedgerTests(TestCase):
         self._grant_pack(self.user_id, "order-three")
         self.assertEqual(self.service.balance(self.user_id).available, 8)
         self.assertEqual(self.service.entitlement_balance(self.user_id).available, 3)
+
+    def test_large_pack_grant_is_atomic_idempotent_and_persistent(self) -> None:
+        self.service.balance(self.user_id)
+        with self.database.transaction() as connection:
+            first = self.service.grant_continuation_pack(
+                connection,
+                user_id=self.user_id,
+                payment_order_id="large-order",
+                payment_intent_id="large-intent",
+                generation_credit_quantity=LARGE_PACKAGE.generation_credits,
+                unlock_entitlement_quantity=LARGE_PACKAGE.unlock_entitlements,
+            )
+        with self.database.transaction() as connection:
+            replay = self.service.grant_continuation_pack(
+                connection,
+                user_id=self.user_id,
+                payment_order_id="large-order",
+                payment_intent_id="large-intent",
+                generation_credit_quantity=LARGE_PACKAGE.generation_credits,
+                unlock_entitlement_quantity=LARGE_PACKAGE.unlock_entitlements,
+            )
+        self.assertEqual(replay, first)
+        self.assertEqual(self.service.balance(self.user_id).available, 102)
+        self.assertEqual(self.service.entitlement_balance(self.user_id).available, 50)
+        restarted = CommerceService(Database(self.database.path), self.clock)
+        self.assertEqual(restarted.balance(self.user_id).available, 102)
+        self.assertEqual(restarted.entitlement_balance(self.user_id).available, 50)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM unlock_entitlements WHERE source_payment_order_id='large-order'"
+                ).fetchone()[0],
+                50,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE version=14"
+                ).fetchone()[0],
+                1,
+            )
+
+    def test_v14_migration_preserves_existing_small_package_and_is_idempotent(self) -> None:
+        self._grant_pack(self.user_id, "pre-v14-order")
+        connection = sqlite3.connect(self.database.path, isolation_level=None)
+        try:
+            connection.executescript(
+                """
+                PRAGMA foreign_keys=OFF;
+                BEGIN IMMEDIATE;
+                ALTER TABLE continuation_pack_grants RENAME TO continuation_pack_grants_new;
+                ALTER TABLE unlock_entitlements RENAME TO unlock_entitlements_new;
+                DROP INDEX IF EXISTS idx_pack_grants_user_time;
+                DROP INDEX IF EXISTS idx_unlock_entitlements_user_status;
+                DROP INDEX IF EXISTS idx_unlock_entitlements_payment_order;
+                CREATE TABLE unlock_entitlements (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    source_payment_intent_id TEXT,
+                    source_payment_order_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL CHECK(status IN ('available','reserved','consumed','cancelled','refunded')),
+                    gallery_version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
+                    reserved_at TEXT,
+                    consumed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO unlock_entitlements SELECT * FROM unlock_entitlements_new;
+                CREATE INDEX idx_unlock_entitlements_user_status
+                ON unlock_entitlements(user_id,status,created_at);
+                CREATE TABLE continuation_pack_grants (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    payment_order_id TEXT NOT NULL UNIQUE,
+                    payment_intent_id TEXT,
+                    credit_lot_id TEXT NOT NULL UNIQUE REFERENCES generation_credit_lots(id),
+                    entitlement_id TEXT NOT NULL UNIQUE REFERENCES unlock_entitlements(id),
+                    generation_credit_quantity INTEGER NOT NULL CHECK(generation_credit_quantity=2),
+                    unlock_entitlement_quantity INTEGER NOT NULL CHECK(unlock_entitlement_quantity=1),
+                    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','refunded')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO continuation_pack_grants SELECT * FROM continuation_pack_grants_new;
+                CREATE INDEX idx_pack_grants_user_time
+                ON continuation_pack_grants(user_id,created_at DESC);
+                DROP TABLE continuation_pack_grants_new;
+                DROP TABLE unlock_entitlements_new;
+                DELETE FROM schema_migrations WHERE version=14;
+                COMMIT;
+                """
+            )
+        finally:
+            connection.close()
+
+        migrated = Database(self.database.path)
+        migrated_again = Database(self.database.path)
+        with migrated_again.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id='pre-v14-order'"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM unlock_entitlements WHERE source_payment_order_id='pre-v14-order'"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE version=14"
+                ).fetchone()[0],
+                1,
+            )
+        self.assertEqual(
+            CommerceService(migrated, self.clock).balance(self.user_id).available,
+            4,
+        )
+
+    def test_unused_large_pack_refund_rolls_back_all_units(self) -> None:
+        self.service.balance(self.user_id)
+        with self.database.transaction() as connection:
+            self.service.grant_continuation_pack(
+                connection,
+                user_id=self.user_id,
+                payment_order_id="large-refund",
+                payment_intent_id="large-refund-intent",
+                generation_credit_quantity=100,
+                unlock_entitlement_quantity=50,
+            )
+        self.assertTrue(self.service.refund_eligibility("large-refund").eligible)
+        with self.database.transaction() as connection:
+            self.assertTrue(
+                self.service.rollback_unused_pack(connection, "large-refund")
+            )
+        self.assertEqual(self.service.balance(self.user_id).available, 2)
+        self.assertEqual(self.service.entitlement_balance(self.user_id).available, 0)
 
     def test_pack_does_not_auto_unlock_and_can_unlock_old_or_new_owned_version(self) -> None:
         old_version = self._gallery_version(self.user_id, "old")
