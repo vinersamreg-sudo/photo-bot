@@ -455,7 +455,15 @@ class ContentStudioService:
     def publish_due(self, *, limit: int = 10, apply: bool = False) -> dict[str, object]:
         """Publish a bounded batch of already reviewed posts whose time has arrived."""
 
-        due = self.repository.due_posts(utc_now(), limit)
+        due = self.repository.due_posts(
+            utc_now(),
+            limit,
+            platforms=tuple(
+                platform
+                for platform, publisher in self.publishers.items()
+                if bool(getattr(publisher, "publishing_enabled", False))
+            ),
+        )
         if not apply:
             return {
                 "apply": False,
@@ -553,6 +561,13 @@ class ContentStudioService:
         from .growth import FullAutoGrowthEngine
 
         return FullAutoGrowthEngine(self).run(now=now, apply=apply)
+
+    def reconcile_full_auto_queue(
+        self, *, apply: bool = False, now: datetime | None = None
+    ) -> dict[str, object]:
+        from .growth import FullAutoGrowthEngine
+
+        return FullAutoGrowthEngine(self).reconcile_queue(now=now, apply=apply)
 
     def growth_dashboard(self, *, days: int = 7) -> dict[str, object]:
         from .growth import FullAutoGrowthEngine

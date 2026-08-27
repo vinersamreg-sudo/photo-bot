@@ -153,6 +153,23 @@ duplicate is never published as fallback. Schema version 5 also stores durable
 publication history, slot ownership and send claims so concurrent or retried
 scheduler runs cannot publish the same item twice.
 
+Queue selection considers only platform flags that are currently enabled. Due
+items are read through their durable slot owner and selected fairly per enabled
+platform; a disabled-platform backlog therefore cannot consume the bounded batch
+or starve MAX. Queue maintenance likewise creates work only for enabled
+platforms. To normalize legacy queues after flags or scheduler behavior change,
+preview and then apply the idempotent reconciliation command:
+
+```bash
+venv/bin/python -m app.content_studio.cli content reconcile-queue
+venv/bin/python -m app.content_studio.cli content reconcile-queue --apply
+```
+
+Reconciliation archives scheduled work for disabled platforms, skips overdue
+catch-up slots, collapses competing rows to one unused asset per future slot and
+then refills from the current day. It never deletes published rows or publication
+history, so an externally deleted MAX post remains consumed by the Novelty Gate.
+
 Operator preview and one-cycle execution:
 
 ```bash

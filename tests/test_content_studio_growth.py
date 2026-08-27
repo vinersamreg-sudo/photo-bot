@@ -17,6 +17,7 @@ from app.content_studio.content_generator import ContentGenerator
 from app.content_studio.models import TransformationType
 from app.content_studio.storage import ContentStorage
 from app.content_studio.growth import FullAutoGrowthEngine, _publish_timezone
+from app.content_studio.publisher import PlatformPublisher
 from app.content_studio.service import ContentStudioService
 from app.content_studio.video import (
     VerticalPairVideoSpec,
@@ -175,7 +176,13 @@ class ContentStudioGrowthTests(unittest.TestCase):
             content_library_path=PROJECT_ROOT / "marketing/content/library.json",
             production_database_path=self.root / "missing-production.sqlite3",
         )
-        service = ContentStudioService(settings)
+        service = ContentStudioService(
+            settings,
+            publishers={
+                "max": PlatformPublisher(platform="max", publishing_enabled=True),
+                "vk": PlatformPublisher(platform="vk", publishing_enabled=True),
+            },
+        )
         engine = FullAutoGrowthEngine(service)
 
         class FakeVideo:
@@ -268,7 +275,15 @@ class ContentStudioGrowthTests(unittest.TestCase):
             content_library_path=PROJECT_ROOT / "marketing/content/library.json",
             production_database_path=self.root / "missing-production.sqlite3",
         )
-        engine = FullAutoGrowthEngine(ContentStudioService(settings))
+        engine = FullAutoGrowthEngine(
+            ContentStudioService(
+                settings,
+                publishers={
+                    "max": PlatformPublisher(platform="max", publishing_enabled=True),
+                    "vk": PlatformPublisher(platform="vk", publishing_enabled=True),
+                },
+            )
+        )
         now = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
         ideas = engine._idea_pool(now.date(), engine.optimization())
         asset = engine._select_assets(

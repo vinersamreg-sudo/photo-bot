@@ -122,9 +122,10 @@ class FullAutoGrowthEngine:
         created: list[str] = []
         skipped: list[dict[str, str]] = []
         plan_entries: list[ContentPlanEntry] = []
+        queue_platforms = self._queue_platforms()
         reservations = {
             platform: self.repository.reserved_asset_checksums(platform)
-            for platform in ("max", "vk", "telegram")
+            for platform in queue_platforms
         }
         recent_categories = {
             platform: list(
@@ -132,15 +133,18 @@ class FullAutoGrowthEngine:
                     self.repository.recent_publication_categories(platform, limit=3)
                 )
             )
-            for platform in ("max", "vk", "telegram")
+            for platform in queue_platforms
         }
         for offset in range(self.settings.minimum_queue_days + 1):
             planned = today + timedelta(days=offset)
-            specs = [
-                ("max", "image", self.settings.max_daily_publish_time),
-                ("vk", "video", self.settings.vk_video_publish_time),
-            ]
-            if planned.weekday() in {0, 2, 4}:
+            specs = []
+            if "max" in queue_platforms:
+                specs.append(
+                    ("max", "image", self.settings.max_daily_publish_time)
+                )
+            if "vk" in queue_platforms:
+                specs.append(("vk", "video", self.settings.vk_video_publish_time))
+            if "vk" in queue_platforms and planned.weekday() in {0, 2, 4}:
                 specs.append(("vk", "image", self.settings.vk_wall_publish_time))
             for platform, media_kind, clock in specs:
                 scheduled = datetime.combine(
@@ -253,23 +257,16 @@ class FullAutoGrowthEngine:
         self, *, now: datetime | None = None, apply: bool = False, limit: int = 10
     ) -> dict[str, object]:
         moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
-        due = self.repository.due_posts(moment, limit)
+        due = self.repository.due_posts(
+            moment,
+            limit,
+            platforms=self._publishing_platforms(),
+        )
         if not apply:
             return {"due": [post["id"] for post in due], "published": [], "failed": []}
         published: list[dict[str, str]] = []
         failed: list[dict[str, str]] = []
-        deferred: list[str] = []
         for post in due:
-            enabled = (
-                self.settings.max_publishing_enabled
-                if post["platform"] == "max"
-                else self.settings.vk_publishing_enabled
-                if post["platform"] == "vk"
-                else self.settings.telegram_publishing_enabled
-            )
-            if not enabled:
-                deferred.append(post["id"])
-                continue
             try:
                 self._validate_staged_post(post["id"])
                 outcome = self.service.publication(
@@ -284,9 +281,56 @@ class FullAutoGrowthEngine:
         return {
             "due": [post["id"] for post in due],
             "published": published,
-            "deferred": deferred,
+            "deferred": [],
             "failed": failed,
         }
+
+    def reconcile_queue(
+        self, *, now: datetime | None = None, apply: bool = False
+    ) -> dict[str, object]:
+        """Archive stale/disabled queue rows and rebuild from today's slot."""
+
+        moment = (now or datetime.now(timezone.utc)).astimezone(self.timezone)
+        keep_from = datetime.combine(
+            moment.date(),
+            datetime.min.time(),
+            tzinfo=self.timezone,
+        ).astimezone(timezone.utc).isoformat()
+        result = self.repository.reconcile_scheduled_queue(
+            enabled_platforms=self._queue_platforms(),
+            keep_from=keep_from,
+            apply=apply,
+        )
+        result["queue"] = (
+            self.maintain_queue(now=moment, apply=True) if apply else None
+        )
+        return result
+
+    def _queue_platforms(self) -> tuple[str, ...]:
+        configured = {
+            "max": self.settings.max_publishing_enabled,
+            "telegram": self.settings.telegram_publishing_enabled,
+            "vk": self.settings.vk_publishing_enabled,
+        }
+        return tuple(
+            platform
+            for platform in ("max", "telegram", "vk")
+            if configured[platform]
+            or bool(
+                getattr(
+                    self.service.publishers.get(platform),
+                    "publishing_enabled",
+                    False,
+                )
+            )
+        )
+
+    def _publishing_platforms(self) -> tuple[str, ...]:
+        return tuple(
+            platform
+            for platform, publisher in self.service.publishers.items()
+            if bool(getattr(publisher, "publishing_enabled", False))
+        )
 
     def collect_analytics(self, *, apply: bool = False) -> dict[str, object]:
         posts = self.repository.published_posts()
