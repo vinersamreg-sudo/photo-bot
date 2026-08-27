@@ -99,6 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
     publish_due.add_argument("--apply", action="store_true")
     _add_format(publish_due)
 
+    reconcile_queue = actions.add_parser("reconcile-queue")
+    reconcile_queue.add_argument("--apply", action="store_true")
+    _add_format(reconcile_queue)
+
     analytics = actions.add_parser("analytics")
     analytics.add_argument("--post-id")
     analytics.add_argument("--record", action="store_true")
@@ -214,6 +218,8 @@ def _run_content(service: ContentStudioService, args: argparse.Namespace) -> Any
         }
     if command == "publish-due":
         return service.publish_due(limit=args.limit, apply=args.apply)
+    if command == "reconcile-queue":
+        return service.reconcile_full_auto_queue(apply=args.apply)
     if command == "analytics":
         if args.record:
             if not args.apply or not args.post_id:

@@ -864,21 +864,192 @@ class ContentStudioRepository:
         finally:
             connection.close()
 
-    def due_posts(self, now: str, limit: int = 10) -> list[dict[str, Any]]:
+    def due_posts(
+        self,
+        now: str,
+        limit: int = 10,
+        *,
+        platforms: Sequence[str] | None = None,
+    ) -> list[dict[str, Any]]:
         if limit <= 0 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
+        enabled = tuple(dict.fromkeys(platforms or ("max", "telegram", "vk")))
+        if not enabled:
+            return []
+        placeholders = ",".join("?" for _ in enabled)
         connection = self.connect()
         try:
             rows = connection.execute(
-                """SELECT * FROM demo_posts
-                   WHERE publish_status='scheduled'
-                     AND scheduled_time IS NOT NULL
-                     AND scheduled_time<=?
-                   ORDER BY scheduled_time,created_at,id
-                   LIMIT ?""",
-                (now, limit),
+                f"""SELECT p.* FROM demo_posts p
+                    JOIN content_publication_slots s
+                      ON s.post_id=p.id
+                     AND s.platform=p.platform
+                     AND s.scheduled_time=p.scheduled_time
+                    WHERE p.publish_status='scheduled'
+                      AND p.scheduled_time IS NOT NULL
+                      AND p.scheduled_time<=?
+                      AND p.platform IN ({placeholders})
+                    ORDER BY p.scheduled_time,p.created_at,p.id""",
+                (now, *enabled),
             ).fetchall()
-            return [dict(row) for row in rows]
+            by_platform: dict[str, list[dict[str, Any]]] = {
+                platform: [] for platform in enabled
+            }
+            for row in rows:
+                by_platform[str(row["platform"])].append(dict(row))
+            fair: list[dict[str, Any]] = []
+            while len(fair) < limit:
+                added = False
+                for platform in enabled:
+                    candidates = by_platform[platform]
+                    if candidates:
+                        fair.append(candidates.pop(0))
+                        added = True
+                        if len(fair) == limit:
+                            break
+                if not added:
+                    break
+            return fair
+        finally:
+            connection.close()
+
+    def reconcile_scheduled_queue(
+        self,
+        *,
+        enabled_platforms: Sequence[str],
+        keep_from: str,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Normalize legacy queue rows without touching publication history.
+
+        Disabled-platform work and overdue enabled-platform work are archived.
+        For each remaining slot, one unused asset becomes the durable owner; all
+        competing rows are archived.  Published assets are never selected again.
+        """
+
+        enabled = tuple(dict.fromkeys(enabled_platforms))
+        connection = self.connect()
+        try:
+            if apply:
+                connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """SELECT p.id,p.platform,p.scheduled_time,p.created_at,
+                          a.checksum,
+                          CASE WHEN s.post_id=p.id THEN 1 ELSE 0 END slot_owner,
+                          s.claim_token
+                   FROM demo_posts p
+                   JOIN demo_results r ON r.id=p.result_id
+                   JOIN demo_assets a ON a.id=r.asset_id
+                   LEFT JOIN content_publication_slots s ON s.post_id=p.id
+                   WHERE p.publish_status='scheduled'
+                   ORDER BY p.platform,p.scheduled_time,p.created_at,p.id"""
+            ).fetchall()
+            if apply and any(row["claim_token"] for row in rows):
+                raise RuntimeError(
+                    "scheduled publication is currently claimed; stop the timer and retry"
+                )
+            published = {
+                (str(row["platform"]), str(row["asset_checksum"]))
+                for row in connection.execute(
+                    "SELECT platform,asset_checksum FROM content_publication_history"
+                ).fetchall()
+            }
+            grouped: dict[tuple[str, str], list[sqlite3.Row]] = {}
+            archived_disabled: list[str] = []
+            archived_overdue: list[str] = []
+            for row in rows:
+                platform = str(row["platform"])
+                scheduled_time = str(row["scheduled_time"] or "")
+                if platform not in enabled:
+                    archived_disabled.append(str(row["id"]))
+                elif not scheduled_time or scheduled_time < keep_from:
+                    archived_overdue.append(str(row["id"]))
+                else:
+                    grouped.setdefault((platform, scheduled_time), []).append(row)
+
+            selected_checksums = {
+                platform: {
+                    checksum
+                    for history_platform, checksum in published
+                    if history_platform == platform
+                }
+                for platform in enabled
+            }
+            selected: dict[tuple[str, str], str] = {}
+            archived_competing: list[str] = []
+            for slot, candidates in grouped.items():
+                platform, _scheduled_time = slot
+                ordered = sorted(
+                    candidates,
+                    key=lambda row: (
+                        -int(row["slot_owner"]),
+                        str(row["created_at"]),
+                        str(row["id"]),
+                    ),
+                )
+                chosen = next(
+                    (
+                        row
+                        for row in ordered
+                        if str(row["checksum"])
+                        not in selected_checksums.setdefault(platform, set())
+                    ),
+                    None,
+                )
+                if chosen is not None:
+                    selected[slot] = str(chosen["id"])
+                    selected_checksums[platform].add(str(chosen["checksum"]))
+                archived_competing.extend(
+                    str(row["id"])
+                    for row in candidates
+                    if chosen is None or str(row["id"]) != str(chosen["id"])
+                )
+
+            archived = tuple(
+                dict.fromkeys(
+                    archived_disabled + archived_overdue + archived_competing
+                )
+            )
+            if apply:
+                if archived:
+                    placeholders = ",".join("?" for _ in archived)
+                    connection.execute(
+                        f"DELETE FROM content_publication_slots WHERE post_id IN ({placeholders})",
+                        archived,
+                    )
+                    connection.execute(
+                        f"""UPDATE demo_posts
+                            SET publish_status='archived',scheduled_time=NULL,
+                                last_error='queue_reconciled',updated_at=?
+                            WHERE id IN ({placeholders})
+                              AND publish_status='scheduled'""",
+                        (utc_now(), *archived),
+                    )
+                for (platform, scheduled_time), post_id in selected.items():
+                    connection.execute(
+                        "DELETE FROM content_publication_slots WHERE platform=? AND scheduled_time=?",
+                        (platform, scheduled_time),
+                    )
+                    connection.execute(
+                        """INSERT INTO content_publication_slots(
+                               platform,scheduled_time,post_id,created_at
+                           ) VALUES(?,?,?,?)""",
+                        (platform, scheduled_time, post_id, utc_now()),
+                    )
+                connection.commit()
+            return {
+                "apply": apply,
+                "enabled_platforms": list(enabled),
+                "keep_from": keep_from,
+                "archived_disabled": len(archived_disabled),
+                "archived_overdue": len(archived_overdue),
+                "archived_competing": len(archived_competing),
+                "selected_slots": len(selected),
+            }
+        except Exception:
+            if apply:
+                connection.rollback()
+            raise
         finally:
             connection.close()
 

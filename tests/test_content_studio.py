@@ -29,7 +29,11 @@ from app.content_studio.models import (
     QualityIssue,
     TransformationType,
 )
-from app.content_studio.publisher import MaxPublisher, PublishingDisabledError
+from app.content_studio.publisher import (
+    MaxPublisher,
+    PlatformPublisher,
+    PublishingDisabledError,
+)
 from app.content_studio.repository import (
     PublicationClaimConflictError,
     PublicationSlotConflictError,
@@ -525,6 +529,168 @@ class ContentStudioTests(unittest.TestCase):
         self.assertEqual(result["published"][0]["post_id"], generated["post_id"])
         self.assertEqual(transport.published, 1)
 
+    def test_disabled_vk_backlog_does_not_consume_due_limit_or_block_max(self) -> None:
+        transport = FakeTransport()
+        self.service.publishers = {
+            "max": MaxPublisher(publishing_enabled=True, transport=transport),
+            "vk": PlatformPublisher(platform="vk", publishing_enabled=False),
+        }
+        asset = self.add_asset()
+        for index in range(15):
+            generated = self.generate(asset=asset, platform="vk")
+            self.service.approve(
+                generated["post_id"], reviewer="owner", reason="checked", apply=True
+            )
+            self.service.schedule(
+                generated["post_id"],
+                f"2020-01-{index + 1:02d}T00:00:00+00:00",
+                apply=True,
+            )
+        max_post = self.generate(asset=asset, platform="max")
+        self.service.approve(
+            max_post["post_id"], reviewer="owner", reason="checked", apply=True
+        )
+        self.service.schedule(
+            max_post["post_id"], "2020-02-01T00:00:00+00:00", apply=True
+        )
+
+        result = self.service.publish_due(limit=10, apply=True)
+
+        self.assertEqual(result["due"], [max_post["post_id"]])
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(transport.published, 1)
+        self.assertEqual(
+            len(self.service.repository.queue(PostStatus.SCHEDULED.value, 100)),
+            15,
+        )
+
+    def test_legacy_duplicate_slot_row_is_not_a_second_due_publication(self) -> None:
+        transport = FakeTransport()
+        self.service.publishers["max"] = MaxPublisher(
+            publishing_enabled=True, transport=transport
+        )
+        asset = self.add_asset()
+        first = self.generate(asset=asset)
+        second = self.generate(asset=asset)
+        for generated in (first, second):
+            self.service.approve(
+                generated["post_id"], reviewer="owner", reason="checked", apply=True
+            )
+        scheduled = "2020-01-01T00:00:00+00:00"
+        self.service.schedule(first["post_id"], scheduled, apply=True)
+        connection = self.service.repository.connect()
+        try:
+            connection.execute(
+                """UPDATE demo_posts SET publish_status='scheduled',scheduled_time=?
+                   WHERE id=?""",
+                (scheduled, second["post_id"]),
+            )
+        finally:
+            connection.close()
+
+        due = self.service.repository.due_posts(
+            "2020-01-02T00:00:00+00:00", platforms=("max",)
+        )
+        self.assertEqual([post["id"] for post in due], [first["post_id"]])
+
+        result = self.service.publish_due(limit=10, apply=True)
+        self.assertEqual(len(result["published"]), 1)
+        self.assertEqual(transport.published, 1)
+        self.assertEqual(
+            self.service.repository.get_post(second["post_id"])["publish_status"],
+            PostStatus.SCHEDULED.value,
+        )
+
+    def test_due_posts_are_fair_across_enabled_platforms(self) -> None:
+        asset = self.add_asset()
+        for index in range(3):
+            generated = self.generate(asset=asset, platform="max")
+            self.service.approve(
+                generated["post_id"], reviewer="owner", reason="checked", apply=True
+            )
+            self.service.schedule(
+                generated["post_id"],
+                f"2020-01-{index + 1:02d}T00:00:00+00:00",
+                apply=True,
+            )
+        vk_post = self.generate(asset=asset, platform="vk")
+        self.service.approve(
+            vk_post["post_id"], reviewer="owner", reason="checked", apply=True
+        )
+        self.service.schedule(
+            vk_post["post_id"], "2020-02-01T00:00:00+00:00", apply=True
+        )
+
+        due = self.service.repository.due_posts(
+            "2020-03-01T00:00:00+00:00",
+            limit=2,
+            platforms=("max", "vk"),
+        )
+
+        self.assertEqual([post["platform"] for post in due], ["max", "vk"])
+
+    def test_queue_reconciliation_preserves_history_and_selects_unused_owner(self) -> None:
+        transport = FakeTransport()
+        self.service.publishers = {
+            "max": MaxPublisher(publishing_enabled=True, transport=transport),
+            "vk": PlatformPublisher(platform="vk", publishing_enabled=False),
+        }
+        used_asset = self.add_asset()
+        unused_path = self.approved / "unused.png"
+        _image(unused_path, "#B9CEDC", "#503E78", 130)
+        unused_asset = self.service.add_asset(
+            unused_path,
+            title="Другой синтетический пример",
+            description="Создан специально для Ravuna",
+            category=ContentCategory.REMOVE_OBJECT,
+        )
+        published = self.generate(asset=used_asset)
+        self.service.approve(
+            published["post_id"], reviewer="owner", reason="checked", apply=True
+        )
+        self.service.publication(
+            published["post_id"], mode=PublicationMode.PUBLISH, apply=True
+        )
+        history_before = self.service.repository.publication_history(platform="max")
+
+        used_post = self.generate(asset=used_asset)
+        unused_post = self.generate(asset=unused_asset)
+        for generated in (used_post, unused_post):
+            self.service.approve(
+                generated["post_id"], reviewer="owner", reason="checked", apply=True
+            )
+        scheduled = "2030-01-01T15:00:00+00:00"
+        self.service.schedule(used_post["post_id"], scheduled, apply=True)
+        connection = self.service.repository.connect()
+        try:
+            connection.execute(
+                """UPDATE demo_posts SET publish_status='scheduled',scheduled_time=?
+                   WHERE id=?""",
+                (scheduled, unused_post["post_id"]),
+            )
+        finally:
+            connection.close()
+
+        result = self.service.repository.reconcile_scheduled_queue(
+            enabled_platforms=("max",),
+            keep_from="2029-12-31T20:00:00+00:00",
+            apply=True,
+        )
+
+        self.assertEqual(result["selected_slots"], 1)
+        self.assertEqual(
+            self.service.repository.publication_slot_owner("max", scheduled),
+            unused_post["post_id"],
+        )
+        self.assertEqual(
+            self.service.repository.get_post(used_post["post_id"])["publish_status"],
+            PostStatus.ARCHIVED.value,
+        )
+        self.assertEqual(
+            self.service.repository.publication_history(platform="max"),
+            history_before,
+        )
+
     def test_publisher_interface_supports_publish_and_retry_with_injected_transport(self) -> None:
         transport = FakeTransport()
         publisher = MaxPublisher(publishing_enabled=True, transport=transport)
@@ -601,12 +767,15 @@ class ContentStudioTests(unittest.TestCase):
         parser = build_parser()
         for command in (
             "status", "auto-run", "dashboard", "permissions", "generate", "queue",
-            "approve", "publish", "publish-due", "analytics", "schedule", "video",
+            "approve", "publish", "publish-due", "reconcile-queue", "analytics",
+            "schedule", "video",
         ):
             with self.subTest(command=command):
                 if command in {"status", "auto-run", "dashboard", "permissions"}:
                     args = parser.parse_args(["content", command])
-                elif command in {"queue", "analytics", "publish-due"}:
+                elif command in {
+                    "queue", "analytics", "publish-due", "reconcile-queue"
+                }:
                     args = parser.parse_args(["content", command])
                 elif command == "approve":
                     args = parser.parse_args(
