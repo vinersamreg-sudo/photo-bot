@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Ravuna retention cleanup daily after encrypted backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+AccuracySec=1m
+Unit=ravuna-retention-cleanup.service
+
+[Install]
+WantedBy=timers.target

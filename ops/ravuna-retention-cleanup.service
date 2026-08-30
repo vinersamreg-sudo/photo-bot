@@ -1,0 +1,18 @@
+[Unit]
+Description=Ravuna private-storage retention cleanup
+After=local-fs.target
+ConditionPathExists=/opt/photo-bot/data/photo_bot.sqlite3
+
+[Service]
+Type=oneshot
+User=photoapp
+Group=photoapp
+WorkingDirectory=/opt/photo-bot
+EnvironmentFile=/opt/photo-bot/.env
+ExecStart=/usr/bin/flock -n /opt/photo-bot/data/retention-cleanup.lock /opt/photo-bot/venv/bin/python -m app.main maintenance-cleanup --execute
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/photo-bot/data /opt/photo-bot/logs /opt/photo-bot/temp

@@ -659,7 +659,8 @@ class GalleryService:
         with self.database.read() as connection:
             rows = connection.execute(
                 """SELECT id FROM gallery_items WHERE purged_at IS NULL AND
-                   ((deleted=1 AND purge_after<=?) OR retention_until<=?)""",
+                   ((deleted=1 AND purge_after<=?) OR
+                    (deleted=0 AND retention_until<=?))""",
                 (moment, moment),
             ).fetchall()
         return [row["id"] for row in rows]
@@ -680,7 +681,16 @@ class GalleryService:
                 "SELECT attempt_id FROM gallery_versions WHERE gallery_item_id=? AND attempt_id IS NOT NULL",
                 (item_id,),
             ).fetchall()
+            sessions = connection.execute(
+                "SELECT source_file_path FROM demo_sessions WHERE gallery_item_id=?",
+                (item_id,),
+            ).fetchall()
             self.storage.delete_private_tree(Path(item["storage_root_path"]))
+            for session in sessions:
+                if session["source_file_path"]:
+                    self.storage.delete_private_tree(
+                        Path(session["source_file_path"]).parent.parent
+                    )
             for attempt in attempts:
                 connection.execute(
                     """UPDATE generation_attempts SET source_path='',secondary_source_path=NULL,

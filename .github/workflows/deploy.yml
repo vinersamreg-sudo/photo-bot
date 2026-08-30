@@ -647,6 +647,13 @@ jobs:
             else
               echo "GEMINI_API_KEY is not configured; external API check skipped"
             fi
+            sudo -n install -o root -g root -m 644 \
+              "$ROOT/ops/ravuna-retention-cleanup.service" \
+              /etc/systemd/system/ravuna-retention-cleanup.service
+            sudo -n install -o root -g root -m 644 \
+              "$ROOT/ops/ravuna-retention-cleanup.timer" \
+              /etc/systemd/system/ravuna-retention-cleanup.timer
+            sudo -n systemctl daemon-reload
             MODE=$(sed -n 's/^MAX_TRANSPORT_MODE=//p' "$ROOT/.env" | tail -n 1)
             if [ "$MODE" = polling ] && grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
               "$ROOT"/venv/bin/python -m app.main max-check

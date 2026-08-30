@@ -19,6 +19,8 @@ SITE_CI_WORKFLOW = ROOT / ".github" / "workflows" / "site.yml"
 SITE_DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "site-deploy.yml"
 ENV_EXAMPLE = ROOT / ".env.example"
 SERVICE = ROOT / "ops" / "photo-bot.service"
+RETENTION_SERVICE = ROOT / "ops" / "ravuna-retention-cleanup.service"
+RETENTION_TIMER = ROOT / "ops" / "ravuna-retention-cleanup.timer"
 NGINX_RESULTURL_DEPLOY = ROOT / "ops" / "deploy_nginx_resulturl.sh"
 NGINX_RAVUNA_CONFIG = ROOT / "site" / "nginx" / "ravuna.ru.conf"
 
@@ -545,3 +547,21 @@ class DeployPolicyTests(TestCase):
         self.assertIn("KillSignal=SIGTERM", service)
         self.assertIn("NoNewPrivileges=true", service)
         self.assertIn("ReadWritePaths=/opt/photo-bot/data /opt/photo-bot/logs /opt/photo-bot/temp", service)
+
+    def test_retention_cleanup_is_an_independent_daily_oneshot(self) -> None:
+        service = RETENTION_SERVICE.read_text(encoding="utf-8")
+        timer = RETENTION_TIMER.read_text(encoding="utf-8")
+        self.assertIn("Type=oneshot", service)
+        self.assertIn("User=photoapp", service)
+        self.assertIn("maintenance-cleanup --execute", service)
+        self.assertIn("retention-cleanup.lock", service)
+        self.assertNotIn("photo-bot.service", service)
+        self.assertIn("OnCalendar=*-*-* 02:30:00 UTC", timer)
+        self.assertIn("Persistent=true", timer)
+        self.assertIn("Unit=ravuna-retention-cleanup.service", timer)
+
+    def test_deploy_installs_but_does_not_auto_enable_retention_timer(self) -> None:
+        self.assertIn("ravuna-retention-cleanup.service", self.workflow)
+        self.assertIn("ravuna-retention-cleanup.timer", self.workflow)
+        self.assertNotIn("systemctl enable ravuna-retention-cleanup.timer", self.workflow)
+        self.assertNotIn("systemctl start ravuna-retention-cleanup.timer", self.workflow)

@@ -183,6 +183,8 @@ class PrivateStorage:
             shutil.rmtree(root)
 
     def delete_private_tree(self, root: Path) -> None:
+        if root.is_symlink():
+            raise RuntimeError("Refusing to delete a symlinked private tree")
         resolved = root.resolve()
         allowed = self.users_dir.resolve()
         if allowed not in resolved.parents:
