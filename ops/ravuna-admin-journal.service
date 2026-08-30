@@ -1,0 +1,29 @@
+[Unit]
+Description=Ravuna loopback-only read-only admin journal
+After=network.target
+
+[Service]
+Type=simple
+User=photoapp
+Group=photoapp
+WorkingDirectory=/opt/photo-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/photo-bot/venv/bin/python /opt/photo-bot/scripts/run_admin_journal.py --root /opt/photo-bot --host 127.0.0.1 --port 8092
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadOnlyPaths=/opt/photo-bot/data
+
+[Install]
+WantedBy=multi-user.target
