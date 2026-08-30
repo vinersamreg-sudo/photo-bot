@@ -1,13 +1,18 @@
 import shutil
 import tempfile
 import hashlib
+import base64
+import io
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import httpx
+from openai import APITimeoutError
 from PIL import Image
 
 from app.commerce import LARGE_PACKAGE, SMALL_PACKAGE
@@ -46,6 +51,8 @@ from app.max_ui_shell import parse_versioned_action
 from app.storage import PrivateStorage
 from app.watermark import WatermarkService
 from app.payments import PaymentError, build_payment_service
+from app.provider_context import ProviderContextService
+from app.provider_router import select_image_provider
 
 
 class Clock:
@@ -1046,7 +1053,7 @@ class MaxApplicationTests(TestCase):
         direct_settings = replace(
             self.settings,
             image_direct_prompt_enabled=True,
-            image_subject_preserve_guard_enabled=False,
+            image_subject_preserve_guard_enabled=True,
         )
         self.app.settings = direct_settings
         self.demo.settings = direct_settings
@@ -1125,6 +1132,154 @@ class MaxApplicationTests(TestCase):
             ).fetchone()
         self.assertEqual(attempt["prompt"], "Улучши фото")
         self.assertIsNone(attempt["secondary_source_path"])
+
+    def _use_direct_openai(self, *, fail=False, context_enabled=False):
+        settings = replace(
+            self.settings, image_provider="openai", openai_image_model="gpt-image-2",
+            image_direct_prompt_enabled=True, image_subject_preserve_guard_enabled=True,
+            image_face_preserve_guard_enabled=True, processing_mode_router_enabled=True,
+            openai_conversation_memory_enabled=context_enabled,
+            openai_responses_image_enabled=context_enabled,
+            openai_conversation_retention_enabled=context_enabled,
+        )
+        calls = []
+        output = io.BytesIO()
+        Image.new("RGB", (96, 64), "green").save(output, format="PNG")
+
+        def edit(**kwargs):
+            files = kwargs["image"] if isinstance(kwargs["image"], list) else [kwargs["image"]]
+            calls.append({
+                "prompt": kwargs["prompt"], "files": [file.read() for file in files],
+                "handles": files, "model": kwargs["model"],
+            })
+            if fail:
+                raise APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/images/edits"))
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(output.getvalue()).decode("ascii"))],
+                _request_id="synthetic-request", usage={"total_tokens": 18},
+            )
+
+        responses = Mock(side_effect=AssertionError("Two-source requests must use the Image API"))
+        client = SimpleNamespace(images=SimpleNamespace(edit=edit), responses=SimpleNamespace(create=responses))
+        self.demo.provider = select_image_provider(settings, openai_client=client).provider
+        self.demo.settings = self.app.settings = settings
+        self.demo.provider_context_service = ProviderContextService(settings, self.database, clock=self.clock)
+        self.demo.processing_router = Mock()
+        self.demo.processing_router.route.side_effect = AssertionError("Direct mode must bypass the router")
+        return calls, responses, output.getvalue()
+
+    def _raw_openai_update(self, prompt, count=2):
+        second = self.base / "openai-second.png"
+        Image.new("RGB", (240, 320), "red").save(second)
+        urls = ["https://iu.oneme.ru/openai-first", "https://iu.oneme.ru/openai-second"][:count]
+        sources = [self.source, second][:count]
+        self.transport.sources_by_url = dict(zip(urls, sources))
+        event = parse_update({
+            "update_type": "message_created", "timestamp": 10,
+            "message": {
+                "sender": {"user_id": "u1"}, "recipient": {"chat_id": "c1"},
+                "body": {"mid": "openai-raw", "text": prompt, "attachments": [
+                    {"type": "image", "payload": {"url": url}} for url in urls
+                ]},
+            },
+        })
+        return event, [source.read_bytes() for source in sources]
+
+    def test_openai_raw_two_photo_exact_prompt_wrapper_context_and_idempotency(self) -> None:
+        calls, responses, _output = self._use_direct_openai(context_enabled=True)
+        prompt = "  На фото 1 добавь мужчину из фото 2 ✨\nНе переводить 👨‍👩‍👧\r\n\t"
+        event, source_bytes = self._raw_openai_update(prompt)
+        with patch(
+            "app.direct_prompt.build_preservation_guard", side_effect=AssertionError("hidden guard")
+        ), patch(
+            "app.max_application.parse_edit_intent", side_effect=AssertionError("MAX intent expansion")
+        ), patch(
+            "app.demo_service.parse_edit_intent", side_effect=AssertionError("service intent expansion")
+        ), patch(
+            "app.demo_service.build_provider_prompt", side_effect=AssertionError("legacy prompt builder")
+        ):
+            self.assertTrue(self.app.handle(event))
+        self.app.handle(event)  # Replayed MAX update must not spend/call twice.
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["files"], source_bytes)
+        self.assertEqual(calls[0]["prompt"].encode("utf-8"), prompt.encode("utf-8"))
+        self.assertEqual(calls[0]["model"], "gpt-image-2")
+        self.assertTrue(all(handle.closed for handle in calls[0]["handles"]))
+        responses.assert_not_called()
+        self.demo.processing_router.route.assert_not_called()
+        with self.database.read() as connection:
+            attempts = connection.execute("SELECT * FROM generation_attempts").fetchall()
+            reservations = connection.execute("SELECT status FROM generation_credit_reservations").fetchall()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["status"], "succeeded")
+        self.assertEqual(attempts[0]["provider_prompt"], prompt)
+        self.assertIsNotNone(attempts[0]["secondary_source_path"])
+        self.assertEqual([row["status"] for row in reservations], ["consumed"])
+        self.assertEqual(self.demo.commerce.balance(self.store.get("u1").user_id).available, 1)
+
+    def test_openai_raw_one_photo_and_correction_keep_exact_text_and_selected_source(self) -> None:
+        calls, _responses, output = self._use_direct_openai()
+        prompt = "  Изменить размер для загрузки на сотовый телефон ✨\n\t"
+        event, source_bytes = self._raw_openai_update(prompt, count=1)
+        self.assertTrue(self.app.handle(event))
+        self.callback("result:correct")
+        self.clock.advance(2)
+        correction = "  Муж меня обнимает 👨‍👩‍👧\nСделай чуть темнее\r\n"
+        self.assertTrue(self.app.handle(self.event("message_created", text=correction)))
+        self.assertEqual([call["prompt"] for call in calls], [prompt, correction])
+        self.assertEqual([call["files"] for call in calls], [source_bytes, [output]])
+
+    def test_openai_prompt_before_photo_keeps_whitespace(self) -> None:
+        calls, _responses, _output = self._use_direct_openai()
+        self.app.handle(self.event("bot_started"))
+        self.callback("new:source")
+        prompt = " \nПоменять фон ✨\r\n "
+        self.app.handle(self.event("message_created", text=prompt))
+        event, source_bytes = self._raw_openai_update(None, count=1)
+        self.assertTrue(self.app.handle(event))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["prompt"], prompt)
+        self.assertEqual(calls[0]["files"], source_bytes)
+
+    def test_openai_separate_photo_messages_preserve_order_and_prompt(self) -> None:
+        calls, _responses, _output = self._use_direct_openai()
+        event, source_bytes = self._raw_openai_update(None)
+        first, second = event.image_urls
+        self.app.handle(self.event("message_created", image_url=first))
+        self.callback("source:add-second")
+        self.app.handle(self.event("message_created", image_url=second))
+        prompt = "  На фото 1 добавь мужчину из фото 2 ✨\n "
+        self.assertTrue(self.app.handle(self.event("message_created", text=prompt)))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["prompt"], prompt)
+        self.assertEqual(calls[0]["files"], source_bytes)
+
+    def test_openai_two_photo_api_failure_releases_reservation_without_debit(self) -> None:
+        calls, _responses, _output = self._use_direct_openai(fail=True)
+        event, source_bytes = self._raw_openai_update("На фото 1 добавь мужчину из фото 2")
+        self.assertTrue(self.app.handle(event))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["files"], source_bytes)
+        self.assertTrue(all(handle.closed for handle in calls[0]["handles"]))
+        user_id = self.store.get("u1").user_id
+        self.assertEqual(self.demo.commerce.balance(user_id).available, 2)
+        with self.database.read() as connection:
+            attempt = connection.execute("SELECT * FROM generation_attempts").fetchone()
+            reservation = connection.execute("SELECT * FROM generation_credit_reservations").fetchone()
+            ledger = connection.execute(
+                "SELECT COUNT(*),SUM(delta) FROM credit_ledger WHERE reference_type='attempt' AND reference_id=?",
+                (attempt["id"],),
+            ).fetchone()
+            versions = connection.execute("SELECT COUNT(*) FROM gallery_versions").fetchone()[0]
+        self.assertEqual(attempt["status"], "failed_technical")
+        self.assertEqual(attempt["error_type"], "ProviderTimeoutError")
+        self.assertEqual(reservation["status"], "released")
+        self.assertEqual(tuple(ledger), (2, 0))
+        self.assertEqual(versions, 0)
+        self.assertTrue(any(
+            "Попытка не списана" in message[1]
+            for message in self.transport.messages + self.transport.edits
+        ))
 
     def test_raw_max_update_with_more_than_two_images_is_rejected(self) -> None:
         event = parse_update(
@@ -2502,7 +2657,7 @@ class MaxApplicationTests(TestCase):
                 "SELECT prompt,provider_prompt FROM generation_attempts"
             ).fetchone()
         self.assertEqual(attempt["prompt"], user_text)
-        self.assertTrue(attempt["provider_prompt"].startswith(user_text + "\n\n"))
+        self.assertEqual(attempt["provider_prompt"], user_text)
 
     def test_text_after_result_continues_as_field_level_correction(self) -> None:
         self.onboard_to_prompt()

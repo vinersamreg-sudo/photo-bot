@@ -14,7 +14,7 @@ MAX update
   -> access/observe guard
   -> dialog state machine
   -> source validation and private storage
-  -> exact Unicode prompt for Gemini; optional deterministic guard for other providers
+  -> exact Unicode prompt for OpenAI and Gemini in direct mode
   -> configured provider router
   -> OpenAI or Google Gemini image edit
   -> original persistence
@@ -35,18 +35,21 @@ delivery failures must not consume the user’s edit allowance.
 - `max_transport.py`: Bot API HTTP and polling only.
 - `max_application.py`: product states, messages and callbacks.
 - `direct_prompt.py`: preserves the exact Unicode text received from the product
-  flow. The Gemini path sends that text unchanged; an optional deterministic guard
-  remains available only for other direct-provider paths. It performs no
+  flow, including whitespace, for OpenAI and Gemini. It performs no
   translation, artistic expansion or LLM analysis.
   `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED` and
-  `IMAGE_FACE_PRESERVE_GUARD_ENABLED` are compatibility flags for other paths and
-  have no effect on the Gemini/Nano Banana provider prompt.
+  `IMAGE_FACE_PRESERVE_GUARD_ENABLED` are compatibility flags and have no effect
+  on any direct provider prompt (`direct-unicode-v5`).
 - `edit_intent.py` and `prompt_builder.py`: preserved legacy prompt layer, selected
   only when direct prompting is disabled.
 - `provider_router.py`: fail-fast selection of `openai`, `gemini` or
   `nanobanana`; `nanobanana` is a Gemini API routing alias, not a separate API.
 - `image_provider.py`, `gemini_image_provider.py` and `openai_client.py`:
   provider-specific external image execution.
+  OpenAI Image Edit accepts one or two ordered, unmodified source files with the
+  same quality/output settings and first-source size selection. Its context wrapper
+  delegates multi-source edits to Image Edit, even when optional Responses memory
+  is enabled; single-source corrections retain the existing context/fallback path.
 - `demo_service.py`: attempt lifecycle, watermark and delivery handoff.
 - `gallery.py`: work/version lineage and user operations.
 - `commerce.py`: credit and entitlement ledgers.
@@ -95,7 +98,7 @@ delivery failures must not consume the user’s edit allowance.
 - Failures do not debit edit allowance.
 - Production state is preserved across ordinary deploys.
 - Fresh installs are fail-closed.
-- Gemini/Nano Banana receives the exact original Unicode prompt; Ravuna does not
+- OpenAI and Gemini/Nano Banana receive the exact original Unicode direct prompt; Ravuna does not
   add identity, face, pose, composition or other hidden preservation text.
 
 See [UX](UX.md), [Payments](PAYMENTS.md), [Production](PRODUCTION.md) and

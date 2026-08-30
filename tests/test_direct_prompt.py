@@ -1,4 +1,5 @@
 from unittest import TestCase
+from unittest.mock import patch
 
 from app.direct_prompt import (
     build_direct_edit_plan,
@@ -8,28 +9,34 @@ from app.direct_prompt import (
 
 
 class DirectPromptTests(TestCase):
-    def test_clothing_and_background_keep_full_people_guard(self) -> None:
+    def test_clothing_and_background_have_no_hidden_guard(self) -> None:
         user_text = "Поменять одежду. Улучшить фон"
 
         prompt = build_direct_prompt(user_text)
 
-        self.assertEqual(
-            prompt,
-            user_text
-            + "\n\nСохрани личности и узнаваемые лица всех людей, их мимику, "
-            "позы, положение тел, пропорции, ракурс и композицию. "
-            "Измени только то, что прямо указано пользователем.",
-        )
+        self.assertEqual(prompt, user_text)
         self.assertNotIn("PRIORITY ORDER", prompt)
 
-    def test_preserves_exact_unicode_as_the_first_prompt_segment(self) -> None:
-        user_text = "  Надень очки ✨\n"
-
-        prompt = build_direct_prompt(user_text)
-
-        self.assertEqual(prompt[: len(user_text)], user_text)
-        self.assertIn("личности и узнаваемые лица", prompt)
-        self.assertIn("позы, положение тел", prompt)
+    def test_exact_unicode_whitespace_and_no_guard_even_when_flag_enabled(self) -> None:
+        texts = (
+            "  Надень очки ✨\nВторая строка 👨‍👩‍👧\r\n\t",
+            "Изменить размер для загрузки на сотовый телефон",
+            "Муж меня обнимает",
+        )
+        with patch(
+            "app.direct_prompt.build_preservation_guard",
+            side_effect=AssertionError("Direct mode must not interpret the prompt"),
+        ):
+            for user_text in texts:
+                for enabled in (False, True):
+                    with self.subTest(text=user_text, guard=enabled):
+                        prompt = build_direct_prompt(
+                            user_text, preservation_guard_enabled=enabled
+                        )
+                        self.assertEqual(prompt, user_text)
+                        self.assertEqual(prompt.encode("utf-8"), user_text.encode("utf-8"))
+                        self.assertNotIn("Сохрани", prompt)
+                        self.assertNotIn("Измени только", prompt)
 
     def test_face_change_removes_only_identity_protection(self) -> None:
         guard = build_preservation_guard(
@@ -88,4 +95,4 @@ class DirectPromptTests(TestCase):
         self.assertEqual(plan.requested_changes, ("замени фон",))
         self.assertEqual(plan.preservation_rules, ())
         self.assertEqual(plan.forbidden_changes, ())
-        self.assertEqual(plan.parser_version, "direct-unicode-v4")
+        self.assertEqual(plan.parser_version, "direct-unicode-v5")

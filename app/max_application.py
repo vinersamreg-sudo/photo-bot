@@ -574,7 +574,9 @@ class MaxApplication:
                     event.user_id,
                     "waiting_for_source",
                     event_key=event.event_key,
-                    pending_prompt=text,
+                    pending_prompt=(
+                        event.text if self.settings.image_direct_prompt_enabled else text
+                    ),
                     pending_action="initial",
                 )
                 self._send_message(
@@ -1600,11 +1602,11 @@ class MaxApplication:
                 pending_request_id=None,
                 selected_scenario_id=None, pending_action="initial",
             )
-            inline_prompt = (event.text or "").strip()
-            if inline_prompt.lower() == "/start":
+            inline_prompt = event.text or ""
+            if inline_prompt.strip().lower() == "/start":
                 inline_prompt = ""
-            prompt = inline_prompt or (dialog.pending_prompt or "").strip()
-            if prompt:
+            prompt = inline_prompt if inline_prompt.strip() else (dialog.pending_prompt or "")
+            if prompt.strip():
                 prompt_event = event
                 if prompt != inline_prompt:
                     prompt_event = MaxIncomingEvent(
@@ -1704,8 +1706,9 @@ class MaxApplication:
         return self.demo.commerce.balance(row["user_id"]).available
 
     def _receive_prompt(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
-        prompt = (event.text or "").strip()
-        if not prompt:
+        prompt = event.text or ""
+        clean_prompt = prompt.strip()
+        if not clean_prompt:
             self._send_message(
                 event.user_id,
                 "Что изменить?",
@@ -1719,8 +1722,10 @@ class MaxApplication:
                 ),
             )
             return
-        if len(prompt) > self.settings.max_prompt_length:
+        if len(clean_prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is too long")
+        if not self.settings.image_direct_prompt_enabled:
+            prompt = clean_prompt
         if not dialog.session_id or not self._session_is_usable(dialog.session_id):
             raise DemoExpiredError("The current source image is no longer available")
         mode = "correction" if dialog.state == "waiting_for_correction" else "initial"

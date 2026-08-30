@@ -1,22 +1,25 @@
 import base64
 import io
 import tempfile
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
 
 import httpx
 from PIL import Image
-from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError
+from openai import APIConnectionError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
 
 from app.config import load_settings
 from app.domain import (
     PolicyRejectedError,
+    ProviderContextRequest,
     ProviderQuotaError,
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
-from app.image_provider import OpenAIImageProvider
+from app.image_provider import ContextAwareImageProvider, OpenAIImageProvider, OpenAIResponsesImageProvider
 
 
 class Images:
@@ -62,6 +65,107 @@ class FailingImages:
 
 
 class OpenAIImageProviderTests(TestCase):
+    def test_context_wrapper_preserves_exact_prompt_in_responses_and_stateless_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            Image.new("RGB", (32, 32), "blue").save(source)
+            encoded = base64.b64encode(source.read_bytes()).decode("ascii")
+            prompt = "  Муж меня обнимает ✨\nЧуть темнее\r\n\t"
+            context = ProviderContextRequest("ctx", "resp-parent", None, 2, "branch")
+            for fail in (False, True):
+                with self.subTest(fallback=fail):
+                    requests = []
+
+                    def create(**kwargs):
+                        requests.append(kwargs)
+                        if fail:
+                            raise APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+                        return SimpleNamespace(
+                            id="resp-child", _request_id="req-context", usage={},
+                            output=[{"type": "image_generation_call", "result": encoded}],
+                        )
+
+                    images = Images(encoded)
+                    client = SimpleNamespace(images=images, responses=SimpleNamespace(create=create))
+                    wrapper = ContextAwareImageProvider(
+                        OpenAIImageProvider(client, "gpt-image-2"),
+                        OpenAIResponsesImageProvider(client, "gpt-5.4-mini", "gpt-image-2"),
+                    )
+                    result = wrapper.edit_with_context(source, prompt, context)
+                    self.assertEqual(len(requests), 1)
+                    self.assertEqual(requests[0]["input"], [{"role": "user", "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_image", "image_url": "data:image/png;base64," + encoded, "detail": "high"},
+                    ]}])
+                    self.assertEqual(result.image_bytes, source.read_bytes())
+                    self.assertEqual(result.context_fallback_used, fail)
+                    if fail:
+                        self.assertEqual(images.kwargs["prompt"], prompt)
+                    else:
+                        self.assertIsNone(images.kwargs)
+
+    def test_sdk_multipart_preserves_one_or_two_ordered_original_files_and_prompt(self) -> None:
+        prompt = "  На фото 1 добавь мужчину из фото 2 ✨\nБез перевода 👨‍👩‍👧\r\n\t"
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = (Path(directory) / name for name in ("first.png", "second.png"))
+            Image.new("RGB", (48, 32), "blue").save(first)
+            Image.new("RGB", (32, 48), "red").save(second)
+            output = first.read_bytes()
+            captured = []
+
+            def handler(request):
+                self.assertEqual(request.url.path, "/v1/images/edits")
+                message = BytesParser(policy=policy.default).parsebytes(
+                    ("Content-Type: " + request.headers["content-type"] + "\r\n\r\n").encode()
+                    + request.read()
+                )
+                captured.append([
+                    (part.get_param("name", header="content-disposition"),
+                     part.get_filename(), part.get_payload(decode=True))
+                    for part in message.iter_parts()
+                ])
+                return httpx.Response(
+                    200,
+                    headers={"x-request-id": "req-parity"},
+                    json={
+                        "data": [{"b64_json": base64.b64encode(output).decode("ascii")}],
+                        "usage": {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18},
+                    },
+                )
+
+            with OpenAI(
+                api_key="test-only", max_retries=0,
+                http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+            ) as client:
+                provider = OpenAIImageProvider(client, "gpt-image-2", quality="medium")
+                for sources in ((first,), (first, second), (second, first)):
+                    with self.subTest(count=len(sources), first=sources[0].name):
+                        result = provider.edit_many(sources, prompt)
+                        parts = captured[-1]
+                        files = [(name, data) for _, name, data in parts if name]
+                        fields = {key: data.decode("utf-8") for key, name, data in parts if not name}
+                        self.assertEqual(files, [(path.name, path.read_bytes()) for path in sources])
+                        self.assertEqual(fields, {
+                            "model": "gpt-image-2", "prompt": prompt, "quality": "medium",
+                            "size": "1536x1024" if sources[0] == first else "1024x1536",
+                            "output_format": "png",
+                        })
+                        self.assertEqual(result.image_bytes, output)
+                        self.assertEqual((result.request_id, result.http_status), ("req-parity", 200))
+                        self.assertEqual(result.usage["total_tokens"], 18)
+                        self.assertEqual(result.retries, 0)
+                        self.assertEqual(result.provider_mode, "stateless")
+                        self.assertGreaterEqual(result.provider_duration_ms, 0)
+            self.assertEqual(len(captured), 3)
+
+    def test_edit_many_rejects_invalid_count_before_opening_files_or_calling_api(self) -> None:
+        images = Images("")
+        provider = OpenAIImageProvider(SimpleNamespace(images=images), "gpt-image-2")
+        for paths in ((), (Path("missing.png"),) * 3):
+            with self.subTest(count=len(paths)), self.assertRaises(ValueError):
+                provider.edit_many(paths, "Запрос")
+        self.assertIsNone(images.kwargs)
+
     def test_uses_images_edit_and_returns_decoded_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.png"
@@ -211,9 +315,10 @@ class OpenAIImageProviderTests(TestCase):
                 ),
             )
             for error, expected in cases:
-                with self.subTest(expected=expected.__name__):
-                    provider = OpenAIImageProvider(
-                        SimpleNamespace(images=FailingImages(error)), "gpt-image-2"
-                    )
-                    with self.assertRaises(expected):
-                        provider.edit(source, "replace background")
+                for count in (1, 2):
+                    with self.subTest(expected=expected.__name__, count=count):
+                        provider = OpenAIImageProvider(
+                            SimpleNamespace(images=FailingImages(error)), "gpt-image-2"
+                        )
+                        with self.assertRaises(expected):
+                            provider.edit_many((source,) * count, "replace background")

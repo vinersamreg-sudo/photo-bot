@@ -7,7 +7,7 @@ from typing import Optional
 from app.edit_intent import EditMode, EditPlan
 
 
-DIRECT_PROMPT_VERSION = "direct-unicode-v4"
+DIRECT_PROMPT_VERSION = "direct-unicode-v5"
 
 _ONLY_REQUESTED_CHANGE = "Измени только то, что прямо указано пользователем."
 _PRESERVATION_PARTS = (
@@ -134,13 +134,11 @@ def build_preservation_guard(user_text: str) -> str:
 def build_direct_prompt(
     user_text: str, *, preservation_guard_enabled: bool = True
 ) -> str:
-    """Keep the user's text verbatim and optionally append a deterministic guard."""
+    """Return exact user text; the legacy guard argument is compatibility-only."""
 
     if not user_text.strip():
         raise ValueError("Direct provider prompt must not be empty")
-    if not preservation_guard_enabled:
-        return user_text
-    return f"{user_text}\n\n{build_preservation_guard(user_text)}"
+    return user_text
 
 
 def build_direct_edit_plan(

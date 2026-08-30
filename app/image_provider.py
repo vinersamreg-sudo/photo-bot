@@ -7,6 +7,7 @@ import binascii
 import io
 import mimetypes
 import time
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -94,17 +95,25 @@ class OpenAIImageProvider:
         return _resolve_output_size(self.size, source_path)
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
+        return self.edit_many((source_path,), prompt)
+
+    def edit_many(
+        self, source_paths: tuple[Path, ...], prompt: str
+    ) -> ProviderResult:
         _validate_provider_prompt(prompt)
+        if not 1 <= len(source_paths) <= 2:
+            raise ValueError("OpenAI provider accepts one or two source images")
         started = time.monotonic()
         http_status = None
         try:
-            with source_path.open("rb") as source:
+            with ExitStack() as stack:
+                sources = [stack.enter_context(path.open("rb")) for path in source_paths]
                 request: dict[str, Any] = dict(
                     model=self.model,
-                    image=source,
+                    image=sources[0] if len(sources) == 1 else sources,
                     prompt=prompt,
                     quality=self.quality,
-                    size=self.resolve_size(source_path),
+                    size=self.resolve_size(source_paths[0]),
                     output_format=self.output_format,
                 )
                 # GPT Image 2 always uses high input fidelity and rejects attempts
@@ -334,6 +343,11 @@ class ContextAwareImageProvider:
 
     def edit(self, source_path: Path, prompt: str) -> ProviderResult:
         return self.stateless.edit(source_path, prompt)
+
+    def edit_many(
+        self, source_paths: tuple[Path, ...], prompt: str
+    ) -> ProviderResult:
+        return self.stateless.edit_many(source_paths, prompt)
 
     def resolve_size(self, source_path: Path) -> str:
         resolver = getattr(self.stateless, "resolve_size", None)
