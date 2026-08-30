@@ -88,13 +88,10 @@ Production is a public, working commercial service. The approved normal state is
 - `IMAGE_PROVIDER=gemini`;
 - `GEMINI_IMAGE_MODEL=gemini-3-pro-image`;
 - `IMAGE_DIRECT_PROMPT_ENABLED=true`;
-- `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true`;
-- `IMAGE_FACE_PRESERVE_GUARD_ENABLED=true`;
 - `PILOT_USER_LIMIT=0`.
 
-In direct mode, the two preservation flags are compatibility settings only for
-both OpenAI and Gemini/Nano Banana: they must not append, prepend or otherwise
-change the provider prompt. Both receive the exact original Unicode user prompt.
+In direct mode, OpenAI and Gemini/Nano Banana receive the exact original Unicode
+user prompt. There are no preservation guards or compatibility guard settings.
 
 Always confirm the actual snapshot before a test or release. If it differs, treat
 the actual state as evidence requiring investigation; never silently overwrite it

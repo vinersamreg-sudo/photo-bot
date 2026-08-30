@@ -167,8 +167,6 @@ jobs:
               "IMAGE_PROVIDER",
               "GEMINI_IMAGE_MODEL",
               "IMAGE_DIRECT_PROMPT_ENABLED",
-              "IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED",
-              "IMAGE_FACE_PRESERVE_GUARD_ENABLED",
               "MAX_SINGLE_SCREEN_UI_ENABLED",
           )
           values = {}
@@ -536,14 +534,10 @@ jobs:
             ensure_env IMAGE_PROVIDER gemini
             ensure_env GEMINI_IMAGE_MODEL gemini-3-pro-image
             ensure_env IMAGE_DIRECT_PROMPT_ENABLED true
-            ensure_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true
-            ensure_env IMAGE_FACE_PRESERVE_GUARD_ENABLED true
             if [ "$ACTIVATE_GEMINI" = true ]; then
               set_env IMAGE_PROVIDER gemini
               set_env GEMINI_IMAGE_MODEL gemini-3-pro-image
               set_env IMAGE_DIRECT_PROMPT_ENABLED true
-              set_env IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED true
-              set_env IMAGE_FACE_PRESERVE_GUARD_ENABLED true
             fi
             set_env IMAGE_EDIT_SIZE auto
             set_env OPENAI_CONVERSATION_MEMORY_ENABLED false
@@ -815,8 +809,6 @@ jobs:
               assert settings.image_provider == "gemini"
               assert settings.gemini_image_model == "gemini-3-pro-image"
               assert settings.image_direct_prompt_enabled is True
-              assert settings.image_subject_preserve_guard_enabled is True
-              assert settings.image_face_preserve_guard_enabled is True
               assert settings.gemini_api_key
           stale_processing_orphans = 0
           cutoff = time.time() - 3600
@@ -850,8 +842,6 @@ jobs:
                   else "/v1/images/edits"
               ),
               "direct_prompt_enabled": settings.image_direct_prompt_enabled,
-              "subject_preserve_guard_enabled": settings.image_subject_preserve_guard_enabled,
-              "face_preserve_guard_enabled": settings.image_face_preserve_guard_enabled,
               "single_screen_ui_enabled": settings.max_single_screen_ui_enabled,
               "gemini_api_key_configured": bool(settings.gemini_api_key),
               "quality": settings.image_edit_quality,

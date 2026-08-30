@@ -37,9 +37,8 @@ delivery failures must not consume the user’s edit allowance.
 - `direct_prompt.py`: preserves the exact Unicode text received from the product
   flow, including whitespace, for OpenAI and Gemini. It performs no
   translation, artistic expansion or LLM analysis.
-  `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED` and
-  `IMAGE_FACE_PRESERVE_GUARD_ENABLED` are compatibility flags and have no effect
-  on any direct provider prompt (`direct-unicode-v5`).
+  There are no preservation guards or compatibility guard settings
+  (`direct-unicode-v5`).
 - `edit_intent.py` and `prompt_builder.py`: preserved legacy prompt layer, selected
   only when direct prompting is disabled.
 - `provider_router.py`: fail-fast selection of `openai`, `gemini` or

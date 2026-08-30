@@ -29,8 +29,6 @@ class SettingsTests(TestCase):
         self.assertEqual(settings.gemini_image_model, "gemini-3-pro-image")
         self.assertEqual(settings.nanobanana_image_model, "gemini-3-pro-image")
         self.assertTrue(settings.image_direct_prompt_enabled)
-        self.assertTrue(settings.image_subject_preserve_guard_enabled)
-        self.assertTrue(settings.image_face_preserve_guard_enabled)
         self.assertFalse(settings.openai_conversation_memory_enabled)
         self.assertFalse(settings.openai_responses_image_enabled)
         self.assertFalse(settings.openai_conversation_retention_enabled)
@@ -90,28 +88,6 @@ class SettingsTests(TestCase):
                 }
             ).image_direct_prompt_enabled
         )
-
-    def test_subject_guard_defaults_on_and_supports_legacy_face_flag(self) -> None:
-        self.assertTrue(
-            load_settings(environ={"APP_ENV": "test"}).image_subject_preserve_guard_enabled
-        )
-        self.assertFalse(
-            load_settings(
-                environ={
-                    "APP_ENV": "test",
-                    "IMAGE_FACE_PRESERVE_GUARD_ENABLED": "false",
-                }
-            ).image_subject_preserve_guard_enabled
-        )
-        settings = load_settings(
-            environ={
-                "APP_ENV": "test",
-                "IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED": "true",
-                "IMAGE_FACE_PRESERVE_GUARD_ENABLED": "false",
-            }
-        )
-        self.assertTrue(settings.image_subject_preserve_guard_enabled)
-        self.assertFalse(settings.image_face_preserve_guard_enabled)
 
     def test_image_provider_selection_and_google_models_are_validated(self) -> None:
         settings = load_settings(

@@ -1053,7 +1053,6 @@ class MaxApplicationTests(TestCase):
         direct_settings = replace(
             self.settings,
             image_direct_prompt_enabled=True,
-            image_subject_preserve_guard_enabled=True,
         )
         self.app.settings = direct_settings
         self.demo.settings = direct_settings
@@ -1136,8 +1135,7 @@ class MaxApplicationTests(TestCase):
     def _use_direct_openai(self, *, fail=False, context_enabled=False):
         settings = replace(
             self.settings, image_provider="openai", openai_image_model="gpt-image-2",
-            image_direct_prompt_enabled=True, image_subject_preserve_guard_enabled=True,
-            image_face_preserve_guard_enabled=True, processing_mode_router_enabled=True,
+            image_direct_prompt_enabled=True, processing_mode_router_enabled=True,
             openai_conversation_memory_enabled=context_enabled,
             openai_responses_image_enabled=context_enabled,
             openai_conversation_retention_enabled=context_enabled,
@@ -1190,8 +1188,6 @@ class MaxApplicationTests(TestCase):
         prompt = "  На фото 1 добавь мужчину из фото 2 ✨\nНе переводить 👨‍👩‍👧\r\n\t"
         event, source_bytes = self._raw_openai_update(prompt)
         with patch(
-            "app.direct_prompt.build_preservation_guard", side_effect=AssertionError("hidden guard")
-        ), patch(
             "app.max_application.parse_edit_intent", side_effect=AssertionError("MAX intent expansion")
         ), patch(
             "app.demo_service.parse_edit_intent", side_effect=AssertionError("service intent expansion")

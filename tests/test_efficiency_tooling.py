@@ -30,8 +30,6 @@ class EfficiencyToolingTests(TestCase):
             "IMAGE_PROVIDER",
             "GEMINI_IMAGE_MODEL",
             "IMAGE_DIRECT_PROMPT_ENABLED",
-            "IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED",
-            "IMAGE_FACE_PRESERVE_GUARD_ENABLED",
         ):
             self.assertIn(key, PROTECTED_KEYS)
 
