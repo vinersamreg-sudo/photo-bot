@@ -31,8 +31,6 @@ class Settings:
     gemini_image_model: str = "gemini-3-pro-image"
     nanobanana_image_model: str = "gemini-3-pro-image"
     image_direct_prompt_enabled: bool = True
-    image_subject_preserve_guard_enabled: bool = True
-    image_face_preserve_guard_enabled: bool = True
     image_edit_quality: str = "high"
     image_edit_size: str = "auto"
     image_edit_input_fidelity: str = "auto"
@@ -516,14 +514,6 @@ def load_settings(
             _boolean(values, "IMAGE_DIRECT_PROMPT_ENABLED", True)
             if "IMAGE_DIRECT_PROMPT_ENABLED" in values
             else _boolean(values, "OPENAI_DIRECT_PROMPT_ENABLED", True)
-        ),
-        image_subject_preserve_guard_enabled=(
-            _boolean(values, "IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED", True)
-            if "IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED" in values
-            else _boolean(values, "IMAGE_FACE_PRESERVE_GUARD_ENABLED", True)
-        ),
-        image_face_preserve_guard_enabled=_boolean(
-            values, "IMAGE_FACE_PRESERVE_GUARD_ENABLED", True
         ),
         image_edit_quality=image_edit_quality,
         image_edit_size=image_edit_size,

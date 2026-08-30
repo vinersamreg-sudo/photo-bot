@@ -434,7 +434,7 @@ class DemoServiceTests(TestCase):
             [row["prompt"] for row in attempts],
         )
         self.assertTrue(
-            all(row["prompt_builder_version"] == "direct-unicode-v4" for row in attempts)
+            all(row["prompt_builder_version"] == "direct-unicode-v5" for row in attempts)
         )
         self.assertEqual(len(versions), 2)
         self.assertIsNone(versions[0]["parent_version_id"])
@@ -534,7 +534,7 @@ class DemoServiceTests(TestCase):
             ).fetchall()
         self.assertTrue(
             all(
-                row["prompt_builder_version"] == "direct-unicode-v4"
+                row["prompt_builder_version"] == "direct-unicode-v5"
                 for row in versions
             )
         )

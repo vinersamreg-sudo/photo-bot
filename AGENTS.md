@@ -40,8 +40,7 @@ historical evidence or when a current document links to a specific record.
 - `app/image_provider.py`: OpenAI adapter plus provider abstraction and test provider.
 - `app/gemini_image_provider.py`: Google Gemini image-edit adapter.
 - `app/openai_client.py`: OpenAI image edit integration.
-- `app/direct_prompt.py`: exact Unicode passthrough for Gemini and optional
-  deterministic handling for non-Gemini direct paths.
+- `app/direct_prompt.py`: exact Unicode passthrough for OpenAI and Gemini direct paths.
 - `app/edit_intent.py`: deterministic intent extraction.
 - `app/prompt_builder.py`: technical prompt construction.
 - `app/gallery.py`: works, versions, lineage, favorites and current best.
@@ -89,13 +88,10 @@ Production is a public, working commercial service. The approved normal state is
 - `IMAGE_PROVIDER=gemini`;
 - `GEMINI_IMAGE_MODEL=gemini-3-pro-image`;
 - `IMAGE_DIRECT_PROMPT_ENABLED=true`;
-- `IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true`;
-- `IMAGE_FACE_PRESERVE_GUARD_ENABLED=true`;
 - `PILOT_USER_LIMIT=0`.
 
-For Gemini/Nano Banana, the two preservation flags are compatibility settings
-only: they must not append, prepend or otherwise change the provider prompt.
-Gemini receives the exact original Unicode user prompt.
+In direct mode, OpenAI and Gemini/Nano Banana receive the exact original Unicode
+user prompt. There are no preservation guards or compatibility guard settings.
 
 Always confirm the actual snapshot before a test or release. If it differs, treat
 the actual state as evidence requiring investigation; never silently overwrite it
@@ -132,7 +128,7 @@ with this list.
 - Store the source, original, preview and version lineage consistently.
 - Watermark only the preview, never the stored original.
 - Corrections use the selected parent version, not an unrelated source.
-- For Gemini/Nano Banana, never implement identity preservation by injecting
+- For OpenAI and Gemini/Nano Banana direct mode, never implement identity preservation by injecting
   hidden text, a guard, translation, intent parsing or prompt expansion. The
   provider prompt is exactly the original Unicode user prompt.
 

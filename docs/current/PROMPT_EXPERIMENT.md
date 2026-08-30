@@ -1,4 +1,4 @@
-# Direct Provider Mode and Exact Gemini Passthrough
+# Direct Provider Mode and Exact Unicode Passthrough
 
 ## Why this experiment exists
 
@@ -8,15 +8,13 @@ layer can conflict with the original intent or make the requested change less
 visible.
 
 Direct Provider Mode sends the exact Unicode string received from the product flow
-to Gemini. It performs no translation, artistic interpretation, prompt expansion,
+to OpenAI and Gemini/Nano Banana. It performs no translation, artistic interpretation, prompt expansion,
 system-instruction injection, `edit_intent`, `prompt_builder`, LLM analysis or
 preservation-instruction injection. One or two source images may accompany the
 same unchanged text.
 
-The deterministic subject-preservation guard remains in the repository for
-compatibility with non-Gemini direct-provider paths, but `gemini` and its
-`nanobanana` routing alias do not append it. Lineage and edit-plan metadata do not
-modify the provider prompt.
+No preservation guard or guard setting exists in the direct path. Lineage and
+edit-plan metadata do not modify the provider prompt.
 
 The same passthrough rule applies to initial requests, corrections, scenarios and
 repeats: the current user text is the provider text. Scenario templates and parent
@@ -28,8 +26,6 @@ The feature flag is:
 
 ```text
 IMAGE_DIRECT_PROMPT_ENABLED=true
-IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true
-IMAGE_FACE_PRESERVE_GUARD_ENABLED=true
 ```
 
 Direct prompting is the repository default. Set
@@ -39,12 +35,7 @@ restore the preserved `edit_intent` plus English technical prompt layer. The old
 when the provider-neutral flag is absent. A production change or deploy still
 requires separate approval and an exact pre-test snapshot/restoration plan.
 
-The preservation flags apply only to non-Gemini direct-provider paths. They are
-ignored for `gemini` and `nanobanana`, where exact passthrough is unconditional
-while direct mode is enabled. When the subject flag is absent, the deprecated
-`IMAGE_FACE_PRESERVE_GUARD_ENABLED` value remains a compatibility fallback.
-
-Attempts are labeled with `prompt_builder_version=direct-unicode-v4` in direct mode
+Attempts are labeled with `prompt_builder_version=direct-unicode-v5` in direct mode
 and the current technical builder version in the baseline mode.
 
 Provider selection is independent:

@@ -33,14 +33,12 @@ OPENAI_IMAGE_REQUESTS_ENABLED=true
 IMAGE_PROVIDER=gemini
 GEMINI_IMAGE_MODEL=gemini-3-pro-image
 IMAGE_DIRECT_PROMPT_ENABLED=true
-IMAGE_SUBJECT_PRESERVE_GUARD_ENABLED=true
-IMAGE_FACE_PRESERVE_GUARD_ENABLED=true
 PILOT_USER_LIMIT=0
 ```
 
-The preservation flags remain set for compatibility and rollback. On the active
-Gemini/Nano Banana path they do not alter the provider prompt: it is the exact
-original Unicode text supplied by the user.
+OpenAI and Gemini/Nano Banana direct mode sends the exact original Unicode text.
+Preservation guard settings have been removed from code and deploy defaults;
+old environment keys, if retained for rollback, are not read by this release.
 
 `GEMINI_API_KEY` must be configured as a secret; operator output reports only
 whether it is present, never its value. OpenAI remains configured as a manual

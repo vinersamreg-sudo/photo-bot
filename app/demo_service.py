@@ -507,13 +507,7 @@ class DemoService:
                 DIRECT_PROMPT_VERSION if direct_prompt_active else PROMPT_BUILDER_VERSION
             )
             if direct_prompt_active:
-                provider_prompt = build_direct_prompt(
-                    prompt,
-                    preservation_guard_enabled=(
-                        self.settings.image_subject_preserve_guard_enabled
-                        and self.provider.name not in {"gemini", "nanobanana"}
-                    ),
-                )
+                provider_prompt = build_direct_prompt(prompt)
             else:
                 provider_prompt = build_provider_prompt(edit_plan, processing_plan)
             contextual_modes = {
@@ -523,6 +517,7 @@ class DemoService:
             }
             if (
                 self.provider_context_service is not None
+                and secondary_source_path is None
                 and processing_plan.selected_mode in contextual_modes
                 and hasattr(self.provider, "edit_with_context")
             ):
@@ -534,6 +529,10 @@ class DemoService:
                     correction=correction,
                     repeat=repeat,
                 )
+            elif secondary_source_path is not None:
+                # The optional Responses context adapter accepts only one image.
+                # Multi-source edits must reach the ordered Image API path intact.
+                context_plan = ContextPlan("stateless", None, "two_source_image_edit")
             elif processing_plan.selected_mode not in contextual_modes:
                 context_plan = ContextPlan("stateless", None, "local_processing_mode")
             elif not hasattr(self.provider, "edit_with_context"):
