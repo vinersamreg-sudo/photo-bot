@@ -309,6 +309,7 @@ class AdminJournalTests(unittest.TestCase):
         unit = (Path(__file__).parents[1] / "ops" / "ravuna-admin-journal.service").read_text(
             encoding="utf-8"
         )
+        self.assertIn("-m scripts.run_admin_journal", unit)
         self.assertIn("--host 127.0.0.1", unit)
         self.assertIn("IPAddressDeny=any", unit)
         self.assertIn("IPAddressAllow=localhost", unit)
