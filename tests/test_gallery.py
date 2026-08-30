@@ -187,6 +187,38 @@ class GalleryTests(TestCase):
                 "SELECT COUNT(*) FROM gallery_versions WHERE gallery_item_id=?", (item_id,)
             ).fetchone()[0], 0)
 
+    def test_expired_item_in_trash_waits_for_full_trash_retention(self) -> None:
+        item = self.gallery.create_item(
+            "gallery-user", "Expired before trash", self.source, "retention"
+        )
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE gallery_items SET retention_until=? WHERE id=?",
+                ((self.clock() - timedelta(seconds=1)).isoformat(), item.id),
+            )
+        self.gallery.soft_delete("gallery-user", item.id)
+        self.assertNotIn(item.id, self.gallery.due_for_cleanup())
+        self.clock.advance(86401)
+        self.assertIn(item.id, self.gallery.due_for_cleanup())
+
+    def test_unlocked_gallery_uses_180_day_retention(self) -> None:
+        item = self.gallery.create_item(
+            "gallery-user", "Paid retention", self.source, "retention"
+        )
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE gallery_items SET unlock_status='unlocked',retention_until=? WHERE id=?",
+                ((self.clock() + timedelta(days=180)).isoformat(), item.id),
+            )
+        self.assertNotIn(
+            item.id,
+            self.gallery.due_for_cleanup(self.clock() + timedelta(days=179)),
+        )
+        self.assertIn(
+            item.id,
+            self.gallery.due_for_cleanup(self.clock() + timedelta(days=181)),
+        )
+
     def test_legacy_demo_rows_are_backfilled_by_migration_two(self) -> None:
         legacy_path = self.base / "legacy.sqlite3"
         connection = sqlite3.connect(legacy_path)

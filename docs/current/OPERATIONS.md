@@ -46,6 +46,34 @@ venv/bin/python -m app.main maintenance-cleanup
 `maintenance-cleanup` and provider/storage cleanup commands are dry-run unless an
 explicit execute/apply flag is supplied.
 
+## Retention cleanup
+
+`ravuna-retention-cleanup.service` is an independent, locked oneshot. Its timer
+runs daily at 02:30 UTC, after the scheduled encrypted backup window, with up to
+ten minutes of randomized delay. It has no dependency on `photo-bot.service` and
+does not restart or reconfigure the bot.
+
+Before first activation, and after any retention-code change, require a verified
+backup and inspect the privacy-safe dry-run:
+
+```bash
+venv/bin/python -m app.main maintenance-cleanup
+```
+
+The report contains counts and bytes only. `path_anomaly_count` must be zero;
+otherwise execution is fail-closed. The first authorized execution is manual:
+
+```bash
+sudo -u photoapp venv/bin/python -m app.main maintenance-cleanup --execute
+sudo systemctl enable --now ravuna-retention-cleanup.timer
+```
+
+The service preserves every DB-referenced primary/secondary source, preview,
+original and pending-edit source. Deleted gallery items wait the full trash
+retention even when their normal gallery retention has already expired. Repeated
+execution is idempotent. Never enable the timer before the first backup/dry-run
+comparison has passed.
+
 ## External watchdog
 
 The GitHub Actions workflow schedules the watchdog every ten minutes, but GitHub

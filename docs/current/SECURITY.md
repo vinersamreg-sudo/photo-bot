@@ -30,6 +30,13 @@ Ravuna does not receive full bank-card details.
 - temporary files: 24 hours;
 - optional provider context: disabled in production unless separately approved.
 
+The retention timer runs independently of the bot only after its first
+backup/dry-run gate has passed. Cleanup is locked and idempotent, never follows
+symlinks, refuses paths outside private storage, and reports only aggregate
+counts/bytes. All DB-referenced primary and secondary sources, results and
+pending-edit inputs are excluded from orphan deletion until their owning gallery
+retention is due.
+
 ## Secret handling
 
 - Secrets live only in untracked `.env`, production `.env` and GitHub Environment.

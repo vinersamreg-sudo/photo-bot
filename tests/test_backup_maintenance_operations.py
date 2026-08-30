@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -202,6 +202,192 @@ class BackupMaintenanceOperationsTests(TestCase):
             self.assertFalse(temporary.exists())
             self.assertTrue(session.source_path.exists())
             self.assertTrue(metadata.exists())
+
+    def test_cleanup_preserves_all_secondary_and_pending_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = self.base(directory)
+            settings = Settings(
+                "", "fake", "test", base,
+                cleanup_orphan_grace_hours=1,
+                demo_min_request_interval_seconds=1,
+            )
+            primary = base / "primary.png"
+            secondary = base / "secondary.png"
+            Image.new("RGB", (40, 40), "white").save(primary)
+            Image.new("RGB", (40, 40), "black").save(secondary)
+            service = build_demo_service(settings, provider_name="fake")
+            session = service.start_session("test", "secondary-pilot", primary)
+            service.add_secondary_source(session.session_id, secondary)
+            with service.database.read() as connection:
+                rows = connection.execute(
+                    """SELECT s.source_file_path,s.secondary_source_file_path,
+                              i.original_source_path,i.secondary_source_path
+                       FROM demo_sessions s JOIN gallery_items i ON i.id=s.gallery_item_id
+                       WHERE s.id=?""",
+                    (session.session_id,),
+                ).fetchone()
+                item_id = connection.execute(
+                    "SELECT gallery_item_id FROM demo_sessions WHERE id=?",
+                    (session.session_id,),
+                ).fetchone()[0]
+            old = datetime.now(timezone.utc).timestamp() - 7200
+            for value in rows:
+                os.utime(Path(value), (old, old))
+            with service.database.transaction() as connection:
+                connection.execute(
+                    """INSERT INTO pending_edit_requests(
+                           id,platform_user_id,user_id,session_id,gallery_item_id,prompt,
+                           primary_source_path,secondary_source_path,status,created_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        "pending-secondary", "platform", session.user_id,
+                        session.session_id, item_id, "synthetic",
+                        rows[2], rows[3], "awaiting_payment",
+                        datetime.now(timezone.utc).isoformat(),
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+
+            report = run_maintenance(settings, execute=False)
+            self.assertEqual(report["orphan_candidate_count"], 0)
+            self.assertEqual(report["path_anomaly_count"], 0)
+            for value in rows:
+                self.assertTrue(Path(value).is_file())
+
+    def test_cleanup_applies_temp_24_hour_boundary_and_nested_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = self.base(directory)
+            settings = Settings(
+                "", "fake", "test", base,
+                cleanup_temp_retention_hours=24,
+                cleanup_orphan_grace_hours=24,
+            )
+            Database(settings.database_path)
+            stale = settings.temp_dir / "stale.tmp"
+            fresh = settings.temp_dir / "fresh.tmp"
+            stale_dir = settings.temp_dir / "stale-processing"
+            stale_dir.mkdir()
+            nested = stale_dir / "result.tmp"
+            stale.write_bytes(b"stale")
+            fresh.write_bytes(b"fresh")
+            nested.write_bytes(b"nested")
+            now = datetime.now(timezone.utc).timestamp()
+            for path in (stale, nested, stale_dir):
+                os.utime(path, (now - 86401, now - 86401))
+            os.utime(fresh, (now - 86399, now - 86399))
+
+            dry = run_maintenance(settings, execute=False)
+            self.assertEqual(dry["temp_candidate_count"], 2)
+            self.assertEqual(dry["temp_candidate_file_count"], 2)
+            self.assertEqual(dry["temp_candidate_bytes"], 11)
+            self.assertTrue(stale.exists())
+            self.assertTrue(nested.exists())
+            self.assertTrue(fresh.exists())
+
+            executed = run_maintenance(settings, execute=True)
+            self.assertEqual(executed["removed_temp_entry_count"], 2)
+            self.assertFalse(stale.exists())
+            self.assertFalse(stale_dir.exists())
+            self.assertTrue(fresh.exists())
+
+    def test_expired_gallery_cleanup_is_complete_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = self.base(directory)
+            settings = Settings(
+                "", "fake", "test", base,
+                demo_min_request_interval_seconds=1,
+                cleanup_orphan_grace_hours=1,
+            )
+            source = base / "source.png"
+            Image.new("RGB", (40, 40), "white").save(source)
+            service = build_demo_service(settings, provider_name="fake")
+            expired = service.start_session("test", "expired-user", source)
+            service.generate(expired.session_id, "synthetic", "expired-attempt")
+            retained = service.start_session("test", "retained-user", source)
+            service.generate(retained.session_id, "synthetic", "retained-attempt")
+            now = datetime.now(timezone.utc)
+            with service.database.transaction() as connection:
+                expired_row = connection.execute(
+                    "SELECT gallery_item_id,source_file_path FROM demo_sessions WHERE id=?",
+                    (expired.session_id,),
+                ).fetchone()
+                retained_row = connection.execute(
+                    "SELECT gallery_item_id,source_file_path FROM demo_sessions WHERE id=?",
+                    (retained.session_id,),
+                ).fetchone()
+                connection.execute(
+                    "UPDATE gallery_items SET retention_until=? WHERE id=?",
+                    ((now - timedelta(seconds=1)).isoformat(), expired_row[0]),
+                )
+                connection.execute(
+                    "UPDATE gallery_items SET retention_until=? WHERE id=?",
+                    ((now + timedelta(days=1)).isoformat(), retained_row[0]),
+                )
+                expired_gallery_root = Path(connection.execute(
+                    "SELECT storage_root_path FROM gallery_items WHERE id=?",
+                    (expired_row[0],),
+                ).fetchone()[0])
+                retained_gallery_root = Path(connection.execute(
+                    "SELECT storage_root_path FROM gallery_items WHERE id=?",
+                    (retained_row[0],),
+                ).fetchone()[0])
+            expired_session_root = Path(expired_row[1]).parent.parent
+            retained_session_root = Path(retained_row[1]).parent.parent
+
+            dry = run_maintenance(settings, execute=False)
+            self.assertEqual(dry["gallery_due_count"], 1)
+            self.assertGreater(dry["gallery_candidate_file_count"], 0)
+            self.assertGreater(dry["gallery_candidate_bytes"], 0)
+            self.assertEqual(dry["orphan_candidate_count"], 0)
+
+            executed = run_maintenance(settings, execute=True)
+            self.assertEqual(executed["removed_gallery_count"], 1)
+            self.assertEqual(executed["remaining_gallery_count"], 0)
+            self.assertFalse(expired_gallery_root.exists())
+            self.assertFalse(expired_session_root.exists())
+            self.assertTrue(retained_gallery_root.exists())
+            self.assertTrue(retained_session_root.exists())
+            repeated = run_maintenance(settings, execute=True)
+            self.assertEqual(repeated["removed_gallery_count"], 0)
+            self.assertEqual(repeated["removed_file_count"], 0)
+            self.assertEqual(repeated["removed_bytes"], 0)
+
+    def test_cleanup_refuses_gallery_path_outside_private_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = self.base(directory)
+            settings = Settings("", "fake", "test", base)
+            source = base / "source.png"
+            Image.new("RGB", (40, 40), "white").save(source)
+            service = build_demo_service(settings, provider_name="fake")
+            session = service.start_session("test", "unsafe-path-user", source)
+            outside = base / "must-not-delete"
+            outside.mkdir()
+            sentinel = outside / "sentinel.bin"
+            sentinel.write_bytes(b"safe")
+            with service.database.transaction() as connection:
+                item_id = connection.execute(
+                    "SELECT gallery_item_id FROM demo_sessions WHERE id=?",
+                    (session.session_id,),
+                ).fetchone()[0]
+                connection.execute(
+                    "UPDATE gallery_items SET storage_root_path=?,retention_until=? WHERE id=?",
+                    (
+                        str(outside),
+                        (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                        item_id,
+                    ),
+                )
+
+            dry = run_maintenance(settings, execute=False)
+            self.assertEqual(dry["path_anomaly_count"], 1)
+            self.assertNotIn(str(outside), json.dumps(dry))
+            with self.assertRaisesRegex(RuntimeError, "path anomaly"):
+                run_maintenance(settings, execute=True)
+            self.assertTrue(sentinel.exists())
+            with service.database.read() as connection:
+                self.assertIsNotNone(connection.execute(
+                    "SELECT 1 FROM gallery_items WHERE id=?", (item_id,)
+                ).fetchone())
 
     def test_launch_status_is_privacy_safe_and_covers_readiness_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

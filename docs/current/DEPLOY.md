@@ -78,6 +78,10 @@ Production secrets alone must not silently make a fresh server public.
     Studio or repository-policy tests and does not require `.git`; canonical CI
     still runs the complete release suite before deployment is allowed.
 11. Install/restart one hardened systemd service.
+    The deploy also installs the independent retention cleanup oneshot/timer but
+    deliberately does not enable or start the timer. First activation requires
+    a verified backup, a zero-anomaly dry-run and a separately authorized manual
+    cleanup as documented in `OPERATIONS.md`.
 12. Before the application workflow, a root operator installs the exact Ravuna
     payment/return nginx routes with `ops/deploy_nginx_ravuna_payment.sh`; the
     workflow verifies the nginx-owned route marker before stopping the service.
