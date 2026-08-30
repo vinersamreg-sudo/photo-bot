@@ -8,7 +8,7 @@ User=photoapp
 Group=photoapp
 WorkingDirectory=/opt/photo-bot
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/photo-bot/venv/bin/python /opt/photo-bot/scripts/run_admin_journal.py --root /opt/photo-bot --host 127.0.0.1 --port 8092
+ExecStart=/opt/photo-bot/venv/bin/python -m scripts.run_admin_journal --root /opt/photo-bot --host 127.0.0.1 --port 8092
 Restart=on-failure
 RestartSec=5
 UMask=0077
