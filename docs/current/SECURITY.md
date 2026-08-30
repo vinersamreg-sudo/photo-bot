@@ -75,6 +75,24 @@ retention is due.
 - A fresh installation is fail-closed.
 - Ordinary deploy preserves the approved production operating state.
 
+## Admin journal boundary
+
+The owner journal is a separate read-only process bound to `127.0.0.1`. It is
+not routed through nginx and is accessed only through an operator SSH tunnel.
+SQLite is opened with URI `mode=ro` plus `PRAGMA query_only=ON`; the process has
+no mutation endpoints and receives no payment or provider secrets.
+
+Media URLs identify only an attempt and a fixed role. Every request resolves the
+corresponding current DB path and fails closed for missing files, traversal,
+symlinks, non-image files or paths outside `data/users`. Generated originals are
+never a media role: successful results and correction inputs use watermarked
+previews. Every HTML and media response is `Cache-Control: no-store`.
+
+The UI masks internal customer references and does not select or render platform
+IDs, provider prompts, request/response IDs, usage JSON or payment details. It
+uses the existing private files in place and creates no media cache or second
+storage.
+
 ## Privacy-safe operations
 
 Operational output may include counts, booleans, modes, masked references,

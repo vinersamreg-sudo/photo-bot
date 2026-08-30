@@ -52,6 +52,9 @@ delivery failures must not consume the user’s edit allowance.
 - `commerce.py`: credit and entitlement ledgers.
 - `payments.py`, `robokassa.py`, `payment_webhook.py`: payment boundary.
 - `operations.py`: read-only operational aggregation.
+- `admin_journal.py`: separate loopback-only read-only journal over the existing
+  SQLite database and private media paths. It neither initializes the database
+  nor copies customer media.
 
 ## Core data model
 
@@ -79,6 +82,8 @@ delivery failures must not consume the user’s edit allowance.
 - Robokassa: order/amount/receipt/signature; no photo or prompt.
 - GitHub Actions: source deployment and encrypted backup artifacts.
 - nginx: static site and ResultURL reverse proxy only.
+- Admin journal: a separate localhost HTTP process reachable only through an SSH
+  tunnel; it has no nginx route and no mutation API.
 
 ## Invariants
 

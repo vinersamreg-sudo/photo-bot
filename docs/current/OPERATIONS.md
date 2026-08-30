@@ -235,6 +235,31 @@ invokes the production image provider or an AI video API.
 - payment callback/grant/delivery mismatch count zero;
 - operating flags match approved production baseline.
 
+## Read-only admin journal
+
+The optional `ravuna-admin-journal.service` is independent from the MAX bot. It
+binds only `127.0.0.1:8092`, reads the existing SQLite/private media in place and
+has no nginx route. Install and start it only after its exact release SHA has
+passed canonical CI:
+
+```bash
+sudo install -o root -g root -m 0644 ops/ravuna-admin-journal.service \
+  /etc/systemd/system/ravuna-admin-journal.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now ravuna-admin-journal.service
+```
+
+Open it from an operator workstation through a bounded SSH tunnel, never by
+opening a firewall or adding an nginx location:
+
+```bash
+ssh -N -L 8092:127.0.0.1:8092 photoapp@<production-host>
+```
+
+Then browse `http://127.0.0.1:8092/`. Verify the socket with
+`ss -ltnp`: no non-loopback listener is acceptable. Stopping this optional
+service does not stop the bot or alter SQLite/media.
+
 ## Incident triage
 
 1. Preserve current state and timestamp.
