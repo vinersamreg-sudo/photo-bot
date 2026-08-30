@@ -82,6 +82,12 @@ Production secrets alone must not silently make a fresh server public.
     deliberately does not enable or start the timer. First activation requires
     a verified backup, a zero-anomaly dry-run and a separately authorized manual
     cleanup as documented in `OPERATIONS.md`.
+
+The root-owned deploy allowlist is sourced from
+`ops/photo-bot-deploy.sudoers`. Before the first deploy that introduces a new
+systemd unit, a root operator must validate it with `visudo -cf` and install it
+as `/etc/sudoers.d/photo-bot-deploy` mode `0440`. The allowlist contains only
+exact `install` and `systemctl` commands; it grants no shell or wildcard command.
 12. Before the application workflow, a root operator installs the exact Ravuna
     payment/return nginx routes with `ops/deploy_nginx_ravuna_payment.sh`; the
     workflow verifies the nginx-owned route marker before stopping the service.

@@ -21,6 +21,7 @@ ENV_EXAMPLE = ROOT / ".env.example"
 SERVICE = ROOT / "ops" / "photo-bot.service"
 RETENTION_SERVICE = ROOT / "ops" / "ravuna-retention-cleanup.service"
 RETENTION_TIMER = ROOT / "ops" / "ravuna-retention-cleanup.timer"
+DEPLOY_SUDOERS = ROOT / "ops" / "photo-bot-deploy.sudoers"
 NGINX_RESULTURL_DEPLOY = ROOT / "ops" / "deploy_nginx_resulturl.sh"
 NGINX_RAVUNA_CONFIG = ROOT / "site" / "nginx" / "ravuna.ru.conf"
 
@@ -565,3 +566,21 @@ class DeployPolicyTests(TestCase):
         self.assertIn("ravuna-retention-cleanup.timer", self.workflow)
         self.assertNotIn("systemctl enable ravuna-retention-cleanup.timer", self.workflow)
         self.assertNotIn("systemctl start ravuna-retention-cleanup.timer", self.workflow)
+
+    def test_deploy_sudoers_allows_only_exact_retention_unit_install_commands(self) -> None:
+        sudoers = DEPLOY_SUDOERS.read_text(encoding="utf-8")
+        self.assertIn(
+            "/usr/bin/install -o root -g root -m 644 "
+            "/opt/photo-bot/ops/ravuna-retention-cleanup.service "
+            "/etc/systemd/system/ravuna-retention-cleanup.service",
+            sudoers,
+        )
+        self.assertIn(
+            "/usr/bin/install -o root -g root -m 644 "
+            "/opt/photo-bot/ops/ravuna-retention-cleanup.timer "
+            "/etc/systemd/system/ravuna-retention-cleanup.timer",
+            sudoers,
+        )
+        command_alias = sudoers.splitlines()[0]
+        self.assertNotIn("*", command_alias)
+        self.assertNotIn("ravuna-retention-cleanup.timer,", command_alias)
