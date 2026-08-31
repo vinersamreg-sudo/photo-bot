@@ -296,6 +296,77 @@ Never grant manually before reconciling the callback and ledgers.
 - Never convert a provider failure into a successful debit.
 - Do not use a real image request as a health probe.
 
+### Explicit provider switching (operator only)
+
+Use the existing Ravuna entrypoint on the main-bot host, after this code has been
+released through the normal, separately approved process:
+
+```bash
+sudo /opt/photo-bot/scripts/ravuna provider status
+sudo /opt/photo-bot/scripts/ravuna provider gemini
+sudo /opt/photo-bot/scripts/ravuna provider openai
+```
+
+`status` is read-only: it reads the live systemd PID's environment, successful MAX
+poll timestamp, schema/quick-check and aggregate reconciliation through SQLite
+`mode=ro` / `query_only`. It does not initialize storage, call the image APIs or
+create history. A configured `.env` value is not presented as an active runtime
+value when they differ. Root access is needed to read the service environment;
+do not grant the application user a general-purpose sudo/Python permission.
+
+Switching is explicit, never scheduled fallback. Only `gemini-3-pro-image` and
+`gpt-image-2` are supported. `ALREADY_ACTIVE` means no image smoke, configuration
+write or restart. Otherwise the command requires one healthy runtime, fresh MAX
+polling and authenticated GET `/me`, a completed deployment, matching file/runtime
+configuration, supported schema, clean reconciliation and zero processing and
+reserved credits. It never consumes the production polling cursor.
+
+Unlike routine health checks, an explicitly requested switch authorizes two
+billable synthetic image edits: exactly one pre-switch target smoke and exactly
+one post-switch smoke. They use the existing adapters with two generated geometric
+PNG fixtures under a private `/var/tmp` directory, exact Russian Unicode text,
+HTTP-level order/prompt verification, no retries and validated image bytes. The
+temporary directory is removed afterward; no customer photos, DB, gallery or
+credit service is used. Existing processing/budget-disable flags remain respected.
+OpenAI retries are explicitly disabled with the documented SDK
+[`max_retries=0`](https://developers.openai.com/api/reference/python#retries);
+the HTTP hook also rejects a second request before network dispatch.
+
+An unavailable target produces `BLOCKED` / reason `TARGET_UNHEALTHY`, with no
+configuration change or restart. State is rechecked after the pre-smoke. Only
+`IMAGE_PROVIDER`, the target's model key and `IMAGE_DIRECT_PROMPT_ENABLED` may
+change. All other `.env` bytes (including credentials, comments, line endings and
+the inactive provider's model) remain unchanged. Duplicate provider assignments
+or malformed dotenv syntax fail closed. The replacement is same-directory,
+private, fsynced and atomic; the original owner/mode are preserved and verified.
+
+A successful switch performs one `systemctl restart photo-bot.service`. Readiness
+requires a new PID, one runtime, no automatic restart loop, target configuration,
+a successful poll newer than the new process start, SQLite and reconciliation.
+No other service, timer, code, deployment marker or schema is modified.
+
+On failed post-switch health or smoke, only this switch is rolled back: exact
+pre-switch `.env` bytes/metadata, one recovery restart and verification of the
+previous runtime. No third image smoke or restart loop occurs. Concurrent `.env`
+edits are never overwritten: a conflict or failed recovery returns
+`RECOVERY_REQUIRED`, stops and requires operator review.
+
+Root-only `/var/lib/ravuna-provider-switch` (0700, files 0600) contains a flock and
+an atomic audit JSON, capped at 100 entries / 30 days. Entries contain only time,
+from/to provider/model, `operator_cli`, smoke status/latency and result; no keys,
+prompts, images or customer identifiers. An `IN_PROGRESS` sentinel is durable
+before mutation. An interrupted/uncertain switch blocks subsequent switches;
+inspect runtime/config and resolve the private sentinel manually only after
+reconciliation. Do not delete it simply to bypass a failure.
+
+Run in a quiet operational window and never alongside a deploy or another config
+editor. The ops lock serializes this CLI, not customer intake or other tools.
+Queues are rechecked immediately before restart, but an ops-only command cannot
+make that final read and systemd restart atomic with new customer arrivals.
+`status` remains available; `SWITCHED` exits 0, `BLOCKED`, `ROLLED_BACK` and
+`RECOVERY_REQUIRED` exit nonzero. First real activation/switch requires a separate
+production authorization; CI uses synthetic fixtures and mock HTTP/systemd only.
+
 ## Host incidents
 
 - systemd is the only runtime manager; no nohup/cron/watchdog duplicates.

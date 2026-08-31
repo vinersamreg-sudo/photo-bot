@@ -5,4 +5,9 @@ PYTHON=${RAVUNA_PYTHON:-"$ROOT/venv/bin/python"}
 if [ ! -x "$PYTHON" ]; then
   PYTHON=${RAVUNA_PYTHON:-python}
 fi
+if [ "${1:-}" = "provider" ]; then
+  shift
+  cd "$ROOT"
+  exec "$PYTHON" -m app.provider_switch "$@" --root "$ROOT"
+fi
 exec "$PYTHON" -m app.content_studio.cli "$@"
