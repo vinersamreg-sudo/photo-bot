@@ -102,7 +102,10 @@ with this list.
 - An ordinary deploy must preserve the existing production operating state.
 - Existing `.env`, `venv/`, `data/`, `logs/`, `temp/`, and live site state are
   preserved by deployment.
-- Defaults are applied with `ensure_env`; they are only defaults for missing keys.
+- Ordinary deploy never writes `.env`, including missing keys; its exact bytes,
+  permissions and ownership are fingerprinted before deployment and verified after.
+- Fresh provisioning/configuration changes are separate operator actions. Never
+  infer permission to initialize or activate a missing production configuration.
 - A fresh or empty server must remain fail-closed:
   public access off, observe-only on, payments/webhook off, provider disabled,
   Robokassa sandbox and not production-approved.

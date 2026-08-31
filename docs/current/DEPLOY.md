@@ -45,9 +45,23 @@ Deployment excludes and preserves:
 - `temp/`;
 - the separately deployed live site.
 
-Missing settings receive safe defaults through `ensure_env`. Stable product and
-compatibility settings may be written explicitly through `set_env`. Operating
-state flags must not be forcibly reset by an ordinary deploy.
+An ordinary deploy requires an already provisioned, healthy polling installation.
+It never creates, parses/reformats or writes `.env`, even to add missing keys.
+`scripts/deploy_env_guard.py` captures SHA256, mode, UID and GID into a private
+staging snapshot, then verifies them before sync, after sync, before the completion
+marker and on exit (including failed deployments). No credential values enter
+that snapshot. Missing/empty/symlink environments fail closed without repair.
+
+Credential rotation, provider activation, owner/pilot configuration, dialog resets
+and test grants are separate operator actions, not deploy inputs. Fresh provisioning
+is also separate: defaults may initialize only a genuinely fresh environment;
+an existing environment must never be completed or normalized by deployment.
+
+Rsync also protects the separately deployed Content Studio and Admin Journal
+code/entry points, site tree and retention unit files. Main-bot deploy does not
+install, enable, stop or restart their services/timers. Existing shared `venv/`
+packages are not installed/upgraded by this workflow. Requirements must match;
+dependency-changing releases require separately approved provisioning before deploy.
 
 ## Fail-closed contract
 
@@ -63,31 +77,37 @@ Production secrets alone must not silently make a fresh server public.
 4. Commit one coherent change and push once.
 5. Wait for `Ravuna CI / Canonical release gate` on the exact release SHA; do not
    start a duplicate run.
-6. Start the manual deploy workflow with that full `target_sha`. The optional
-   one-time `activate_gemini=true` input applies the approved Gemini flags; later
-   deploys preserve an explicit environment rollback.
+6. Start the manual deploy workflow with only the full `target_sha`.
 7. Workflow revalidates canonical ancestry and exact-SHA CI before entering the
-   production environment, then requires idle production before stopping the
-   service.
-8. Stage the target database code under `/var/tmp`, create a consistent SQLite
+   production environment. `scripts/build_deploy_artifact.py` uses `git archive`
+   with `core.autocrlf=false`/`core.eol=lf`, verifies every member against its Git
+   blob and emits a checksum manifest. Untracked/dirty Windows bytes and `.git`
+   never enter the artifact. Unsupported links, private tracked data, export
+   substitutions and any byte mismatch fail closed. The VPS verifies the extracted
+   artifact under a unique private `/var/tmp/ravuna-deploy-*` directory.
+8. Capture live health/configuration, stage the target database code, create a consistent SQLite
    copy, migrate only that copy to the code-declared schema version, and require
    `quick_check=ok`, foreign-key integrity and unchanged commerce fingerprints.
-9. Synchronize code while preserving mutable paths.
-10. Install/check dependencies, run migrations and execute the explicit
-    main-bot production preflight. This preflight does not discover Content
+9. Run the explicit main-bot production preflight **in isolated staging before
+   stopping the service**, using the existing venv, `APP_ENV=test`, a staging
+   `BASE_DIR` and `MAX_TRANSPORT_MODE=disabled`. Changed requirements or missing
+   target dependencies fail before live changes; provision dependency upgrades separately.
+   This preflight does not discover Content
     Studio or repository-policy tests and does not require `.git`; canonical CI
-    still runs the complete release suite before deployment is allowed.
-11. Install/restart one hardened systemd service.
-    The deploy also installs the independent retention cleanup oneshot/timer but
-    deliberately does not enable or start the timer. First activation requires
-    a verified backup, a zero-anomaly dry-run and a separately authorized manual
-    cleanup as documented in `OPERATIONS.md`.
+   still runs the complete release suite. Health unit tests model systemd explicitly;
+   actual systemd/PID/lock/polling checks remain in live pre/post health gates.
+10. Require zero processing/dialog work and reserved credits, create and verify a
+    fresh SQLite backup, stop only main-bot, and sync the verified artifact while
+    protecting mutable/separate-runtime paths. Check dependencies and migrate the
+    live database; require unchanged commerce fingerprints, schema and integrity.
+11. Install the main-bot unit and execute **exactly one** restart on a successful
+    deploy. Require readiness, a new PID, one runtime, zero automatic restarts and
+    MAX connectivity and a successful polling response newer than the restart.
+    No duplicate poller or second restart is launched as a test.
 
-The root-owned deploy allowlist is sourced from
-`ops/photo-bot-deploy.sudoers`. Before the first deploy that introduces a new
-systemd unit, a root operator must validate it with `visudo -cf` and install it
-as `/etc/sudoers.d/photo-bot-deploy` mode `0440`. The allowlist contains only
-exact `install` and `systemctl` commands; it grants no shell or wildcard command.
+The root-owned deploy allowlist remains `ops/photo-bot-deploy.sudoers`; any
+allowlist change requires a separate root operation and `visudo -cf` validation.
+This workflow neither changes the allowlist nor installs retention/admin units.
 12. Before the application workflow, a root operator installs the exact Ravuna
     payment/return nginx routes with `ops/deploy_nginx_ravuna_payment.sh`; the
     workflow verifies the nginx-owned route marker before stopping the service.
@@ -96,6 +116,12 @@ exact `install` and `systemctl` commands; it grants no shell or wildcard command
 13. Run health, migration, ledger, storage and runtime audits.
 14. Record the exact validated `target_sha` only after successful health checks.
 15. Verify ResultURL transport without creating payment state.
+
+No automatic rollback is performed on failure. Preserve the private staging
+evidence and report whether the service was stopped or code/migration already
+applied; recover only through an explicitly authorized, schema-compatible procedure.
+Staging evidence is not uploaded to GitHub and is not automatically deleted (its
+SQLite copy contains private data); remove it later under the operator retention policy.
 
 ## Production snapshot
 

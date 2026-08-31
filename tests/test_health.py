@@ -48,10 +48,14 @@ class HealthcheckTests(TestCase):
             settings = Settings(
                 "", "", "production", base_dir, max_transport_mode="polling"
             )
-            errors = health_errors(settings)
+            # This scenario describes a missing runtime, not the host running tests.
+            with patch("app.main._systemd_runtime_status", return_value=(False, 0)) as runtime:
+                errors = health_errors(settings)
+            runtime.assert_called_once_with()
             self.assertTrue(any("MAX_BOT_TOKEN" in error for error in errors))
             self.assertTrue(any("database" in error.lower() for error in errors))
             self.assertTrue(any("service" in error for error in errors))
+            self.assertTrue(any("successful contact" in error for error in errors))
 
     def test_active_polling_health_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

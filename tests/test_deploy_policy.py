@@ -142,10 +142,10 @@ class DeployPolicyTests(TestCase):
         self.assertIn("--canonical-ref origin/main", self.site_deploy_workflow)
 
     def test_preserves_runtime_state(self) -> None:
-        for protected_path in (".env", "venv/", "data/", "logs/", "temp/"):
-            self.assertIn(f"--exclude='{protected_path}'", self.workflow)
-        self.assertIn("--include='/site/nginx/ravuna.ru.conf'", self.workflow)
-        self.assertIn("--exclude='/site/***'", self.workflow)
+        for path in (".env", "venv/", "data/", "logs/", "temp/", "/site/", "/app/content_studio/", "/marketing/", "/app/admin_journal.py", "/scripts/run_admin_journal.py", "/ops/ravuna-admin-journal.service", "/ops/ravuna-retention-cleanup.service", "/ops/ravuna-retention-cleanup.timer"):
+            self.assertIn(f"--exclude='{path}'", self.workflow)
+        self.assertNotIn("--delete-excluded", self.workflow)
+        self.assertIn('"$RUNNER_TEMP/ravuna-release/source/" "$SSH_USER@$SSH_HOST:/opt/photo-bot/"', self.workflow)
 
     def test_ravuna_payment_nginx_is_root_installed_and_preflighted(self) -> None:
         script = (ROOT / "ops" / "deploy_nginx_ravuna_payment.sh").read_text(
@@ -175,29 +175,12 @@ class DeployPolicyTests(TestCase):
             nginx_config,
         )
 
-    def test_operating_flags_preserve_live_state_but_fresh_env_is_fail_closed(self) -> None:
-        for key, default in (
-            ("MAX_PUBLIC_ACCESS_ENABLED", "false"),
-            ("MAX_POLL_OBSERVE_ONLY", "true"),
-            ("PAYMENTS_ENABLED", "false"),
-            ("PAYMENT_PROVIDER", "disabled"),
-            ("PAYMENT_WEBHOOK_ENABLED", "false"),
-            ("ROBOKASSA_MODE", "sandbox"),
-            ("ROBOKASSA_PRODUCTION_APPROVED", "false"),
-            ("OPENAI_IMAGE_REQUESTS_ENABLED", "true"),
-        ):
-            self.assertIn(f"ensure_env {key} {default}", self.workflow)
-        env_example = ENV_EXAMPLE.read_text(encoding="utf-8")
-        for line in (
-            "MAX_PUBLIC_ACCESS_ENABLED=false",
-            "MAX_POLL_OBSERVE_ONLY=true",
-            "PAYMENTS_ENABLED=false",
-            "PAYMENT_PROVIDER=disabled",
-            "PAYMENT_WEBHOOK_ENABLED=false",
-            "ROBOKASSA_MODE=sandbox",
-            "ROBOKASSA_PRODUCTION_APPROVED=false",
-        ):
-            self.assertIn(line, env_example)
+    def test_provisioning_is_separate_and_example_remains_fail_closed(self) -> None:
+        self.assertNotIn("ensure_env", self.workflow)
+        self.assertNotIn("set_env", self.workflow)
+        self.assertNotIn('install -m 600 /dev/null "$ROOT/.env"', self.workflow)
+        for line in ("MAX_PUBLIC_ACCESS_ENABLED=false", "MAX_POLL_OBSERVE_ONLY=true", "PAYMENTS_ENABLED=false", "PAYMENT_PROVIDER=disabled", "PAYMENT_WEBHOOK_ENABLED=false", "ROBOKASSA_MODE=sandbox", "ROBOKASSA_PRODUCTION_APPROVED=false"):
+            self.assertIn(line, ENV_EXAMPLE.read_text(encoding="utf-8"))
 
     def test_uses_scoped_safe_operations(self) -> None:
         self.assertNotIn("pkill", self.workflow)
@@ -205,11 +188,11 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("REG_RU_", self.workflow)
         self.assertNotIn("trip-day", self.workflow.lower())
         self.assertIn("secrets.HETZNER_HOST", self.workflow)
-        self.assertIn('chmod +x "$ROOT"/scripts/*.sh "$ROOT"/scripts/ravuna', self.workflow)
         self.assertIn('cd "$ROOT"', self.workflow)
-        self.assertIn('"$ROOT"/venv/bin/pip install', self.workflow)
+        self.assertNotIn('pip install', self.workflow)
+        self.assertIn('cmp -s /opt/photo-bot/requirements.txt requirements.txt', self.workflow)
         self.assertIn('"$ROOT"/venv/bin/pip check', self.workflow)
-        self.assertIn("Database(load_settings().database_path)", self.workflow)
+        self.assertIn("Database(path)", self.workflow)
         self.assertIn('"$ROOT"/scripts/healthcheck.sh', self.workflow)
         self.assertIn("sudo -n systemctl", self.workflow)
         self.assertNotIn("sudo", SERVICE.read_text(encoding="utf-8"))
@@ -222,8 +205,9 @@ class DeployPolicyTests(TestCase):
         )[1]
         self.assertIn(
             "python -m scripts.main_bot_production_preflight",
-            install_block,
+            self.workflow,
         )
+        self.assertLess(self.workflow.index("python -m scripts.main_bot_production_preflight"), self.workflow.index("systemctl stop photo-bot.service"))
         self.assertNotIn("python -m unittest discover", install_block)
         self.assertNotIn("tests.test_deploy_policy", MAIN_BOT_PRODUCTION_TEST_MODULES)
         self.assertNotIn("tests.test_efficiency_tooling", MAIN_BOT_PRODUCTION_TEST_MODULES)
@@ -259,8 +243,8 @@ class DeployPolicyTests(TestCase):
 
     def test_verifies_log_safety_and_tripday_isolation(self) -> None:
         self.assertIn("scripts.check_runtime_secrets", self.workflow)
-        self.assertIn('chmod 600 "$ROOT/logs/app.log"', self.workflow)
-        self.assertIn("MAX_BOT_TOKEN", self.workflow)
+        self.assertNotIn('chmod 600 "$ROOT/logs/app.log"', self.workflow)
+        self.assertIn("python -m app.main max-check", self.workflow)
         self.assertNotIn("TripDay", self.workflow)
 
     def test_uses_python_312_and_scans_for_secrets(self) -> None:
@@ -268,61 +252,18 @@ class DeployPolicyTests(TestCase):
         self.assertIn("python scripts/scan_secrets.py", self.ci_workflow)
         self.assertIn("python scripts/check_asset_licenses.py", self.ci_workflow)
 
-    def test_gemini_activation_is_explicit_secret_safe_and_audited(self) -> None:
-        install_block = self.workflow.split(
-            "- name: Install and verify production", 1
-        )[1]
-        self.assertIn("activate_gemini:", self.workflow)
-        self.assertIn("secrets.GEMINI_API_KEY", self.workflow)
-        self.assertIn("Configure Gemini credential", self.workflow)
-        self.assertIn("Require Gemini credential for activation", self.workflow)
+    def test_deployment_cannot_activate_or_switch_providers(self) -> None:
+        self.assertNotIn("activate_gemini:", self.workflow)
+        self.assertNotIn("ACTIVATE_GEMINI", self.workflow)
+        self.assertNotIn("secrets.GEMINI_API_KEY", self.workflow)
         self.assertIn("Capture pre-deploy production snapshot", self.workflow)
-        self.assertIn("pre-deploy-status-${{ github.run_id }}", self.workflow)
-        self.assertIn("ensure_env IMAGE_PROVIDER gemini", self.workflow)
-        self.assertIn("set_env IMAGE_PROVIDER gemini", self.workflow)
-        self.assertIn("set_env GEMINI_IMAGE_MODEL gemini-3-pro-image", self.workflow)
-        self.assertIn("set_env IMAGE_DIRECT_PROMPT_ENABLED true", self.workflow)
-        self.assertIn(
-            "ACTIVATE_GEMINI: ${{ inputs.activate_gemini == true }}",
-            install_block,
-        )
         self.assertIn("gemini_api_key_configured", self.workflow)
-        self.assertIn('printf \'%s\' "$GEMINI_API_KEY" |', self.workflow)
 
-    def test_v1_provider_path_is_single_and_experiments_are_fail_closed(self) -> None:
-        self.assertIn("set_env PROCESSING_MODE_ROUTER_ENABLED false", self.workflow)
-        self.assertIn("set_env REAL_BACKGROUND_COMPOSITE_ENABLED false", self.workflow)
-        self.assertIn("set_env ALLOW_AI_BACKGROUND_FALLBACK false", self.workflow)
-        self.assertIn("set_env SEGMENTATION_BACKEND disabled", self.workflow)
-        self.assertIn("set_env LOCAL_AI_FINISHING_ENABLED false", self.workflow)
-        self.assertIn("scripts/benchmark_processing.py", self.workflow)
-        self.assertIn("WHERE version=6", self.workflow)
-        self.assertIn('"migration_v6": migration_v6', self.workflow)
-        self.assertIn("WHERE version=7", self.workflow)
-        self.assertIn('"migration_v7": migration_v7', self.workflow)
-        self.assertIn("WHERE version=8", self.workflow)
-        self.assertIn('"migration_v8": migration_v8', self.workflow)
-        self.assertIn("assert migration_v8", self.workflow)
-        self.assertIn("WHERE version=9", self.workflow)
-        self.assertIn('"migration_v9": migration_v9', self.workflow)
-        self.assertIn("assert migration_v9", self.workflow)
-        self.assertIn("WHERE version=10", self.workflow)
-        self.assertIn('"migration_v10": migration_v10', self.workflow)
-        self.assertIn("assert migration_v10", self.workflow)
-        self.assertIn("WHERE version=11", self.workflow)
-        self.assertIn('"migration_v11": migration_v11', self.workflow)
-        self.assertIn("assert migration_v11", self.workflow)
-        self.assertIn("WHERE version=12", self.workflow)
-        self.assertIn('"migration_v12": migration_v12', self.workflow)
-        self.assertIn("assert migration_v12", self.workflow)
-        self.assertIn("sqlite_backup=created", self.workflow)
-        self.assertIn("source.backup(backup)", self.workflow)
-        self.assertIn("MAX_SINGLE_SCREEN_UI_ENABLED true", self.workflow)
-        self.assertIn('"credit_accounts": credit_accounts', self.workflow)
-        self.assertIn("assert credit_accounts == users", self.workflow)
-        self.assertIn("assert negative_credit_accounts == 0", self.workflow)
-        self.assertIn('"stale_processing_orphans": stale_processing_orphans', self.workflow)
-        self.assertIn("assert stale_processing_orphans == 0", self.workflow)
+    def test_schema_and_commerce_gates_remain_enforced(self) -> None:
+        for contract in ("CURRENT_SCHEMA_VERSION", "assert current_schema == CURRENT_SCHEMA_VERSION", "source.backup(backup)", "sqlite_backup=created", "assert credit_accounts == users", "assert negative_credit_accounts == 0", "assert stale_processing_orphans == 0", "_assert_commerce_invariants(after)", "_commerce_snapshot(after) == commerce", "payment-reconciliation"):
+            self.assertIn(contract, self.workflow)
+        for version in range(6, 13):
+            self.assertIn(f"assert migration_v{version}", self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
         health_position = self.workflow.rindex('"$ROOT"/scripts/healthcheck.sh')
@@ -360,70 +301,18 @@ class DeployPolicyTests(TestCase):
         self.assertEqual(leading(lines[py_end]), leading(lines[remote_end]))
         self.assertEqual(leading(lines[start + 1]), leading(lines[remote_end]))
 
-    def test_creates_but_does_not_overwrite_production_env(self) -> None:
-        self.assertIn('if [ ! -f "$ROOT/.env" ]', self.workflow)
-        self.assertIn('install -m 600 /dev/null "$ROOT/.env"', self.workflow)
-        self.assertNotIn("'OPENAI_API_KEY=", self.workflow)
-        self.assertIn("set_env OPENAI_IMAGE_MODEL gpt-image-2", self.workflow)
-        self.assertIn("set_env OPENAI_CONVERSATION_MEMORY_ENABLED false", self.workflow)
-        self.assertIn("set_env OPENAI_RESPONSES_IMAGE_ENABLED false", self.workflow)
-        self.assertIn("set_env OPENAI_CONVERSATION_RETENTION_ENABLED false", self.workflow)
-        self.assertIn("set_env APP_ENV production", self.workflow)
-        self.assertIn("set_env BASE_DIR /opt/photo-bot", self.workflow)
-        self.assertIn("set_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2", self.workflow)
-        self.assertIn("set_env CONTINUATION_PACK_PRICE_RUB 49", self.workflow)
-        self.assertIn("ensure_env GLOBAL_MAX_CONCURRENT_GENERATIONS 2", self.workflow)
-        self.assertIn("ensure_env DEMO_RETENTION_DAYS 30", self.workflow)
-        self.assertIn("ensure_env PAID_RETENTION_DAYS 180", self.workflow)
-        self.assertIn("ensure_env TRASH_RETENTION_DAYS 30", self.workflow)
-        self.assertIn("ensure_env PAYMENTS_ENABLED false", self.workflow)
-        self.assertIn("ensure_env PAYMENT_PROVIDER disabled", self.workflow)
-        self.assertIn("set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true", self.workflow)
-        self.assertIn("ensure_env PAYMENT_WEBHOOK_ENABLED false", self.workflow)
-        self.assertIn("ensure_env PAYMENT_REFUNDS_ENABLED false", self.workflow)
-        self.assertNotIn("set_env CONTENT_STUDIO_PUBLISHING_ENABLED", self.workflow)
-        self.assertNotIn("ContentStudioService", self.workflow)
-        for excluded in (
-            "/app/content_studio/",
-            "/marketing/",
-            "/ops/deploy_ravuna_content_studio.sh",
-            "/ops/ravuna-content-publisher.service",
-            "/ops/ravuna-content-publisher.timer",
-        ):
-            self.assertIn(f"--exclude='{excluded}'", self.workflow)
-        self.assertIn("ensure_env ROBOKASSA_MODE sandbox", self.workflow)
-        self.assertIn("ensure_env ROBOKASSA_PRODUCTION_APPROVED false", self.workflow)
-        self.assertIn(
-            "set_env PAYMENT_RESULT_URL https://pixoraai.ru/payments/robokassa/result",
-            self.workflow,
-        )
-        self.assertIn(
-            "set_env PAYMENT_SUCCESS_URL https://ravuna.ru/payment-success.html",
-            self.workflow,
-        )
-        self.assertIn(
-            "set_env PAYMENT_FAIL_URL https://ravuna.ru/payment-failed.html",
-            self.workflow,
-        )
-        self.assertNotIn("legal/payment-refund.html?payment=", self.workflow)
-        self.assertIn(
-            "set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Ravuna'",
-            self.workflow,
-        )
-        self.assertNotIn("PAYMENT_RECEIPT_PAYMENT_METHOD", self.workflow)
-        self.assertNotIn("PAYMENT_RECEIPT_PAYMENT_OBJECT", self.workflow)
-        self.assertIn("Verify ResultURL transport", self.workflow)
-        self.assertIn('test "$GET_STATUS" = 405', self.workflow)
-        self.assertIn('test "$POST_STATUS" = 503', self.workflow)
-        self.assertIn("resulturl_post_probe=skipped_enabled", self.workflow)
-        self.assertIn('if settings.payments_enabled:', self.workflow)
+    def test_env_is_captured_and_verified_not_rewritten(self) -> None:
+        self.assertIn("deploy_env_guard.py", self.workflow)
+        self.assertIn("capture", self.workflow)
+        self.assertGreaterEqual(self.workflow.count("deploy_env_guard.py"), 4)
+        self.assertIn("steps.snapshot.outcome == 'success'", self.workflow)
+        snapshot = self.workflow.split("- name: Capture pre-deploy production snapshot", 1)[1].split("- name: Store pre-deploy production snapshot", 1)[0]
+        self.assertIn("run: |\n          set -euo pipefail", snapshot)
+        for forbidden in ('> "$ROOT/.env"', '>> "$ROOT/.env"', '"$ROOT/.env.tmp"', '"$ROOT/.env.runtime.tmp"', 'chmod 600 "$ROOT/.env"', "set_robokassa_production_secrets"):
+            self.assertNotIn(forbidden, self.workflow)
         self.assertIn('assert settings.payment_provider == "robokassa"', self.workflow)
         self.assertIn('assert settings.robokassa_mode == "production"', self.workflow)
-        self.assertIn("payment-status --format json", self.workflow)
-        self.assertIn("payment_orders_total", self.workflow)
-        self.assertIn("paid_payment_orders", self.workflow)
-        self.assertIn("sale_receipts_total", self.workflow)
-        self.assertIn("continuation_pack_grants_total", self.workflow)
+        self.assertIn("Verify ResultURL transport", self.workflow)
 
     def test_nginx_resulturl_deploy_is_root_scoped_and_rolls_back(self) -> None:
         script = self.nginx_resulturl_deploy
@@ -437,87 +326,44 @@ class DeployPolicyTests(TestCase):
         self.assertIn('test "$GET_STATUS" = 405', script)
         self.assertIn('test "$POST_STATUS" = 503', script)
 
-    def test_transfers_openai_key_via_stdin_without_external_validation(self) -> None:
-        self.assertIn("Configure OpenAI credential", self.workflow)
-        self.assertIn("secrets.OPENAI_API_KEY", self.workflow)
-        self.assertIn('printf \'%s\' "$OPENAI_API_KEY" |', self.workflow)
+    def test_no_provider_secrets_or_billable_validation_in_deploy(self) -> None:
+        self.assertNotIn("secrets.OPENAI_API_KEY", self.workflow)
+        self.assertNotIn("secrets.GEMINI_API_KEY", self.workflow)
         self.assertNotIn("python -m app.main openai-check", self.workflow)
         self.assertIn("external API check intentionally skipped", self.workflow)
 
-    def test_production_robokassa_secrets_use_explicit_github_names_and_stdin(self) -> None:
-        self.assertIn("ROBOKASSA_PRODUCTION_CONFIGURED:", self.workflow)
-        self.assertIn("secrets.ROBOKASSA_PASSWORD_1", self.workflow)
-        self.assertIn("secrets.ROBOKASSA_PASSWORD_2", self.workflow)
-        self.assertIn("Configure production Robokassa credentials", self.workflow)
-        self.assertIn("scripts.set_robokassa_production_secrets", self.workflow)
-        self.assertIn('printf \'%s\\n\' "$PASSWORD_1"', self.workflow)
-        self.assertIn('printf \'%s\\n\' "$PASSWORD_2"', self.workflow)
+    def test_payment_secrets_are_not_transferred_by_deploy(self) -> None:
+        self.assertNotIn("secrets.ROBOKASSA", self.workflow)
+        self.assertNotIn("Configure production Robokassa credentials", self.workflow)
         self.assertNotIn("--password", self.workflow)
 
-    def test_configures_max_without_exposing_the_token_as_an_argument(self) -> None:
-        self.assertIn("Configure MAX credential", self.workflow)
-        self.assertIn("secrets.MAX_BOT_TOKEN", self.workflow)
-        self.assertIn('printf \'%s\' "$MAX_BOT_TOKEN" |', self.workflow)
-        self.assertIn("set_env MAX_TRANSPORT_MODE polling", self.workflow)
-        self.assertIn("ensure_env MAX_POLL_OBSERVE_ONLY true", self.workflow)
-        self.assertIn("set_env MAX_POLL_OBSERVE_ONLY false", self.workflow)
-        self.assertIn("ensure_env MAX_API_BASE_URL https://platform-api2.max.ru", self.workflow)
-        self.assertIn("ensure_env MAX_CA_BUNDLE ops/certs/russian_trusted_root_ca_pem.crt", self.workflow)
-        self.assertIn("ensure_env MAX_PUBLIC_ACCESS_ENABLED false", self.workflow)
-        self.assertIn("/opt/photo-bot/scripts/stop_bot.sh", self.workflow)
-        self.assertIn('if [ "$MODE" = polling ]', self.workflow)
+    def test_existing_max_configuration_is_verified_without_rewriting(self) -> None:
+        self.assertNotIn("secrets.MAX_BOT_TOKEN", self.workflow)
+        self.assertNotIn("Configure MAX credential", self.workflow)
         self.assertIn("python -m app.main max-check", self.workflow)
+        self.assertIn("python -m app.main health", self.workflow)
 
-    def test_owner_allowlist_is_secret_and_fail_closed(self) -> None:
-        self.assertGreaterEqual(self.workflow.count("MAX_OWNER_CONFIGURED:"), 1)
-        self.assertIn("secrets.MAX_OWNER_USER_ID", self.workflow)
-        self.assertIn('printf \'%s\' "$MAX_OWNER_USER_ID" |', self.workflow)
-        self.assertIn("MAX_OWNER_USER_IDS=$OWNER_ID", self.workflow)
-        self.assertIn("Disable MAX handlers without owner secret", self.workflow)
-        self.assertIn("enable_owner_handlers:", self.workflow)
-        self.assertIn('MAX_OWNER_HANDLERS_ENABLED', self.workflow)
-        self.assertIn('[ "$MAX_OWNER_HANDLERS_ENABLED" = true ]', self.workflow)
-        self.assertIn(
-            '"$TARGET_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" "$ACTIVATE_GEMINI"',
-            self.workflow,
-        )
-        self.assertIn('MAX_OWNER_HANDLERS_ENABLED="${2:-false}"', self.workflow)
-        self.assertIn('ACTIVATE_GEMINI="${4:-false}"', self.workflow)
-        self.assertNotIn(
-            "MAX_OWNER_HANDLERS_ENABLED: ${{ env.MAX_OWNER_HANDLERS_ENABLED }}",
-            self.workflow,
-        )
-        self.assertIn(
-            "MAX_OWNER_HANDLERS_ENABLED: ${{ inputs.enable_owner_handlers == true }}",
-            self.workflow,
-        )
+    def test_deploy_does_not_modify_owner_or_pilot_flags(self) -> None:
+        for forbidden in ("enable_owner_handlers:", "pilot_user_limit:", "secrets.MAX_OWNER_USER_ID", "secrets.MAX_PILOT_USER_IDS", "MAX_OWNER_HANDLERS_ENABLED"):
+            self.assertNotIn(forbidden, self.workflow)
 
-    def test_manual_deploy_can_reset_owner_dialog_without_logging_identifiers(self) -> None:
-        self.assertIn("reset_owner_dialog:", self.workflow)
-        self.assertIn("Reset owner dialog to a clean main-menu state", self.workflow)
-        self.assertIn("inputs.reset_owner_dialog == true", self.workflow)
-        self.assertIn('event_key="ops:owner-dialog-reset"', self.workflow)
-        self.assertIn("owner_dialogs_reset=", self.workflow)
-        self.assertNotIn("print(owner_id)", self.workflow)
+    def test_deploy_cannot_reset_dialogs(self) -> None:
+        self.assertNotIn("reset_owner_dialog:", self.workflow)
+        self.assertNotIn("MaxConversationStore", self.workflow)
 
-    def test_manual_deploy_can_grant_only_bounded_owner_e2e_attempts(self) -> None:
-        self.assertIn("grant_owner_e2e_attempts:", self.workflow)
-        self.assertIn("options: ['0', '5']", self.workflow)
-        self.assertIn("Grant bounded owner E2E attempts", self.workflow)
-        self.assertIn("inputs.grant_owner_e2e_attempts == '5'", self.workflow)
-        self.assertIn("CommerceService(database).adjust_generation_credits", self.workflow)
-        self.assertIn("delta=5", self.workflow)
-        self.assertIn("owner_e2e_generation_credits_adjusted=5", self.workflow)
-        self.assertNotIn("print(owner_id)", self.workflow)
+    def test_deploy_cannot_grant_credits(self) -> None:
+        self.assertNotIn("grant_owner_e2e_attempts:", self.workflow)
+        self.assertNotIn("adjust_generation_credits", self.workflow)
 
-    def test_deploy_uses_one_systemd_service_without_background_watchdogs(self) -> None:
-        self.assertIn("install -o root -g root -m 644", self.workflow)
-        self.assertIn("systemctl enable photo-bot.service", self.workflow)
-        self.assertIn("systemctl restart photo-bot.service", self.workflow)
-        self.assertIn("duplicate_polling_instance", self.workflow)
-        self.assertNotIn("nohup", self.workflow)
-        self.assertNotIn("crontab", self.workflow)
-        self.assertNotIn("pkill", self.workflow)
+    def test_successful_deploy_restarts_exactly_once_without_a_second_runtime(self) -> None:
+        self.assertEqual(self.workflow.count("systemctl restart photo-bot.service"), 1)
+        self.assertIn('test "$MAIN_PID" != "$OLD_PID"', self.workflow)
+        self.assertIn("--property=NRestarts --value)", self.workflow)
+        self.assertIn("pgrep -u photoapp", self.workflow)
+        self.assertIn("RESTART_EPOCH=$(date +%s)", self.workflow)
+        self.assertIn("WHERE name='poll_last_success'", self.workflow)
+        for forbidden in ("DUPLICATE_LOG", "duplicate_polling_instance", "timeout 10", "nohup", "crontab", "pkill"):
+            self.assertNotIn(forbidden, self.workflow)
 
     def test_deploy_refuses_to_interrupt_active_processing(self) -> None:
         self.assertIn("Require idle production before deployment", self.workflow)
@@ -526,13 +372,8 @@ class DeployPolicyTests(TestCase):
         stop = self.workflow.index("systemctl stop photo-bot.service")
         self.assertLess(idle_check, stop)
 
-    def test_normal_deploy_disables_sandbox_probe_and_records_exact_sha(self) -> None:
-        self.assertIn(
-            "set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false", self.workflow
-        )
-        self.assertIn(
-            "set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0", self.workflow
-        )
+    def test_deploy_records_sha_without_modifying_sandbox_settings(self) -> None:
+        self.assertNotIn("set_env ROBOKASSA_SANDBOX", self.workflow)
         self.assertIn('printf \'%s\\n\' "$DEPLOY_SHA" > "$ROOT/.deploy-sha"', self.workflow)
         self.assertIn('chmod 600 "$ROOT/.deploy-sha"', self.workflow)
 
@@ -558,11 +399,11 @@ class DeployPolicyTests(TestCase):
         self.assertIn("Persistent=true", timer)
         self.assertIn("Unit=ravuna-retention-cleanup.service", timer)
 
-    def test_deploy_installs_but_does_not_auto_enable_retention_timer(self) -> None:
-        self.assertIn("ravuna-retention-cleanup.service", self.workflow)
-        self.assertIn("ravuna-retention-cleanup.timer", self.workflow)
-        self.assertNotIn("systemctl enable ravuna-retention-cleanup.timer", self.workflow)
-        self.assertNotIn("systemctl start ravuna-retention-cleanup.timer", self.workflow)
+    def test_deploy_cannot_install_or_operate_retention_units(self) -> None:
+        for unit in ("ravuna-retention-cleanup.service", "ravuna-retention-cleanup.timer", "ravuna-admin-journal.service", "ravuna-content-publisher.timer", "ravuna-content-publisher.service"):
+            self.assertNotIn(f"/etc/systemd/system/{unit}", self.workflow)
+            for action in ("start", "stop", "restart", "enable", "disable"):
+                self.assertNotIn(f"systemctl {action} {unit}", self.workflow)
 
     def test_deploy_sudoers_allows_only_exact_retention_unit_install_commands(self) -> None:
         sudoers = DEPLOY_SUDOERS.read_text(encoding="utf-8")
