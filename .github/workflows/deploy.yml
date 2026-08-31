@@ -7,33 +7,6 @@ on:
         description: Exact 40-character commit SHA from canonical main history
         required: true
         type: string
-      activate_gemini:
-        description: Apply the approved Gemini Nano Banana Pro production flags
-        required: false
-        type: boolean
-        default: false
-      enable_owner_handlers:
-        description: Temporarily enable owner-only MAX application handlers
-        required: false
-        type: boolean
-        default: false
-      reset_owner_dialog:
-        description: Reset allowlisted owner dialog bindings after deployment
-        required: false
-        type: boolean
-        default: false
-      grant_owner_e2e_attempts:
-        description: Add a bounded number of attempts to the existing owner demo session
-        required: false
-        type: choice
-        options: ['0', '5']
-        default: '0'
-      pilot_user_limit:
-        description: Number of explicitly allowlisted closed-pilot users
-        required: false
-        type: choice
-        options: ['0', '5', '10', '20']
-        default: '0'
 
 permissions:
   contents: read
@@ -91,52 +64,38 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
+      STAGE_ROOT: /var/tmp/ravuna-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+      SSH_HOST: ${{ secrets.HETZNER_HOST }}
+      SSH_USER: ${{ secrets.HETZNER_USER }}
+      SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
       TARGET_SHA: ${{ inputs.target_sha }}
       DEPLOY_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' }}
-      OPENAI_KEY_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' }}
-      GEMINI_KEY_CONFIGURED: ${{ secrets.GEMINI_API_KEY != '' }}
-      MAX_KEY_CONFIGURED: ${{ secrets.MAX_BOT_TOKEN != '' }}
-      MAX_OWNER_CONFIGURED: ${{ secrets.MAX_OWNER_USER_ID != '' }}
-      ROBOKASSA_PRODUCTION_CONFIGURED: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN != '' && secrets.ROBOKASSA_PASSWORD_1 != '' && secrets.ROBOKASSA_PASSWORD_2 != '' }}
     steps:
       - name: Require Hetzner deployment configuration
         if: env.DEPLOY_CONFIGURED != 'true'
         run: |
           echo "Hetzner production secrets are incomplete." >&2
           exit 1
-      - name: Require Gemini credential for activation
-        if: inputs.activate_gemini == true && env.GEMINI_KEY_CONFIGURED != 'true'
-        run: |
-          echo "Gemini production credential is not configured." >&2
-          exit 1
       - uses: actions/checkout@v7
         if: env.DEPLOY_CONFIGURED == 'true'
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 0
-      - name: Validate closed-pilot rollout configuration
-        if: env.DEPLOY_CONFIGURED == 'true' && inputs.pilot_user_limit != '0'
-        env:
-          PILOT_USER_LIMIT: ${{ inputs.pilot_user_limit }}
-          MAX_PILOT_USER_IDS: ${{ secrets.MAX_PILOT_USER_IDS }}
-          MAX_OWNER_USER_ID: ${{ secrets.MAX_OWNER_USER_ID }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build byte-exact committed artifact
         run: |
-          python - <<'PY'
-          import os
-
-          limit = int(os.environ["PILOT_USER_LIMIT"])
-          pilots = tuple(dict.fromkeys(
-              value.strip()
-              for value in os.environ.get("MAX_PILOT_USER_IDS", "").split(",")
-              if value.strip()
-          ))
-          owner = os.environ.get("MAX_OWNER_USER_ID", "").strip()
-          if len(pilots) < limit:
-              raise SystemExit("Pilot allowlist is shorter than the requested rollout stage")
-          if owner and owner in pilots:
-              raise SystemExit("Pilot allowlist must not contain the owner")
-          print(f"pilot_rollout_validated={limit}")
-          PY
+          set -euo pipefail
+          install -d "$RUNNER_TEMP/ravuna-release/source"
+          python scripts/build_deploy_artifact.py --revision "$TARGET_SHA" \
+            --archive "$RUNNER_TEMP/ravuna-release/release.tar.gz" \
+            --manifest "$RUNNER_TEMP/ravuna-release/manifest.json"
+          tar -xzf "$RUNNER_TEMP/ravuna-release/release.tar.gz" -C "$RUNNER_TEMP/ravuna-release/source"
+          python scripts/build_deploy_artifact.py \
+            --archive "$RUNNER_TEMP/ravuna-release/release.tar.gz" \
+            --manifest "$RUNNER_TEMP/ravuna-release/manifest.json" \
+            --verify-directory "$RUNNER_TEMP/ravuna-release/source"
       - name: Configure SSH
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -148,17 +107,43 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Stage and verify immutable artifact outside production
+        run: |
+          set -euo pipefail
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -m 700 '$STAGE_ROOT' '$STAGE_ROOT/source'"
+          scp -P "$SSH_PORT" "$RUNNER_TEMP/ravuna-release/release.tar.gz" \
+            "$RUNNER_TEMP/ravuna-release/manifest.json" "$SSH_USER@$SSH_HOST:$STAGE_ROOT/"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE'
+            set -euo pipefail
+            STAGE_ROOT="$1"
+            tar --no-same-owner -xzf "$STAGE_ROOT/release.tar.gz" -C "$STAGE_ROOT/source"
+            PYTHONDONTWRITEBYTECODE=1 /opt/photo-bot/venv/bin/python \
+              "$STAGE_ROOT/source/scripts/build_deploy_artifact.py" \
+              --archive "$STAGE_ROOT/release.tar.gz" --manifest "$STAGE_ROOT/manifest.json" \
+              --verify-directory "$STAGE_ROOT/source"
+          REMOTE
       - name: Capture pre-deploy production snapshot
+        id: snapshot
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
+          set -euo pipefail
           install -d artifact
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE' | tee artifact/pre-deploy-status.txt
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE' | tee artifact/pre-deploy-status.txt
             set -euo pipefail
+            STAGE_ROOT="$1"
             cd /opt/photo-bot
+            test "$(stat -c '%a:%U:%G' .env)" = "600:photoapp:photoapp"
+            venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" capture \
+              --env-file /opt/photo-bot/.env --snapshot "$STAGE_ROOT/env-before.json"
+            systemctl is-active --quiet photo-bot.service
+            systemctl show photo-bot.service -p MainPID --value > "$STAGE_ROOT/old-pid"
+            venv/bin/python -m app.main health
+            venv/bin/python -m app.main max-check
+            venv/bin/python -m app.main payment-reconciliation
             venv/bin/python scripts/production_status.py --root /opt/photo-bot
             venv/bin/python - <<'PY'
           from pathlib import Path
@@ -206,6 +191,34 @@ jobs:
             grep -Fi 'X-Ravuna-Payment-Route: active' "$HEADERS" >/dev/null
             printf 'ravuna_payment_route_preflight=%s\n' "$STATUS"
           REMOTE
+      - name: Verify migration on isolated production database copy
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE'
+            set -euo pipefail
+            STAGE_ROOT="$1"
+            cd "$STAGE_ROOT/source"
+            cmp -s /opt/photo-bot/requirements.txt requirements.txt || {
+              echo "Dependency changes require separately approved provisioning of the shared venv." >&2
+              exit 1
+            }
+            /opt/photo-bot/venv/bin/python -m pip check
+            export PYTHONDONTWRITEBYTECODE=1
+            PYTHONPATH="$STAGE_ROOT/source" /opt/photo-bot/venv/bin/python \
+              scripts/check_migration_copy.py \
+              --source /opt/photo-bot/data/photo_bot.sqlite3 \
+              --copy "$STAGE_ROOT/photo_bot.migrated.sqlite3"
+          REMOTE
+      - name: Main-bot isolated artifact preflight before service stop
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE'
+            set -euo pipefail
+            STAGE_ROOT="$1"
+            cd "$STAGE_ROOT/source"
+            export PYTHONDONTWRITEBYTECODE=1
+            APP_ENV=test BASE_DIR="$STAGE_ROOT/source" MAX_TRANSPORT_MODE=disabled \
+              /opt/photo-bot/venv/bin/python -m scripts.main_bot_production_preflight
+            /opt/photo-bot/venv/bin/python scripts/check_asset_licenses.py
+          REMOTE
       - name: Require idle production before deployment
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -219,13 +232,15 @@ jobs:
               /opt/photo-bot/venv/bin/python - <<'PY'
           import sqlite3
 
-          connection = sqlite3.connect("/opt/photo-bot/data/photo_bot.sqlite3")
+          connection = sqlite3.connect("file:/opt/photo-bot/data/photo_bot.sqlite3?mode=ro", uri=True)
+          connection.execute("PRAGMA query_only=ON")
           try:
               active = connection.execute(
                   """SELECT
                          (SELECT COUNT(*) FROM generation_attempts
                           WHERE status IN ('pending','processing')) +
-                         (SELECT COUNT(*) FROM max_dialogs WHERE state='processing')"""
+                         (SELECT COUNT(*) FROM max_dialogs WHERE state='processing') +
+                         (SELECT COUNT(*) FROM generation_credit_reservations WHERE status='reserved')"""
               ).fetchone()[0]
           finally:
               connection.close()
@@ -235,35 +250,6 @@ jobs:
           PY
             fi
           REMOTE
-      - name: Verify migration on isolated production database copy
-        if: env.DEPLOY_CONFIGURED == 'true'
-        env:
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          STAGE_ROOT="/var/tmp/ravuna-migration-${GITHUB_RUN_ID}"
-          cleanup_stage() {
-            ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-              "case '$STAGE_ROOT' in /var/tmp/ravuna-migration-[0-9]*) rm -rf -- '$STAGE_ROOT' ;; *) exit 1 ;; esac"
-          }
-          trap cleanup_stage EXIT
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "install -m 700 -d '$STAGE_ROOT' '$STAGE_ROOT/scripts'"
-          rsync -az --delete --exclude='/content_studio/' \
-            -e "ssh -p $SSH_PORT" app/ "$SSH_USER@$SSH_HOST:$STAGE_ROOT/app/"
-          rsync -az -e "ssh -p $SSH_PORT" scripts/check_migration_copy.py \
-            "$SSH_USER@$SSH_HOST:$STAGE_ROOT/scripts/check_migration_copy.py"
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE'
-            set -euo pipefail
-            STAGE_ROOT="$1"
-            cd "$STAGE_ROOT"
-            PYTHONPATH="$STAGE_ROOT" /opt/photo-bot/venv/bin/python \
-              scripts/check_migration_copy.py \
-              --source /opt/photo-bot/data/photo_bot.sqlite3 \
-              --copy "$STAGE_ROOT/photo_bot.migrated.sqlite3"
-          REMOTE
       - name: Synchronize application files
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
@@ -271,14 +257,11 @@ jobs:
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE'
             set -euo pipefail
-            if systemctl cat photo-bot.service >/dev/null 2>&1; then
-              sudo -n systemctl stop photo-bot.service
-            fi
-            if [ -f /opt/photo-bot/data/photo-bot.pid ]; then
-              /opt/photo-bot/scripts/stop_bot.sh
-            fi
+            STAGE_ROOT="$1"
+            /opt/photo-bot/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" verify \
+              --env-file /opt/photo-bot/.env --snapshot "$STAGE_ROOT/env-before.json"
             if [ -f /opt/photo-bot/data/photo_bot.sqlite3 ]; then
               install -m 700 -d /opt/photo-bot/data/backups
               BACKUP_FILE="/opt/photo-bot/data/backups/pre-migration-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
@@ -286,7 +269,8 @@ jobs:
           import sqlite3
           import sys
 
-          source = sqlite3.connect("/opt/photo-bot/data/photo_bot.sqlite3")
+          source = sqlite3.connect("file:/opt/photo-bot/data/photo_bot.sqlite3?mode=ro", uri=True)
+          source.execute("PRAGMA query_only=ON")
           backup = sqlite3.connect(sys.argv[1])
           try:
               source.backup(backup)
@@ -300,9 +284,16 @@ jobs:
           PY
               chmod 600 "$BACKUP_FILE"
             fi
+            if systemctl cat photo-bot.service >/dev/null 2>&1; then
+              sudo -n systemctl stop photo-bot.service
+            fi
+            if [ -f /opt/photo-bot/data/photo-bot.pid ]; then
+              /opt/photo-bot/scripts/stop_bot.sh
+            fi
           REMOTE
           rsync -az --delete \
             --exclude='.git/' \
+            --exclude='/.github/' \
             --exclude='.env' \
             --exclude='venv/' \
             --exclude='data/' \
@@ -313,304 +304,60 @@ jobs:
             --exclude='/ops/deploy_ravuna_content_studio.sh' \
             --exclude='/ops/ravuna-content-publisher.service' \
             --exclude='/ops/ravuna-content-publisher.timer' \
-            --include='/site/' \
-            --include='/site/nginx/' \
-            --include='/site/nginx/ravuna.ru.conf' \
-            --exclude='/site/***' \
+            --exclude='/site/' \
+            --exclude='/app/admin_journal.py' \
+            --exclude='/scripts/run_admin_journal.py' \
+            --exclude='/scripts/build_content_studio_release.py' \
+            --exclude='/ops/ravuna-admin-journal.service' \
+            --exclude='/ops/ravuna-retention-cleanup.service' \
+            --exclude='/ops/ravuna-retention-cleanup.timer' \
+            --exclude='/tests/test_admin_journal.py' \
+            --exclude='/tests/test_content_studio*' \
             -e "ssh -p $SSH_PORT" \
-            ./ "$SSH_USER@$SSH_HOST:/opt/photo-bot/"
-      - name: Configure OpenAI credential
-        if: env.DEPLOY_CONFIGURED == 'true' && env.OPENAI_KEY_CONFIGURED == 'true'
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          printf '%s' "$OPENAI_API_KEY" | \
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
-            ROOT=/opt/photo-bot
-            KEY=$(cat)
-            test -n "$KEY"
-            TMP="$ROOT/.env.tmp"
-            grep -v "^OPENAI_API_KEY=" "$ROOT/.env" > "$TMP" || true
-            printf "%s\n" "OPENAI_API_KEY=$KEY" >> "$TMP"
-            chmod 600 "$TMP"
-            mv "$TMP" "$ROOT/.env"
-            unset KEY'
-      - name: Configure Gemini credential
-        if: env.DEPLOY_CONFIGURED == 'true' && env.GEMINI_KEY_CONFIGURED == 'true'
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          printf '%s' "$GEMINI_API_KEY" | \
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
-            ROOT=/opt/photo-bot
-            KEY=$(cat)
-            test -n "$KEY"
-            TMP="$ROOT/.env.tmp"
-            grep -v "^GEMINI_API_KEY=" "$ROOT/.env" > "$TMP" || true
-            printf "%s\n" "GEMINI_API_KEY=$KEY" >> "$TMP"
-            chmod 600 "$TMP"
-            mv "$TMP" "$ROOT/.env"
-            unset KEY'
-      - name: Configure MAX credential
-        if: env.DEPLOY_CONFIGURED == 'true' && env.MAX_KEY_CONFIGURED == 'true'
-        env:
-          MAX_BOT_TOKEN: ${{ secrets.MAX_BOT_TOKEN }}
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          printf '%s' "$MAX_BOT_TOKEN" | \
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
-            ROOT=/opt/photo-bot
-            KEY=$(cat)
-            test -n "$KEY"
-            TMP="$ROOT/.env.tmp"
-            grep -v "^MAX_BOT_TOKEN=" "$ROOT/.env" > "$TMP" || true
-            printf "%s\n" "MAX_BOT_TOKEN=$KEY" >> "$TMP"
-            chmod 600 "$TMP"
-            mv "$TMP" "$ROOT/.env"
-            unset KEY'
-      - name: Configure MAX owner allowlist
-        if: env.DEPLOY_CONFIGURED == 'true' && env.MAX_OWNER_CONFIGURED == 'true'
-        env:
-          MAX_OWNER_USER_ID: ${{ secrets.MAX_OWNER_USER_ID }}
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          printf '%s' "$MAX_OWNER_USER_ID" | \
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
-            ROOT=/opt/photo-bot
-            OWNER_ID=$(cat)
-            test -n "$OWNER_ID"
-            TMP="$ROOT/.env.tmp"
-            grep -v "^MAX_OWNER_USER_IDS=" "$ROOT/.env" > "$TMP" || true
-            printf "%s\n" "MAX_OWNER_USER_IDS=$OWNER_ID" >> "$TMP"
-            chmod 600 "$TMP"
-            mv "$TMP" "$ROOT/.env"
-            unset OWNER_ID'
-      - name: Disable MAX handlers without owner secret
-        if: env.DEPLOY_CONFIGURED == 'true' && env.MAX_OWNER_CONFIGURED != 'true'
-        env:
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
-            ROOT=/opt/photo-bot
-            TMP="$ROOT/.env.tmp"
-            grep -v "^MAX_OWNER_USER_IDS=" "$ROOT/.env" > "$TMP" || true
-            printf "%s\n" "MAX_OWNER_USER_IDS=" >> "$TMP"
-            chmod 600 "$TMP"
-            mv "$TMP" "$ROOT/.env"'
-      - name: Configure closed-pilot allowlist
-        if: env.DEPLOY_CONFIGURED == 'true'
-        env:
-          MAX_PILOT_USER_IDS: ${{ secrets.MAX_PILOT_USER_IDS }}
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          printf '%s' "$MAX_PILOT_USER_IDS" | \
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -e
-            ROOT=/opt/photo-bot
-            PILOT_IDS=$(cat)
-            TMP="$ROOT/.env.tmp"
-            grep -v "^MAX_PILOT_USER_IDS=" "$ROOT/.env" > "$TMP" || true
-            printf "%s\n" "MAX_PILOT_USER_IDS=$PILOT_IDS" >> "$TMP"
-            chmod 600 "$TMP"
-            mv "$TMP" "$ROOT/.env"
-            unset PILOT_IDS'
-      - name: Configure production Robokassa credentials
-        if: env.DEPLOY_CONFIGURED == 'true' && env.ROBOKASSA_PRODUCTION_CONFIGURED == 'true'
-        env:
-          MERCHANT_LOGIN: ${{ secrets.ROBOKASSA_MERCHANT_LOGIN }}
-          PASSWORD_1: ${{ secrets.ROBOKASSA_PASSWORD_1 }}
-          PASSWORD_2: ${{ secrets.ROBOKASSA_PASSWORD_2 }}
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          {
-            printf '%s\n' "$MERCHANT_LOGIN"
-            printf '%s\n' "$PASSWORD_1"
-            printf '%s\n' "$PASSWORD_2"
-          } | ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            'cd /opt/photo-bot && venv/bin/python -m scripts.set_robokassa_production_secrets --env-file /opt/photo-bot/.env'
+            "$RUNNER_TEMP/ravuna-release/source/" "$SSH_USER@$SSH_HOST:/opt/photo-bot/"
       - name: Install and verify production
         if: env.DEPLOY_CONFIGURED == 'true'
         env:
-          ACTIVATE_GEMINI: ${{ inputs.activate_gemini == true }}
-          MAX_OWNER_HANDLERS_ENABLED: ${{ inputs.enable_owner_handlers == true }}
-          PILOT_USER_LIMIT: ${{ inputs.pilot_user_limit }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$TARGET_SHA" "$MAX_OWNER_HANDLERS_ENABLED" "$PILOT_USER_LIMIT" "$ACTIVATE_GEMINI" <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$TARGET_SHA" "$STAGE_ROOT" <<'REMOTE'
             set -euo pipefail
             ROOT=/opt/photo-bot
             DEPLOY_SHA="$1"
-            MAX_OWNER_HANDLERS_ENABLED="${2:-false}"
-            PILOT_USER_LIMIT="${3:-0}"
-            ACTIVATE_GEMINI="${4:-false}"
-            export ACTIVATE_GEMINI
+            STAGE_ROOT="$2"
+            export PYTHONDONTWRITEBYTECODE=1
             test "$(id -un)" = "photoapp"
             test "$(stat -c '%U:%G' "$ROOT")" = "photoapp:photoapp"
-            mkdir -p "$ROOT/data" "$ROOT/logs" "$ROOT/temp"
-            if [ ! -f "$ROOT/.env" ]; then
-              install -m 600 /dev/null "$ROOT/.env"
-            else
-              chmod 600 "$ROOT/.env"
-            fi
-            ensure_env() { grep -q "^$1=" "$ROOT/.env" || printf '%s=%s\n' "$1" "$2" >> "$ROOT/.env"; }
-            ensure_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2
-            ensure_env IMAGE_EDIT_QUALITY medium
-            ensure_env IMAGE_EDIT_SIZE auto
-            ensure_env IMAGE_EDIT_INPUT_FIDELITY auto
-            ensure_env IMAGE_EDIT_OUTPUT_FORMAT png
-            ensure_env OPENAI_MAX_RETRIES 2
-            ensure_env OPENAI_BALANCE_USD ''
-            ensure_env OPENAI_BALANCE_CONFIRMED_AT ''
-            ensure_env OPENAI_BALANCE_WARNING_USD 5
-            ensure_env OPENAI_BALANCE_CRITICAL_USD 1
-            ensure_env OPENAI_BALANCE_MAX_AGE_HOURS 72
-            ensure_env OPENAI_IMAGE_REQUESTS_ENABLED true
-            ensure_env DEMO_SESSION_TTL_MINUTES 60
-            ensure_env DEMO_WATERMARK_TEXT ОБРАЗЕЦ
-            ensure_env DEMO_MAX_DIMENSION 1024
-            ensure_env DEMO_OUTPUT_FORMAT JPEG
-            ensure_env DEMO_JPEG_QUALITY 82
-            ensure_env DEMO_MIN_REQUEST_INTERVAL_SECONDS 15
-            ensure_env DEMO_MAX_ATTEMPTS_PER_HOUR 10
-            ensure_env DEMO_MAX_CONCURRENT_PER_USER 1
-            ensure_env GLOBAL_MAX_CONCURRENT_GENERATIONS 2
-            ensure_env DEMO_DAILY_COST_LIMIT_RUB 1000
-            ensure_env DEMO_DAILY_GENERATION_LIMIT 100
-            ensure_env DEMO_ESTIMATED_COST_RUB_PER_GENERATION 10
-            ensure_env MAX_SOURCE_FILE_SIZE_MB 15
-            ensure_env MAX_PROMPT_LENGTH 1500
-            ensure_env GENERATION_TIMEOUT_SECONDS 300
-            ensure_env UNLOCK_ORIGINAL_PRICE_RUB 49
-            ensure_env CONTINUATION_PACK_PRICE_RUB 49
-            ensure_env PAYMENT_CURRENCY RUB
-            ensure_env PAYMENT_ORDER_TTL_MINUTES 30
-            ensure_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
-            ensure_env PAYMENT_WEBHOOK_HOST 127.0.0.1
-            ensure_env PAYMENT_WEBHOOK_PORT 8091
-            ensure_env PAYMENT_WEBHOOK_PATH /payments/robokassa/result
-            ensure_env ROBOKASSA_HASH_ALGORITHM sha256
-            ensure_env ROBOKASSA_PAYMENT_URL https://auth.robokassa.ru/Merchant/Index.aspx
-            ensure_env ROBOKASSA_REFUND_URL https://services.robokassa.ru/RefundService/Refund/Create
-            ensure_env ROBOKASSA_REFUND_STATUS_URL https://services.robokassa.ru/RefundService/Refund/GetState
-            ensure_env PAYMENT_RECEIPT_TAX none
-            ensure_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Ravuna'
-            ensure_env DEMO_RETENTION_DAYS 30
-            ensure_env PAID_RETENTION_DAYS 180
-            ensure_env TRASH_RETENTION_DAYS 30
-            ensure_env MAX_BOT_TOKEN ''
-            ensure_env MAX_PUBLIC_ACCESS_ENABLED false
-            ensure_env MAX_SINGLE_SCREEN_UI_ENABLED true
-            ensure_env MAX_OWNER_USER_IDS ''
-            ensure_env MAX_PILOT_USER_IDS ''
-            ensure_env MAX_API_BASE_URL https://platform-api2.max.ru
-            ensure_env MAX_CA_BUNDLE ops/certs/russian_trusted_root_ca_pem.crt
-            set_env() {
-              NAME="$1"
-              VALUE="$2"
-              TMP="$ROOT/.env.runtime.tmp"
-              grep -v "^$NAME=" "$ROOT/.env" > "$TMP" || true
-              printf '%s=%s\n' "$NAME" "$VALUE" >> "$TMP"
-              chmod 600 "$TMP"
-              mv "$TMP" "$ROOT/.env"
-            }
-            set_env OPENAI_IMAGE_MODEL gpt-image-2
-            ensure_env IMAGE_PROVIDER gemini
-            ensure_env GEMINI_IMAGE_MODEL gemini-3-pro-image
-            ensure_env IMAGE_DIRECT_PROMPT_ENABLED true
-            if [ "$ACTIVATE_GEMINI" = true ]; then
-              set_env IMAGE_PROVIDER gemini
-              set_env GEMINI_IMAGE_MODEL gemini-3-pro-image
-              set_env IMAGE_DIRECT_PROMPT_ENABLED true
-            fi
-            set_env IMAGE_EDIT_SIZE auto
-            set_env OPENAI_CONVERSATION_MEMORY_ENABLED false
-            set_env OPENAI_RESPONSES_IMAGE_ENABLED false
-            set_env OPENAI_CONVERSATION_RETENTION_ENABLED false
-            set_env UNLOCK_ORIGINAL_PRICE_RUB 49
-            set_env CONTINUATION_PACK_PRICE_RUB 49
-            set_env DEMO_MAX_SUCCESSFUL_GENERATIONS 2
-            set_env PAYMENT_RESULT_URL https://pixoraai.ru/payments/robokassa/result
-            set_env PAYMENT_SUCCESS_URL https://ravuna.ru/payment-success.html
-            set_env PAYMENT_FAIL_URL https://ravuna.ru/payment-failed.html
-            set_env ROBOKASSA_HASH_ALGORITHM sha256
-            set_env ROBOKASSA_SANDBOX_DUPLICATE_PROBE false
-            set_env ROBOKASSA_SANDBOX_ORDER_BASELINE 0
-            set_env PAYMENT_RECEIPT_ITEM_NAME 'Пакет доступа Ravuna'
-            set_env PAYMENT_RECEIPT_TAX none
-            # Safe defaults apply only to a fresh environment. A normal deploy
-            # must preserve the already approved production operating state.
-            ensure_env PAYMENTS_ENABLED false
-            ensure_env PAYMENT_PROVIDER disabled
-            set_env PAYMENT_WEBHOOK_LISTENER_ENABLED true
-            ensure_env PAYMENT_WEBHOOK_ENABLED false
-            ensure_env PAYMENT_REFUNDS_ENABLED false
-            ensure_env ROBOKASSA_MODE sandbox
-            ensure_env ROBOKASSA_PRODUCTION_APPROVED false
-            ensure_env ROBOKASSA_COMMISSION_PERCENT 0
-            set_env APP_ENV production
-            set_env BASE_DIR /opt/photo-bot
+            "$ROOT"/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" verify \
+              --env-file "$ROOT/.env" --snapshot "$STAGE_ROOT/env-before.json"
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/.deploy-sha"
             chmod 600 "$ROOT/.deploy-sha"
-            if grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
-              set_env MAX_TRANSPORT_MODE polling
-            else
-              set_env MAX_TRANSPORT_MODE disabled
-            fi
-            if [ "$MAX_OWNER_HANDLERS_ENABLED" = true ] && grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env" && grep -Eq '^MAX_OWNER_USER_IDS=.+$' "$ROOT/.env"; then
-              set_env MAX_POLL_OBSERVE_ONLY false
-            else
-              ensure_env MAX_POLL_OBSERVE_ONLY true
-            fi
-            set_env MAX_POLL_TIMEOUT_SECONDS 20
-            set_env MAX_POLL_RETRY_SECONDS 5
-            set_env MAX_POLL_IDLE_SECONDS 1
-            set_env MAX_POLL_MAX_STALE_SECONDS 90
-            set_env PILOT_USER_LIMIT "$PILOT_USER_LIMIT"
-            if [ "$PILOT_USER_LIMIT" != 0 ] && ! grep -Eq '^MAX_PILOT_USER_IDS=.+$' "$ROOT/.env"; then
-              echo "Pilot limit requires MAX_PILOT_USER_IDS" >&2
-              exit 1
-            fi
-            ensure_env MAX_MEDIA_HOST_SUFFIXES .max.ru,.oneme.ru,.okcdn.ru
-            set_env PROCESSING_MODE_ROUTER_ENABLED false
-            set_env REAL_BACKGROUND_COMPOSITE_ENABLED false
-            set_env ALLOW_AI_BACKGROUND_FALLBACK false
-            set_env BACKGROUND_ASSET_CATALOG assets/backgrounds/catalog.json
-            set_env SEGMENTATION_BACKEND disabled
-            set_env SEGMENTATION_MODEL u2net_human_seg
-            set_env SEGMENTATION_MODEL_DIR data/models/rembg
-            set_env LOCAL_AI_FINISHING_ENABLED false
-            set_env BACKUP_DIR data/backups
-            set_env BACKUP_RETENTION_DAYS 14
-            set_env BACKUP_MAX_AGE_HOURS 30
-            set_env CLEANUP_TEMP_RETENTION_HOURS 24
-            set_env CLEANUP_ORPHAN_GRACE_HOURS 24
-            set_env DISK_MIN_FREE_MB 2048
-            chmod +x "$ROOT"/scripts/*.sh "$ROOT"/scripts/ravuna
             cd "$ROOT"
-            "$ROOT"/venv/bin/pip install -r "$ROOT"/requirements.txt
             "$ROOT"/venv/bin/python --version
             "$ROOT"/venv/bin/pip check
-            "$ROOT"/venv/bin/python -c 'from app.config import load_settings; from app.database import Database; Database(load_settings().database_path)'
-            MAX_TRANSPORT_MODE=disabled "$ROOT"/venv/bin/python -m scripts.main_bot_production_preflight
-            "$ROOT"/venv/bin/python "$ROOT/scripts/check_asset_licenses.py"
-            "$ROOT"/venv/bin/python "$ROOT/scripts/benchmark_processing.py" --iterations 3 --size 1024
+            "$ROOT"/venv/bin/python - <<'PY'
+          from app.config import load_settings
+          from app.database import Database, CURRENT_SCHEMA_VERSION
+          from scripts.check_migration_copy import _read_only_connection, _commerce_snapshot, _assert_commerce_invariants
+          path = load_settings().database_path
+          before = _read_only_connection(path)
+          try:
+              commerce = _commerce_snapshot(before)
+          finally:
+              before.close()
+          Database(path)
+          after = _read_only_connection(path)
+          try:
+              assert after.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+              assert after.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == CURRENT_SCHEMA_VERSION
+              _assert_commerce_invariants(after)
+              assert _commerce_snapshot(after) == commerce, "Migration changed commerce fingerprints"
+          finally:
+              after.close()
+          print("live_migration_commerce=PASS")
+          PY
             MAX_TRANSPORT_MODE=disabled "$ROOT"/scripts/healthcheck.sh
             test "$(stat -c '%a' "$ROOT/.env")" = "600"
             test "$(stat -c '%U:%G' "$ROOT/.env")" = "photoapp:photoapp"
@@ -625,7 +372,6 @@ jobs:
               test "$(stat -c '%a' "$ROOT/data/photo_bot.sqlite3")" = "600"
             fi
             if [ -f "$ROOT/logs/app.log" ]; then
-              chmod 600 "$ROOT/logs/app.log"
               test "$(stat -c '%a' "$ROOT/logs/app.log")" = "600"
             fi
             for path in app tests scripts docs ops requirements.txt README.md AI_REPOSITORY_CONTEXT.md; do
@@ -641,24 +387,31 @@ jobs:
             else
               echo "GEMINI_API_KEY is not configured; external API check skipped"
             fi
-            sudo -n install -o root -g root -m 644 \
-              "$ROOT/ops/ravuna-retention-cleanup.service" \
-              /etc/systemd/system/ravuna-retention-cleanup.service
-            sudo -n install -o root -g root -m 644 \
-              "$ROOT/ops/ravuna-retention-cleanup.timer" \
-              /etc/systemd/system/ravuna-retention-cleanup.timer
-            sudo -n systemctl daemon-reload
-            MODE=$(sed -n 's/^MAX_TRANSPORT_MODE=//p' "$ROOT/.env" | tail -n 1)
-            if [ "$MODE" = polling ] && grep -Eq '^MAX_BOT_TOKEN=.+$' "$ROOT/.env"; then
+            MODE=$("$ROOT"/venv/bin/python -c 'from app.config import load_settings; print(load_settings().max_transport_mode)')
+            if [ "$MODE" = polling ]; then
               "$ROOT"/venv/bin/python -m app.main max-check
               sudo -n install -o root -g root -m 644 \
                 "$ROOT/ops/photo-bot.service" /etc/systemd/system/photo-bot.service
               sudo -n systemctl daemon-reload
               sudo -n systemctl enable photo-bot.service
+              RESTART_EPOCH=$(date +%s)
               sudo -n systemctl restart photo-bot.service
               READY=0
               for attempt in $(seq 1 24); do
-                if "$ROOT"/scripts/healthcheck.sh; then
+                if "$ROOT"/scripts/healthcheck.sh && "$ROOT"/venv/bin/python - "$RESTART_EPOCH" <<'PY'
+          import sqlite3
+          import sys
+          from datetime import datetime
+          from app.config import load_settings
+          connection = sqlite3.connect(f"file:{load_settings().database_path}?mode=ro", uri=True)
+          try:
+              connection.execute("PRAGMA query_only=ON")
+              row = connection.execute("SELECT updated_at FROM max_transport_state WHERE name='poll_last_success'").fetchone()
+          finally:
+              connection.close()
+          raise SystemExit(0 if row and datetime.fromisoformat(row[0]).timestamp() >= int(sys.argv[1]) else 1)
+          PY
+                then
                   READY=1
                   break
                 fi
@@ -671,34 +424,14 @@ jobs:
               tr '\0' ' ' < "/proc/$MAIN_PID/cmdline" | grep -F -- '-m app.main run' >/dev/null
               test "$(pgrep -u photoapp -f '^/opt/photo-bot/venv/bin/python -m app.main run$' | wc -l)" -eq 1
 
-              DUPLICATE_LOG="$ROOT/temp/duplicate-polling-check.log"
-              set +e
-              timeout 10 "$ROOT"/venv/bin/python -m app.main run >"$DUPLICATE_LOG" 2>&1
-              DUPLICATE_EXIT=$?
-              set -e
-              test "$DUPLICATE_EXIT" -eq 3
-              grep -F 'duplicate_polling_instance' "$DUPLICATE_LOG" >/dev/null
-              rm -f "$DUPLICATE_LOG"
-
-              OLD_PID="$MAIN_PID"
-              sudo -n systemctl restart photo-bot.service
-              RESTARTED=0
-              for attempt in $(seq 1 24); do
-                NEW_PID=$(systemctl show photo-bot.service --property=MainPID --value)
-                if [ "$NEW_PID" -gt 0 ] && [ "$NEW_PID" != "$OLD_PID" ] && "$ROOT"/scripts/healthcheck.sh; then
-                  RESTARTED=1
-                  break
-                fi
-                sleep 3
-              done
-              test "$RESTARTED" = 1
+              OLD_PID=$(cat "$STAGE_ROOT/old-pid")
+              test "$MAIN_PID" != "$OLD_PID"
               ! kill -0 "$OLD_PID" 2>/dev/null
+              test "$(systemctl show photo-bot.service --property=NRestarts --value)" = 0
+              "$ROOT"/venv/bin/python -m app.main max-check
             else
-              rm -f "$ROOT/data/photo-bot.pid"
-              if systemctl cat photo-bot.service >/dev/null 2>&1; then
-                sudo -n systemctl disable --now photo-bot.service
-              fi
-              echo "MAX runtime not started (mode=$MODE)"
+              echo "Existing polling configuration is required; provision separately." >&2
+              exit 1
             fi
             "$ROOT"/venv/bin/python -m scripts.check_runtime_secrets
             "$ROOT"/venv/bin/python - <<'PY'
@@ -710,7 +443,8 @@ jobs:
           from app.database import CURRENT_SCHEMA_VERSION
 
           settings = load_settings()
-          connection = sqlite3.connect(settings.database_path)
+          connection = sqlite3.connect(f"file:{settings.database_path}?mode=ro", uri=True)
+          connection.execute("PRAGMA query_only=ON")
           try:
               quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
               current_schema = int(connection.execute(
@@ -805,11 +539,6 @@ jobs:
           assert settings.openai_responses_image_enabled is False
           assert settings.openai_conversation_retention_enabled is False
           assert settings.max_single_screen_ui_enabled is True
-          if os.environ.get("ACTIVATE_GEMINI", "").lower() == "true":
-              assert settings.image_provider == "gemini"
-              assert settings.gemini_image_model == "gemini-3-pro-image"
-              assert settings.image_direct_prompt_enabled is True
-              assert settings.gemini_api_key
           stale_processing_orphans = 0
           cutoff = time.time() - 3600
           for path in settings.temp_dir.iterdir():
@@ -902,8 +631,11 @@ jobs:
               ),
           }, sort_keys=True))
           PY
+            "$ROOT"/venv/bin/python -m app.main payment-reconciliation
             "$ROOT"/venv/bin/python -m app.main payment-status --format json
             "$ROOT"/venv/bin/python -m app.main launch-status
+            "$ROOT"/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" verify \
+              --env-file "$ROOT/.env" --snapshot "$STAGE_ROOT/env-before.json"
             printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
             mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
             test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"
@@ -923,7 +655,7 @@ jobs:
               https://pixoraai.ru/payments/robokassa/result)
             test "$GET_STATUS" = 405
             printf 'resulturl_get_status=%s\n' "$GET_STATUS"
-            WEBHOOK_ENABLED=$(grep '^PAYMENT_WEBHOOK_ENABLED=' /opt/photo-bot/.env | tail -n 1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')
+            WEBHOOK_ENABLED=$(cd /opt/photo-bot && venv/bin/python -c 'from app.config import load_settings; print(str(load_settings().payment_webhook_enabled).lower())')
             if [ "$WEBHOOK_ENABLED" = true ]; then
               printf 'resulturl_post_probe=skipped_enabled\n'
             else
@@ -935,87 +667,8 @@ jobs:
               printf 'resulturl_post_disabled_status=%s\n' "$POST_STATUS"
             fi
           REMOTE
-      - name: Reset owner dialog to a clean main-menu state
-        if: >-
-          env.DEPLOY_CONFIGURED == 'true' && inputs.reset_owner_dialog == true
-        env:
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+      - name: Verify environment preservation even on deployment failure
+        if: always() && steps.snapshot.outcome == 'success'
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
-            set -euo pipefail
-            cd /opt/photo-bot
-            venv/bin/python - <<'PY'
-          from app.config import load_settings
-          from app.database import Database
-          from app.max_conversation import MaxConversationStore
-
-          settings = load_settings()
-          store = MaxConversationStore(Database(settings.database_path))
-          reset_count = 0
-          for owner_id in settings.max_owner_user_ids:
-              if store.get(owner_id) is None:
-                  continue
-              store.transition(
-                  owner_id,
-                  "main_menu",
-                  event_key="ops:owner-dialog-reset",
-                  force=True,
-                  selected_scenario_id=None,
-                  session_id=None,
-                  pending_prompt=None,
-                  pending_action=None,
-                  current_gallery_item_id=None,
-                  current_version_id=None,
-                  gallery_cursor=0,
-                  status_message_id=None,
-              )
-              reset_count += 1
-          if reset_count == 0:
-              raise SystemExit("No allowlisted owner dialog was available to reset")
-          print(f"owner_dialogs_reset={reset_count}")
-          PY
-          REMOTE
-      - name: Grant bounded owner E2E attempts
-        if: >-
-          env.DEPLOY_CONFIGURED == 'true' && inputs.grant_owner_e2e_attempts == '5'
-        env:
-          SSH_HOST: ${{ secrets.HETZNER_HOST }}
-          SSH_USER: ${{ secrets.HETZNER_USER }}
-          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
-            set -euo pipefail
-            cd /opt/photo-bot
-            venv/bin/python - <<'PY'
-          from app.config import load_settings
-          from app.commerce import CommerceService
-          from app.database import Database
-
-          settings = load_settings()
-          database = Database(settings.database_path)
-          granted_count = 0
-          with database.transaction() as connection:
-              for owner_id in settings.max_owner_user_ids:
-                  row = connection.execute(
-                      """SELECT id FROM users
-                         WHERE platform='max' AND platform_user_id=?""",
-                      (owner_id,),
-                  ).fetchone()
-                  if row is None:
-                      continue
-                  CommerceService(database).adjust_generation_credits(
-                      connection,
-                      user_id=row["id"],
-                      delta=5,
-                      reason="explicit_workflow_dispatch_owner_e2e",
-                      idempotency_key=f"owner-e2e:{row['id']}:{settings.app_env}",
-                  )
-                  granted_count += 1
-          if granted_count == 0:
-              raise SystemExit("No allowlisted owner account was available")
-          print(f"owner_e2e_accounts_adjusted={granted_count}")
-          print("owner_e2e_generation_credits_adjusted=5")
-          PY
-          REMOTE
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "/opt/photo-bot/venv/bin/python '$STAGE_ROOT/source/scripts/deploy_env_guard.py' verify --env-file /opt/photo-bot/.env --snapshot '$STAGE_ROOT/env-before.json'"
