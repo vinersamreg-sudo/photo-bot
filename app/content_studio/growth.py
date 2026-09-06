@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.database import ReadOnlyDatabase
 
-from .novelty import MAX_CANDIDATE_ATTEMPTS
 from .repository import PublicationSlotConflictError
 from .models import (
     ContentCategory,
@@ -160,7 +159,10 @@ class FullAutoGrowthEngine:
                 ]
                 asset = None
                 category_saturated = False
-                for candidate in rotated[:MAX_CANDIDATE_ATTEMPTS]:
+                # Search the bounded in-memory rotation fully so an abundant
+                # replenished pool can satisfy category rotation instead of
+                # falsely exhausting after the first few same-category items.
+                for candidate in rotated:
                     if candidate.sha256 in reservations[platform]:
                         continue
                     alternatives = {
