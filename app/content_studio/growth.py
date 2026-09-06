@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.database import ReadOnlyDatabase
 
-from .novelty import MAX_CANDIDATE_ATTEMPTS
 from .repository import PublicationSlotConflictError
 from .models import (
     ContentCategory,
@@ -160,7 +159,10 @@ class FullAutoGrowthEngine:
                 ]
                 asset = None
                 category_saturated = False
-                for candidate in rotated[:MAX_CANDIDATE_ATTEMPTS]:
+                # Search the bounded in-memory rotation fully so an abundant
+                # replenished pool can satisfy category rotation instead of
+                # falsely exhausting after the first few same-category items.
+                for candidate in rotated:
                     if candidate.sha256 in reservations[platform]:
                         continue
                     alternatives = {
@@ -700,7 +702,7 @@ class FullAutoGrowthEngine:
         angles = ("before_after", "prompt_example", "practical_tip")
         rotation = start.toordinal() % len(self.library)
         ideas: list[dict[str, object]] = []
-        for index in range(18):
+        for index in range(max(18, len(self.library))):
             asset = self.library[(rotation + index) % len(self.library)]
             angle = angles[(start.toordinal() + index) % len(angles)]
             measured = float((metrics.get(asset.theme) or {}).get("score", 0))

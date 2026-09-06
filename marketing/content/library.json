@@ -7,13 +7,17 @@
       "id": "business-portrait",
       "file": "ravuna-pilot-before-after.png",
       "sha256": "131e60cdd9810c2e7ca9d12ce1c91de8d691a13904420ca9132d9ec0bbe51686",
-      "title": "Деловой портрет без фотостудии",
+      "title": "������� ������� ��� ����������",
       "theme": "portrait",
       "category": "business_photo",
       "transformation": "business_photo",
-      "hook": "Один запрос — и деловой образ готов",
-      "prompt_example": "Поменяй одежду на светлый деловой костюм и сделай спокойный студийный фон",
-      "hashtags": ["#Ravuna", "#ДеловоеФото", "#ИИФото"],
+      "hook": "���� ������ � � ������� ����� �����",
+      "prompt_example": "������� ������ �� ������� ������� ������ � ������ ��������� ��������� ���",
+      "hashtags": [
+        "#Ravuna",
+        "#�����������",
+        "#������"
+      ],
       "score": 1.2,
       "commercial_use": true,
       "customer_data": false
@@ -22,13 +26,17 @@
       "id": "clean-background",
       "file": "ravuna-background-before-after.png",
       "sha256": "a4c2a6054396838ef5bca9db3d5d0344d292931190c3213249a4796a0e2adb84",
-      "title": "Аккуратный фон",
+      "title": "���������� ���",
       "theme": "background",
       "category": "replace_background",
       "transformation": "replace_background",
-      "hook": "Один запрос — и фон больше не мешает",
-      "prompt_example": "Улучши фон, сохрани человека, позу и одежду",
-      "hashtags": ["#Ravuna", "#ЗаменаФона", "#ОбработкаФото"],
+      "hook": "���� ������ � � ��� ������ �� ������",
+      "prompt_example": "������ ���, ������� ��������, ���� � ������",
+      "hashtags": [
+        "#Ravuna",
+        "#����������",
+        "#�������������"
+      ],
       "score": 1.3,
       "commercial_use": true,
       "customer_data": false
@@ -37,13 +45,17 @@
       "id": "old-photo",
       "file": "ravuna-restoration-before-after.png",
       "sha256": "2cb1abd16b9bd59151e4ff88d7cd05df998f323a36150f38796f575ab76d8a59",
-      "title": "Восстановление старого фото",
+      "title": "�������������� ������� ����",
       "theme": "restoration",
       "category": "restore",
       "transformation": "restore_photo",
-      "hook": "Хотели выбросить эту фотографию",
-      "prompt_example": "Восстанови царапины, добавь естественный цвет и сохрани лицо",
-      "hashtags": ["#Ravuna", "#ВосстановлениеФото", "#СтарыеФото"],
+      "hook": "������ ��������� ��� ����������",
+      "prompt_example": "���������� ��������, ������ ������������ ���� � ������� ����",
+      "hashtags": [
+        "#Ravuna",
+        "#������������������",
+        "#����������"
+      ],
       "score": 1.4,
       "commercial_use": true,
       "customer_data": false
@@ -52,13 +64,17 @@
       "id": "remove-object",
       "file": "ravuna-object-removal-before-after.png",
       "sha256": "5200dca25cb5f03e53ea951563786934760e98ff994580322aa2c798f365b8a9",
-      "title": "Удаление лишних объектов",
+      "title": "�������� ������ ��������",
       "theme": "object_removal",
       "category": "remove_object",
       "transformation": "remove_object",
-      "hook": "Лишние предметы исчезли за один запрос",
-      "prompt_example": "Убери красную урну и дорожный знак, остальное не меняй",
-      "hashtags": ["#Ravuna", "#УдалениеОбъектов", "#Фото"],
+      "hook": "������ �������� ������� �� ���� ������",
+      "prompt_example": "����� ������� ���� � �������� ����, ��������� �� �����",
+      "hashtags": [
+        "#Ravuna",
+        "#����������������",
+        "#����"
+      ],
       "score": 1.2,
       "commercial_use": true,
       "customer_data": false
@@ -67,13 +83,17 @@
       "id": "photo-enhancement",
       "file": "ravuna-enhancement-before-after.png",
       "sha256": "fbb8a6e1ee9b19b930404fd873965594b52dcdfa73f6a58900be79c4d3380d88",
-      "title": "Улучшение качества",
+      "title": "��������� ��������",
       "theme": "enhancement",
       "category": "upscale",
       "transformation": "upscale",
-      "hook": "Тёмный шумный снимок стал выглядеть вот так",
-      "prompt_example": "Улучши качество, убери шум и выровняй свет без изменения кадра",
-      "hashtags": ["#Ravuna", "#УлучшениеФото", "#КачествоФото"],
+      "hook": "Ҹ���� ������ ������ ���� ��������� ��� ���",
+      "prompt_example": "������ ��������, ����� ��� � �������� ���� ��� ��������� �����",
+      "hashtags": [
+        "#Ravuna",
+        "#�������������",
+        "#������������"
+      ],
       "score": 1.1,
       "commercial_use": true,
       "customer_data": false
@@ -82,13 +102,17 @@
       "id": "outfit-change",
       "file": "ravuna-outfit-before-after.png",
       "sha256": "6f13e73900e1d426be8694de62b5f6665f872deb97103ba7d1c8a9b1d0dd6fd5",
-      "title": "Замена одежды",
+      "title": "������ ������",
       "theme": "outfit",
       "category": "replace_clothes",
       "transformation": "replace_clothes",
-      "hook": "Одежду поменяли, лицо не трогали",
-      "prompt_example": "Замени худи на тёмно-синюю рубашку и сделай нейтральный фон",
-      "hashtags": ["#Ravuna", "#ЗаменаОдежды", "#ОбработкаФото"],
+      "hook": "������ ��������, ���� �� �������",
+      "prompt_example": "������ ���� �� ����-����� ������� � ������ ����������� ���",
+      "hashtags": [
+        "#Ravuna",
+        "#������������",
+        "#�������������"
+      ],
       "score": 1.3,
       "commercial_use": true,
       "customer_data": false
@@ -97,14 +121,474 @@
       "id": "mobile-reframe",
       "file": "ravuna-reframe-before-after.png",
       "sha256": "dbc28e1cd8c1d37d203a582aa8bf40c2d62d28b44a1f4fbff2c045e0f2d873f8",
-      "title": "Кадр для телефона",
+      "title": "���� ��� ��������",
       "theme": "car",
       "category": "car",
       "transformation": "other",
-      "hook": "Фото стало вертикальным — автомобиль остался целиком",
-      "prompt_example": "Измени размер для загрузки на сотовый телефон, сохрани автомобиль целиком",
-      "hashtags": ["#Ravuna", "#ФотоДляТелефона", "#ИИФото"],
-      "score": 1.0,
+      "hook": "���� ����� ������������ � ���������� ������� �������",
+      "prompt_example": "������ ������ ��� �������� �� ������� �������, ������� ���������� �������",
+      "hashtags": [
+        "#Ravuna",
+        "#���������������",
+        "#������"
+      ],
+      "score": 1,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-remove-object-park",
+      "file": "remove-object-park.png",
+      "sha256": "ebf4a004527ca0cd8dca0f1edb22e721a6be81576156f1e1046a9a328dbe9756",
+      "title": "�������� �������� � �����",
+      "theme": "object_removal",
+      "category": "remove_object",
+      "transformation": "remove_object",
+      "hook": "������� ������ �� �����",
+      "prompt_example": "����� ���� � ����, ��������� ���� �� �����",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#remove_object"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-remove-object-room",
+      "file": "remove-object-room.png",
+      "sha256": "1228c39dc329c2f6496e91b0015872cc809d937399692b35beaeff3c05f91d10",
+      "title": "������ ��������",
+      "theme": "object_removal",
+      "category": "remove_object",
+      "transformation": "remove_object",
+      "hook": "������� ��� ������ �������",
+      "prompt_example": "����� ������� � ������, ������� ����������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#remove_object"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-remove-object-table",
+      "file": "remove-object-table.png",
+      "sha256": "7b4f1226617d8e56374ab20be40502333ea78596d2ac588e5ccd882ef9344496",
+      "title": "������ ����",
+      "theme": "object_removal",
+      "category": "remove_object",
+      "transformation": "remove_object",
+      "hook": "������� ������� ����� ��������",
+      "prompt_example": "����� ������� � ������� �� �����",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#object_cleanup"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-background-seaside",
+      "file": "background-seaside.png",
+      "sha256": "7e9438143abcddd5a5633ff592e7d56ef7a3346f86625844228b2af3425c6823",
+      "title": "������� ���",
+      "theme": "background",
+      "category": "replace_background",
+      "transformation": "replace_background",
+      "hook": "����� ��� ������ ����������",
+      "prompt_example": "������ ����� ����� �� ��������� ������� ���",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#replace_background"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-background-studio",
+      "file": "background-studio.png",
+      "sha256": "2d7858b48b7011ac698baf424cf88ec7d939325b7ee6c23e042ec0033e600c76",
+      "title": "����������� ������",
+      "theme": "background",
+      "category": "replace_background",
+      "transformation": "replace_background",
+      "hook": "��� ��� ������� ��� ������",
+      "prompt_example": "������ ������ ����������� ��������� ���",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#replace_background"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-background-garden",
+      "file": "background-garden.png",
+      "sha256": "b7ca42f1ab58fd3dfb6ff54d7fe0ee4dfcaaf6c264152a5580ebe1031c8298a8",
+      "title": "������� ��� ��� ������",
+      "theme": "background",
+      "category": "replace_background",
+      "transformation": "replace_background",
+      "hook": "����� �������� ����������",
+      "prompt_example": "������ ����� �� ������� ������� ���",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#replace_background"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-restore-album",
+      "file": "restore-album.png",
+      "sha256": "3291d901e7ef093f4f5fca1042853e5b1443001677912aea89c8735dfae76e8b",
+      "title": "�������� ������",
+      "theme": "restoration",
+      "category": "restore",
+      "transformation": "restore_photo",
+      "hook": "������ ������ ����� ��������",
+      "prompt_example": "���������� ���� � ����� �������� ��� ��������� ���",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#restore_photo"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-restore-postcard",
+      "file": "restore-postcard.png",
+      "sha256": "405fb0f3e10693810f30f1c6c149d2cb8ddbe424fbbf48cf8c80f8e2025808b7",
+      "title": "������ ��������",
+      "theme": "restoration",
+      "category": "restore",
+      "transformation": "restore_photo",
+      "hook": "������� ������ ������� ������",
+      "prompt_example": "����� ������ � ����������, ������� ����������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#restore_photo"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-restore-house",
+      "file": "restore-house.png",
+      "sha256": "832b85dab7b66176ff637333701f3831830ad9ebbabdf0afa65a39e098103693",
+      "title": "��� �� ��������� ������",
+      "theme": "restoration",
+      "category": "restore",
+      "transformation": "restore_photo",
+      "hook": "�������� ���� � � ����� ���",
+      "prompt_example": "���������� ������ � ������������ ���� ����������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#restore_photo"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-clothing-casual",
+      "file": "clothing-casual.png",
+      "sha256": "2b4b74b1f6231d71af6d3af0a8c793d6d90501846b9d340e903cac2a97d5f456",
+      "title": "������������ �����",
+      "theme": "outfit",
+      "category": "replace_clothes",
+      "transformation": "replace_clothes",
+      "hook": "��������� ������ �����",
+      "prompt_example": "������ ���� �� ������������ �����",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#replace_clothes"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-clothing-evening",
+      "file": "clothing-evening.png",
+      "sha256": "bfb562d525e4d73d5746e273cd8d4c69ca899046f08bffe22ff0e668f70e2504",
+      "title": "�������� �����",
+      "theme": "outfit",
+      "category": "replace_clothes",
+      "transformation": "replace_clothes",
+      "hook": "����� ��� ������",
+      "prompt_example": "������ ������� ������ �� ��������� �������� �����",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#replace_clothes"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-clothing-sport",
+      "file": "clothing-sport.png",
+      "sha256": "28278d88826f394d1d6bf4bb982a6362f7d04d4af628261fd2e7d5f53d69db87",
+      "title": "���������� �����",
+      "theme": "outfit",
+      "category": "replace_clothes",
+      "transformation": "replace_clothes",
+      "hook": "����� ����� ��� ����������",
+      "prompt_example": "������ ������ �� ����������� ���������� ������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#replace_clothes"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-product-ceramic",
+      "file": "product-ceramic.png",
+      "sha256": "c41b6f65e02a5a14a1d2ada34e83b19875281b96a0016ffc28b638fe2dc5f507",
+      "title": "���������� ������",
+      "theme": "product_photo",
+      "category": "products",
+      "transformation": "other",
+      "hook": "�������� ���� ��� �������",
+      "prompt_example": "������ ������ ����������� ���� ��� ������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#product_cleanup"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-product-lamp",
+      "file": "product-lamp.png",
+      "sha256": "8f57dc300a75270edcae6e3f10060ad98d72b18c988d5d85c6c1c4202cd503de",
+      "title": "���������� �����",
+      "theme": "product_photo",
+      "category": "products",
+      "transformation": "other",
+      "hook": "������ ������� ��� ������",
+      "prompt_example": "��������� ���������� ��� ��� ���������� ����������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#product_cleanup"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-product-backpack",
+      "file": "product-backpack.png",
+      "sha256": "e315474e428b28153bb43899b9502174576dd84b4a9bcec53f65cfb720f719c7",
+      "title": "������ ��� �������� ������",
+      "theme": "product_photo",
+      "category": "products",
+      "transformation": "other",
+      "hook": "���� ������ ��� ��������",
+      "prompt_example": "�������� ���� � ������ ������ �������� �����",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#product_cleanup"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-compose-mug-flower",
+      "file": "compose-mug-flower.png",
+      "sha256": "fbcf07ee120550440e2e8725481eabb503cecb20be744169244304c42d9b7044",
+      "title": "���������� � �������",
+      "theme": "composition",
+      "category": "products",
+      "transformation": "other",
+      "hook": "������� ���� �� ���� ����",
+      "prompt_example": "�������� ������ �� ���� 2 ����� � ������� �� ���� 1",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#compose_two_images"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-compose-book-lamp",
+      "file": "compose-book-lamp.png",
+      "sha256": "d8eb026a9d40efe0f4e68d4f093c4dd18ac3cc73b947296a4e165b39cacce5f2",
+      "title": "����� � ����",
+      "theme": "composition",
+      "category": "products",
+      "transformation": "other",
+      "hook": "��� ����������� � ���� �����",
+      "prompt_example": "������ ����� �� ���� 2 � ����� �� ���� 1",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#compose_two_images"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-compose-fruit-bowl",
+      "file": "compose-fruit-bowl.png",
+      "sha256": "a15fa61213decdf4c7315548bae074a3351c3c78128af7e10dc52db59e01d7e0",
+      "title": "������ � ����",
+      "theme": "composition",
+      "category": "products",
+      "transformation": "other",
+      "hook": "������ �� ������� ���� � �����",
+      "prompt_example": "�������� ������ �� ���� 2 � ���� �� ���� 1",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#compose_two_images"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-retouch-natural",
+      "file": "retouch-natural.png",
+      "sha256": "6f9292a52d88d728f32f3ee0313b6e0fe0de922be40f79e8cdee054f9e48a9b9",
+      "title": "������������ ������",
+      "theme": "portrait_retouch",
+      "category": "portrait",
+      "transformation": "portrait",
+      "hook": "������ ��� ��������",
+      "prompt_example": "������ ������ ������������ ������ ����",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#portrait_retouch"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-retouch-window",
+      "file": "retouch-window.png",
+      "sha256": "28b2e21048c3de3fea0fb72a7439927b6653ed0542690cd9bb73a9eeeeb251b2",
+      "title": "���� � ����",
+      "theme": "portrait_retouch",
+      "category": "portrait",
+      "transformation": "portrait",
+      "hook": "�������������� ���� �� ��������",
+      "prompt_example": "�������� ���� �� ���� � ������� ������������ ���",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#portrait_retouch"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-retouch-expression",
+      "file": "retouch-expression.png",
+      "sha256": "a2fe344227990e2ee58666b64caf42a7aecce9c35978cf2f13a04dd79efe2926",
+      "title": "������ �������",
+      "theme": "portrait_retouch",
+      "category": "portrait",
+      "transformation": "portrait",
+      "hook": "������� ��� �������",
+      "prompt_example": "������ ���� � �������� �������� ��� ������� ������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#portrait_retouch"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-interior-kitchen",
+      "file": "interior-kitchen.png",
+      "sha256": "d47d6735bef1f3447d136a4bebcbbde48ba4fb07edd2b1515c6075a7cc22fad1",
+      "title": "������� �����",
+      "theme": "interior",
+      "category": "real_estate",
+      "transformation": "other",
+      "hook": "�������� �������� �� ����",
+      "prompt_example": "����� ���������� ���������� � �������� ���� �����",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#interior_cleanup"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-interior-office",
+      "file": "interior-office.png",
+      "sha256": "aeb5204f30639f6dbfb8fec79891c5c341e182ff41ad916c30e08b0464ee7f0c",
+      "title": "������� �����",
+      "theme": "interior",
+      "category": "real_estate",
+      "transformation": "other",
+      "hook": "������� � �������� �����",
+      "prompt_example": "������ ������� ����� ����������, ������� ������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#interior_cleanup"
+      ],
+      "score": 2,
+      "commercial_use": true,
+      "customer_data": false
+    },
+    {
+      "id": "synthetic-interior-bedroom",
+      "file": "interior-bedroom.png",
+      "sha256": "2451ef5999d60a3a12aa9b201530de6db578ff42473c67d84c0c089a7c2f2ea5",
+      "title": "��������� �������",
+      "theme": "interior",
+      "category": "real_estate",
+      "transformation": "other",
+      "hook": "������ ��������� ���������",
+      "prompt_example": "������ ���� ������� ������ � ����� ������ ����������",
+      "hashtags": [
+        "#Ravuna",
+        "#������",
+        "#interior_cleanup"
+      ],
+      "score": 2,
       "commercial_use": true,
       "customer_data": false
     }

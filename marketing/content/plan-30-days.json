@@ -3,35 +3,211 @@
   "timezone": "Europe/Samara",
   "publish_time": "12:00",
   "daily_units": [
-    {"day": 1, "rubric": "before_after", "topic": "Деловой образ", "format": "image"},
-    {"day": 2, "rubric": "one_prompt_result", "topic": "Портрет для профиля", "format": "video"},
-    {"day": 3, "rubric": "replace_background", "topic": "Светлая кухня", "format": "image"},
-    {"day": 4, "rubric": "replace_clothes", "topic": "Вечерний образ", "format": "video"},
-    {"day": 5, "rubric": "remove_objects", "topic": "Убрать предмет справа", "format": "image"},
-    {"day": 6, "rubric": "old_photo_improvement", "topic": "Царапины и выцветание", "format": "video"},
-    {"day": 7, "rubric": "restoration", "topic": "Семейный архив", "format": "image"},
-    {"day": 8, "rubric": "quality_improvement", "topic": "Шум и детализация", "format": "video"},
-    {"day": 9, "rubric": "useful_prompts", "topic": "Как точно описать фон", "format": "text_image"},
-    {"day": 10, "rubric": "common_user_mistakes", "topic": "Неясный запрос без цели", "format": "text_image"},
-    {"day": 11, "rubric": "before_after", "topic": "Фото для резюме", "format": "image"},
-    {"day": 12, "rubric": "one_prompt_result", "topic": "Убрать прохожего", "format": "video"},
-    {"day": 13, "rubric": "replace_background", "topic": "Морское побережье", "format": "image"},
-    {"day": 14, "rubric": "replace_clothes", "topic": "Повседневный образ", "format": "video"},
-    {"day": 15, "rubric": "remove_objects", "topic": "Очистить стол", "format": "image"},
-    {"day": 16, "rubric": "old_photo_improvement", "topic": "Повысить контраст", "format": "video"},
-    {"day": 17, "rubric": "restoration", "topic": "Восстановить угол снимка", "format": "image"},
-    {"day": 18, "rubric": "quality_improvement", "topic": "Фото с телефона", "format": "video"},
-    {"day": 19, "rubric": "useful_prompts", "topic": "Как попросить заменить одежду", "format": "text_image"},
-    {"day": 20, "rubric": "common_user_mistakes", "topic": "Слишком много изменений сразу", "format": "text_image"},
-    {"day": 21, "rubric": "before_after", "topic": "Спокойный студийный фон", "format": "image"},
-    {"day": 22, "rubric": "one_prompt_result", "topic": "Добавить очки", "format": "video"},
-    {"day": 23, "rubric": "replace_background", "topic": "Город вечером", "format": "image"},
-    {"day": 24, "rubric": "replace_clothes", "topic": "Светлый пиджак", "format": "video"},
-    {"day": 25, "rubric": "remove_objects", "topic": "Убрать провода", "format": "image"},
-    {"day": 26, "rubric": "old_photo_improvement", "topic": "Колоризация", "format": "video"},
-    {"day": 27, "rubric": "restoration", "topic": "Складки и пятна", "format": "image"},
-    {"day": 28, "rubric": "quality_improvement", "topic": "Слабое освещение", "format": "video"},
-    {"day": 29, "rubric": "useful_prompts", "topic": "Пример хорошего запроса до/после", "format": "text_image"},
-    {"day": 30, "rubric": "common_user_mistakes", "topic": "Как не потерять важную деталь", "format": "text_image"}
+    {
+      "day": 1,
+      "rubric": "before_after",
+      "topic": "������� �����",
+      "format": "image"
+    },
+    {
+      "day": 2,
+      "rubric": "one_prompt_result",
+      "topic": "������� ��� �������",
+      "format": "video"
+    },
+    {
+      "day": 3,
+      "rubric": "replace_background",
+      "topic": "������� �����",
+      "format": "image"
+    },
+    {
+      "day": 4,
+      "rubric": "replace_clothes",
+      "topic": "�������� �����",
+      "format": "video"
+    },
+    {
+      "day": 5,
+      "rubric": "remove_objects",
+      "topic": "������ ������� ������",
+      "format": "image"
+    },
+    {
+      "day": 6,
+      "rubric": "old_photo_improvement",
+      "topic": "�������� � ����������",
+      "format": "video"
+    },
+    {
+      "day": 7,
+      "rubric": "restoration",
+      "topic": "�������� �����",
+      "format": "image"
+    },
+    {
+      "day": 8,
+      "rubric": "quality_improvement",
+      "topic": "��� � �����������",
+      "format": "video"
+    },
+    {
+      "day": 9,
+      "rubric": "useful_prompts",
+      "topic": "��� ����� ������� ���",
+      "format": "text_image"
+    },
+    {
+      "day": 10,
+      "rubric": "common_user_mistakes",
+      "topic": "������� ������ ��� ����",
+      "format": "text_image"
+    },
+    {
+      "day": 11,
+      "rubric": "before_after",
+      "topic": "���� ��� ������",
+      "format": "image"
+    },
+    {
+      "day": 12,
+      "rubric": "one_prompt_result",
+      "topic": "������ ���������",
+      "format": "video"
+    },
+    {
+      "day": 13,
+      "rubric": "replace_background",
+      "topic": "������� ���������",
+      "format": "image"
+    },
+    {
+      "day": 14,
+      "rubric": "replace_clothes",
+      "topic": "������������ �����",
+      "format": "video"
+    },
+    {
+      "day": 15,
+      "rubric": "remove_objects",
+      "topic": "�������� ����",
+      "format": "image"
+    },
+    {
+      "day": 16,
+      "rubric": "old_photo_improvement",
+      "topic": "�������� ��������",
+      "format": "video"
+    },
+    {
+      "day": 17,
+      "rubric": "restoration",
+      "topic": "������������ ���� ������",
+      "format": "image"
+    },
+    {
+      "day": 18,
+      "rubric": "quality_improvement",
+      "topic": "���� � ��������",
+      "format": "video"
+    },
+    {
+      "day": 19,
+      "rubric": "useful_prompts",
+      "topic": "��� ��������� �������� ������",
+      "format": "text_image"
+    },
+    {
+      "day": 20,
+      "rubric": "common_user_mistakes",
+      "topic": "������� ����� ��������� �����",
+      "format": "text_image"
+    },
+    {
+      "day": 21,
+      "rubric": "before_after",
+      "topic": "��������� ��������� ���",
+      "format": "image"
+    },
+    {
+      "day": 22,
+      "rubric": "one_prompt_result",
+      "topic": "�������� ����",
+      "format": "video"
+    },
+    {
+      "day": 23,
+      "rubric": "replace_background",
+      "topic": "����� �������",
+      "format": "image"
+    },
+    {
+      "day": 24,
+      "rubric": "replace_clothes",
+      "topic": "������� ������",
+      "format": "video"
+    },
+    {
+      "day": 25,
+      "rubric": "remove_objects",
+      "topic": "������ �������",
+      "format": "image"
+    },
+    {
+      "day": 26,
+      "rubric": "old_photo_improvement",
+      "topic": "�����������",
+      "format": "video"
+    },
+    {
+      "day": 27,
+      "rubric": "restoration",
+      "topic": "������� � �����",
+      "format": "image"
+    },
+    {
+      "day": 28,
+      "rubric": "quality_improvement",
+      "topic": "������ ���������",
+      "format": "video"
+    },
+    {
+      "day": 29,
+      "rubric": "useful_prompts",
+      "topic": "������ �������� ������� ��/�����",
+      "format": "text_image"
+    },
+    {
+      "day": 30,
+      "rubric": "common_user_mistakes",
+      "topic": "��� �� �������� ������ ������",
+      "format": "text_image"
+    }
+  ],
+  "asset_pool": [
+    "synthetic-remove-object-park",
+    "synthetic-remove-object-room",
+    "synthetic-remove-object-table",
+    "synthetic-background-seaside",
+    "synthetic-background-studio",
+    "synthetic-background-garden",
+    "synthetic-restore-album",
+    "synthetic-restore-postcard",
+    "synthetic-restore-house",
+    "synthetic-clothing-casual",
+    "synthetic-clothing-evening",
+    "synthetic-clothing-sport",
+    "synthetic-product-ceramic",
+    "synthetic-product-lamp",
+    "synthetic-product-backpack",
+    "synthetic-compose-mug-flower",
+    "synthetic-compose-book-lamp",
+    "synthetic-compose-fruit-bowl",
+    "synthetic-retouch-natural",
+    "synthetic-retouch-window",
+    "synthetic-retouch-expression",
+    "synthetic-interior-kitchen",
+    "synthetic-interior-office",
+    "synthetic-interior-bedroom"
   ]
 }

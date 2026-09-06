@@ -255,6 +255,9 @@ class ContentStudioNoveltyTests(unittest.TestCase):
             publisher=MaxPublisher(publishing_enabled=True, transport=transport),
         )
         engine = FullAutoGrowthEngine(service)
+        # Keep the exhaustion regression focused on the original seven-asset fixture;
+        # the production library may contain a larger replenished pool.
+        engine.library = engine.library[:7]
 
         class FakeVideo:
             @staticmethod
@@ -278,6 +281,21 @@ class ContentStudioNoveltyTests(unittest.TestCase):
         )
         self.assertEqual(transport.published, 0)
         self.assertGreater(service.status()["novelty_events"], 0)
+
+    def test_future_exhaustion_event_is_retried_after_pool_replenishment(self) -> None:
+        settings = _settings(self.root / "retryable-slots", self.root / "approved", publishing=False)
+        settings.approved_assets_dir.mkdir(parents=True, exist_ok=True)
+        service = ContentStudioService(settings)
+        future = "2999-01-01T12:00:00+00:00"
+        past = "2000-01-01T12:00:00+00:00"
+        service.repository.record_novelty_event(
+            "future-exhausted", platform="max", reason="candidate_pool_exhausted", scheduled_time=future
+        )
+        service.repository.record_novelty_event(
+            "past-exhausted", platform="max", reason="candidate_pool_exhausted", scheduled_time=past
+        )
+        self.assertFalse(service.repository.slot_has_post("max", future))
+        self.assertTrue(service.repository.slot_has_post("max", past))
 
     def test_retry_of_published_job_never_calls_transport_again(self) -> None:
         approved = self.root / "retry-approved"

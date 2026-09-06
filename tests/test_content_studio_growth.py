@@ -184,6 +184,8 @@ class ContentStudioGrowthTests(unittest.TestCase):
             },
         )
         engine = FullAutoGrowthEngine(service)
+        # This test asserts the original seven-asset queue contract explicitly.
+        engine.library = engine.library[:7]
 
         class FakeVideo:
             @staticmethod
