@@ -702,7 +702,7 @@ class FullAutoGrowthEngine:
         angles = ("before_after", "prompt_example", "practical_tip")
         rotation = start.toordinal() % len(self.library)
         ideas: list[dict[str, object]] = []
-        for index in range(18):
+        for index in range(max(18, len(self.library))):
             asset = self.library[(rotation + index) % len(self.library)]
             angle = angles[(start.toordinal() + index) % len(angles)]
             measured = float((metrics.get(asset.theme) or {}).get("score", 0))
