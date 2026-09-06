@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -594,15 +595,27 @@ class ContentStudioRepository:
                 (platform, scheduled_time),
             ).fetchone():
                 return True
-            if connection.execute(
-                """SELECT 1 FROM content_novelty_events
+            novelty_event = connection.execute(
+                """SELECT reason FROM content_novelty_events
                    WHERE platform=? AND scheduled_time=?
                      AND reason IN (
                          'candidate_pool_exhausted','recent_category_saturation'
                      ) LIMIT 1""",
                 (platform, scheduled_time),
-            ).fetchone():
-                return True
+            ).fetchone()
+            if novelty_event:
+                # Exhaustion/saturation is a planning outcome, not a durable
+                # publication claim.  Once the slot is in the past it must not
+                # be backfilled; future slots remain retryable after the asset
+                # pool is replenished.
+                try:
+                    slot_time = datetime.fromisoformat(scheduled_time)
+                    if slot_time.tzinfo is None:
+                        slot_time = slot_time.replace(tzinfo=timezone.utc)
+                    if slot_time <= datetime.now(timezone.utc):
+                        return True
+                except ValueError:
+                    return True
             if platform != "max":
                 return False
             return bool(

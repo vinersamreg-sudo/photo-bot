@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "policy": "Only owner-provided, purpose-created synthetic, or explicit marketing-consent assets may be listed.",
   "assets": [
     {
@@ -71,6 +71,246 @@
       "customer_data": false,
       "approved_by": "project_owner_full_auto_authorization",
       "purpose": "Ravuna mobile reframing demonstration"
+    },
+    {
+      "file": "remove-object-park.png",
+      "sha256": "ebf4a004527ca0cd8dca0f1edb22e721a6be81576156f1e1046a9a328dbe9756",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "remove-object-room.png",
+      "sha256": "1228c39dc329c2f6496e91b0015872cc809d937399692b35beaeff3c05f91d10",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "remove-object-table.png",
+      "sha256": "7b4f1226617d8e56374ab20be40502333ea78596d2ac588e5ccd882ef9344496",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "background-seaside.png",
+      "sha256": "7e9438143abcddd5a5633ff592e7d56ef7a3346f86625844228b2af3425c6823",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "background-studio.png",
+      "sha256": "2d7858b48b7011ac698baf424cf88ec7d939325b7ee6c23e042ec0033e600c76",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "background-garden.png",
+      "sha256": "b7ca42f1ab58fd3dfb6ff54d7fe0ee4dfcaaf6c264152a5580ebe1031c8298a8",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "restore-album.png",
+      "sha256": "3291d901e7ef093f4f5fca1042853e5b1443001677912aea89c8735dfae76e8b",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "restore-postcard.png",
+      "sha256": "405fb0f3e10693810f30f1c6c149d2cb8ddbe424fbbf48cf8c80f8e2025808b7",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "restore-house.png",
+      "sha256": "832b85dab7b66176ff637333701f3831830ad9ebbabdf0afa65a39e098103693",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "clothing-casual.png",
+      "sha256": "2b4b74b1f6231d71af6d3af0a8c793d6d90501846b9d340e903cac2a97d5f456",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "clothing-evening.png",
+      "sha256": "bfb562d525e4d73d5746e273cd8d4c69ca899046f08bffe22ff0e668f70e2504",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "clothing-sport.png",
+      "sha256": "28278d88826f394d1d6bf4bb982a6362f7d04d4af628261fd2e7d5f53d69db87",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "product-ceramic.png",
+      "sha256": "c41b6f65e02a5a14a1d2ada34e83b19875281b96a0016ffc28b638fe2dc5f507",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "product-lamp.png",
+      "sha256": "8f57dc300a75270edcae6e3f10060ad98d72b18c988d5d85c6c1c4202cd503de",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "product-backpack.png",
+      "sha256": "e315474e428b28153bb43899b9502174576dd84b4a9bcec53f65cfb720f719c7",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "compose-mug-flower.png",
+      "sha256": "fbcf07ee120550440e2e8725481eabb503cecb20be744169244304c42d9b7044",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "compose-book-lamp.png",
+      "sha256": "d8eb026a9d40efe0f4e68d4f093c4dd18ac3cc73b947296a4e165b39cacce5f2",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "compose-fruit-bowl.png",
+      "sha256": "a15fa61213decdf4c7315548bae074a3351c3c78128af7e10dc52db59e01d7e0",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "retouch-natural.png",
+      "sha256": "6f9292a52d88d728f32f3ee0313b6e0fe0de922be40f79e8cdee054f9e48a9b9",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "retouch-window.png",
+      "sha256": "28b2e21048c3de3fea0fb72a7439927b6653ed0542690cd9bb73a9eeeeb251b2",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "retouch-expression.png",
+      "sha256": "a2fe344227990e2ee58666b64caf42a7aecce9c35978cf2f13a04dd79efe2926",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "interior-kitchen.png",
+      "sha256": "d47d6735bef1f3447d136a4bebcbbde48ba4fb07edd2b1515c6075a7cc22fad1",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "interior-office.png",
+      "sha256": "aeb5204f30639f6dbfb8fec79891c5c341e182ff41ad916c30e08b0464ee7f0c",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "interior-bedroom.png",
+      "sha256": "2451ef5999d60a3a12aa9b201530de6db578ff42473c67d84c0c089a7c2f2ea5",
+      "source": "OpenAI Image API gpt-image-2",
+      "subject": "entirely synthetic fictional scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_fallback_generation_20260906",
+      "purpose": "Ravuna Content Studio replenishment"
     }
   ]
 }
