@@ -291,10 +291,12 @@ class ContentStudioTests(unittest.TestCase):
             with Image.open(self.service.storage.resolve(plan["content_cards"][name])) as card:
                 self.assertEqual(card.size, (spec.width, spec.height))
 
-    def test_generated_post_is_factual_disclosed_and_utm_tagged(self) -> None:
+    def test_generated_post_is_factual_and_utm_tagged(self) -> None:
         generated = self.generate()
         post = self.service.repository.get_post(generated["post_id"])
-        self.assertIn(DISCLOSURE, post["body"])
+        self.assertNotIn("Демонстрационный пример Ravuna.", post["body"])
+        self.assertNotIn("Изображения созданы специально для демонстрации возможностей сервиса.", post["body"])
+        self.assertNotIn("Синтетический пример Ravuna.", post["body"])
         self.assertIn(CTA_LEAD, post["cta"])
         self.assertIn("utm_source=max", post["utm_url"])
         self.assertIn("utm_medium=channel", post["utm_url"])
@@ -302,14 +304,14 @@ class ContentStudioTests(unittest.TestCase):
         self.assertNotIn("к нам обрати", post["body"].lower())
         self.assertTrue(post["generator_prompt_en"].isascii())
 
-    def test_all_templates_include_mandatory_marking(self) -> None:
+    def test_all_templates_omit_synthetic_disclosure(self) -> None:
         generator = ContentGenerator("https://max.ru/ravuna_bot")
         for transformation in TransformationType:
             with self.subTest(transformation=transformation.value):
                 copy = generator.generate(transformation, post_id="post", platform="max")
-                self.assertIn(DISCLOSURE, copy.body)
                 self.assertNotIn("Демонстрационный пример Ravuna.", copy.body)
                 self.assertNotIn("Изображения созданы специально", copy.body)
+                self.assertNotIn("Синтетический пример Ravuna.", copy.body)
                 self.assertIn("2 бесплатные обработки", copy.cta)
 
     def test_library_unicode_reaches_max_payload_without_replacement_chars(self) -> None:
@@ -513,7 +515,7 @@ class ContentStudioTests(unittest.TestCase):
         )
         self.assertEqual(preview.status, "planned")
         self.assertEqual(dry_run.status, "simulated")
-        self.assertTrue(dry_run.payload["demo_disclosure_present"])
+        self.assertFalse(dry_run.payload["demo_disclosure_present"])
         self.assertEqual(dry_run.payload["media_path"], "<content-studio-media>")
         self.assertEqual(self.service.status()["publication_attempts"], 2)
         self.assertEqual(self.service.status()["published_posts"], 0)

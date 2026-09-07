@@ -9,9 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from .models import TransformationType
 
 
-DISCLOSURE = (
-    "Синтетический пример Ravuna."
-)
+DISCLOSURE = ""
 CTA_LEAD = "🎁 Получите 2 бесплатные обработки\n\n👇 Попробовать Ravuna"
 FORBIDDEN_STORY_FRAGMENTS = (
     "к нам обрати",
@@ -140,14 +138,13 @@ class ContentGenerator:
         result_lines = "\n".join(f"• {line}" for line in template.results)
         body = (
             f"Задача:\n{template.task}\n\n"
-            f"Результат:\n{result_lines}\n\n"
-            f"{DISCLOSURE}"
+            f"Результат:\n{result_lines}"
         )
         cta = f"{CTA_LEAD}:\n{utm_url}"
         internal_prompt = (
             "Create factual Russian demo copy for the transformation "
             f"'{transformation_type.value}'. Use a task/result structure, no customer story, "
-            "no testimonial, include the short Ravuna demo disclosure and CTA."
+            "no testimonial, include the attributed CTA."
         )
         _validate_copy(title, body, cta, internal_prompt)
         return GeneratedPostCopy(
@@ -197,13 +194,13 @@ class ContentGenerator:
         generated_title = titles[variant].strip()
         body = (
             f"{task_leads[variant]}: «{prompt_example.strip()}»\n\n"
-            f"{result_lines[variant]}\n\n{DISCLOSURE}"
+            f"{result_lines[variant]}"
         )
         cta = f"{CTA_LEAD}:\n{utm_url}"
         internal_prompt = (
             "Create one factual Russian hook/task/result demo variant for "
             f"'{transformation_type.value}'. Never invent a customer story or testimonial. "
-            "Include the short Ravuna demo disclosure and attributed CTA."
+            "Include the attributed CTA."
         )
         _validate_copy(generated_title, body, cta, internal_prompt)
         return GeneratedPostCopy(
@@ -253,8 +250,6 @@ def _validate_copy(title: str, body: str, cta: str, internal_prompt: str) -> Non
     combined = f"{title}\n{body}\n{cta}".lower()
     if any(fragment in combined for fragment in FORBIDDEN_STORY_FRAGMENTS):
         raise ValueError("customer stories and testimonials are forbidden")
-    if DISCLOSURE not in body:
-        raise ValueError("mandatory demonstration disclosure is missing")
     if "utm_source=" not in cta or "utm_medium=" not in cta or "utm_campaign=" not in cta:
         raise ValueError("CTA URL must carry UTM parameters")
     if "start=src_" not in cta:
