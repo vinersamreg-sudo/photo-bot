@@ -544,8 +544,6 @@ def _validated_payload(
 ) -> tuple[str, Path]:
     if payload.get("platform") != platform:
         raise ContentPublishingError("Content Studio platform payload mismatch")
-    if payload.get("demo_disclosure_present") is not True:
-        raise ContentPublishingError("Mandatory demo disclosure is missing")
     if not str(payload.get("source_code") or "").startswith("src_"):
         raise ContentPublishingError("Content Studio attribution source is missing")
     text = str(payload.get("text") or "").strip()

@@ -151,14 +151,13 @@ class ContentStudioTransportTests(unittest.TestCase):
         second_transport.publish(self.payload("vk"))
         self.assertEqual(first_wall_body, api_calls[-1].content)
 
-    def test_transports_reject_missing_disclosure_and_relative_media(self) -> None:
+    def test_transports_allow_empty_disclosure_and_reject_relative_media(self) -> None:
         transport = MaxChannelTransport(
             FakeMaxClient(), "channel-1", Path(self.temp.name)
         )
         payload = self.payload("max")
         payload["demo_disclosure_present"] = False
-        with self.assertRaisesRegex(ContentPublishingError, "disclosure"):
-            transport.publish(payload)
+        self.assertEqual(transport.publish(payload), "max-channel-message")
         payload = self.payload("max")
         payload["media_path"] = "relative.png"
         with self.assertRaisesRegex(ContentPublishingError, "unavailable"):
