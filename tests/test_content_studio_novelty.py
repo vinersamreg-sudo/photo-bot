@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from app.content_studio.config import ContentStudioSettings
-from app.content_studio.content_generator import ContentGenerator
+from app.content_studio.content_generator import DISCLOSURE, ContentGenerator
 from app.content_studio.growth import FullAutoGrowthEngine
 from app.content_studio.models import (
     ContentCategory,
@@ -129,9 +129,7 @@ class ContentStudioNoveltyTests(unittest.TestCase):
     def test_caption_normalization_ignores_new_utm_uuid_hashtags_and_disclosure(self) -> None:
         first = normalize_caption(
             "Аккуратный фон",
-            "Показываем результат. https://max.ru/bot?utm_content=old #Ravuna "
-            "Демонстрационный пример Ravuna.\n"
-            "Изображения созданы специально для демонстрации возможностей сервиса.",
+            "Показываем результат. https://max.ru/bot?utm_content=old #Ravuna " + DISCLOSURE,
         )
         second = normalize_caption(
             "Аккуратный фон",

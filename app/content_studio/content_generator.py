@@ -10,8 +10,7 @@ from .models import TransformationType
 
 
 DISCLOSURE = (
-    "Демонстрационный пример Ravuna.\n"
-    "Изображения созданы специально для демонстрации возможностей сервиса."
+    "Синтетический пример Ravuna."
 )
 CTA_LEAD = "🎁 Получите 2 бесплатные обработки\n\n👇 Попробовать Ravuna"
 FORBIDDEN_STORY_FRAGMENTS = (
@@ -148,7 +147,7 @@ class ContentGenerator:
         internal_prompt = (
             "Create factual Russian demo copy for the transformation "
             f"'{transformation_type.value}'. Use a task/result structure, no customer story, "
-            "no testimonial, include the mandatory Ravuna demo disclosure and CTA."
+            "no testimonial, include the short Ravuna demo disclosure and CTA."
         )
         _validate_copy(title, body, cta, internal_prompt)
         return GeneratedPostCopy(
@@ -204,7 +203,7 @@ class ContentGenerator:
         internal_prompt = (
             "Create one factual Russian hook/task/result demo variant for "
             f"'{transformation_type.value}'. Never invent a customer story or testimonial. "
-            "Include the mandatory Ravuna demo disclosure and attributed CTA."
+            "Include the short Ravuna demo disclosure and attributed CTA."
         )
         _validate_copy(generated_title, body, cta, internal_prompt)
         return GeneratedPostCopy(
