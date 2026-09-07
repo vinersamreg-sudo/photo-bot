@@ -41,6 +41,9 @@ from app.content_studio.repository import (
 from app.content_studio.service import ContentStudioService
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 class FakeTransport:
     def __init__(self) -> None:
         self.published = 0
@@ -304,9 +307,28 @@ class ContentStudioTests(unittest.TestCase):
         for transformation in TransformationType:
             with self.subTest(transformation=transformation.value):
                 copy = generator.generate(transformation, post_id="post", platform="max")
-                self.assertIn("Демонстрационный пример Ravuna.", copy.body)
-                self.assertIn("Изображения созданы специально", copy.body)
+                self.assertIn(DISCLOSURE, copy.body)
+                self.assertNotIn("Демонстрационный пример Ravuna.", copy.body)
+                self.assertNotIn("Изображения созданы специально", copy.body)
                 self.assertIn("2 бесплатные обработки", copy.cta)
+
+    def test_library_unicode_reaches_max_payload_without_replacement_chars(self) -> None:
+        library = json.loads((PROJECT_ROOT / "marketing/content/library.json").read_text("utf-8"))
+        asset = next(item for item in library["assets"] if item["id"].startswith("synthetic-"))
+        generator = ContentGenerator("https://max.ru/ravuna_bot")
+        copy = generator.generate_demo_case(
+            TransformationType(asset["transformation"]),
+            post_id="max-unicode-regression",
+            platform="max",
+            title=asset["title"],
+            hook=asset["hook"],
+            prompt_example=asset["prompt_example"],
+            hashtags=tuple(asset["hashtags"]),
+        )
+        payload_text = "\n".join((copy.title, copy.body, copy.cta, *copy.hashtags))
+        self.assertNotIn("\ufffd", payload_text)
+        self.assertNotIn("����", payload_text)
+        self.assertIn(asset["prompt_example"], payload_text)
 
     def test_non_english_transformation_prompt_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "English"):
