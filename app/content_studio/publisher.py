@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .models import PublicationMode
+from .content_generator import validate_customer_copy
 
 
 class PublishingDisabledError(RuntimeError):
@@ -112,6 +113,8 @@ class PlatformPublisher:
             )
 
     def _payload(self, post: dict[str, Any], media_path: str) -> dict[str, Any]:
+        if self.platform == "max":
+            validate_customer_copy(str(post["title"]), str(post["body"]))
         disclosure = str(post.get("disclosure") or "")
         return {
             "platform": self.platform,

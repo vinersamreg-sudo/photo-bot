@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .models import TransformationType
@@ -171,6 +172,8 @@ class ContentGenerator:
     ) -> GeneratedPostCopy:
         """Build varied factual copy without inventing a customer narrative."""
 
+        validate_customer_copy(title, hook, prompt_example)
+
         variant = int(hashlib.sha256(post_id.encode("utf-8")).hexdigest()[:8], 16) % 3
         titles = (
             hook,
@@ -242,6 +245,25 @@ def build_utm_url(
         }
     )
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def validate_customer_copy(*fields: str) -> None:
+    """Reject broken copy before rendering or sending; never invent a fallback."""
+    for field in fields:
+        if not field.strip() or "\ufffd" in field:
+            raise ValueError("customer copy is empty or has invalid Unicode")
+        if re.search(
+            r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b"
+            r"|(?:^|[—–:]\s*)(?:portrait|background|restoration|outfit|composition|interior|other)\b",
+            field, re.IGNORECASE,
+        ):
+            raise ValueError("customer copy contains an internal slug")
+        if re.search(
+            r"(?:выполн\w*|сдела\w*|внес\w*)\s+(?:(?:указан\w*|нужн\w*|необходим\w*|задан\w*)\s+)?изменени\w*"
+            r"|(?:обработай|обработать|улучши|улучшить)\s+(?:это\s+)?(?:фото|фотографию)\s*[.!]?$",
+            field, re.IGNORECASE,
+        ):
+            raise ValueError("customer copy contains a generic placeholder")
 
 
 def _validate_copy(title: str, body: str, cta: str, internal_prompt: str) -> None:
