@@ -336,6 +336,36 @@ class ContentStudioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "English"):
             self.generate(prompt_en="Замени фон")
 
+    def test_all_synthetic_examples_reach_max_payload_exactly(self) -> None:
+        assets = json.loads((PROJECT_ROOT / "marketing/content/library.json").read_text("utf-8"))["assets"]
+        assets = [a for a in assets if a["id"].startswith("synthetic-")]
+        self.assertEqual(len(assets), 24)
+        self.assertEqual(len({a["prompt_example"] for a in assets}), 24)
+        generator = ContentGenerator("https://max.ru/ravuna_bot")
+        for asset in assets:
+            with self.subTest(asset=asset["id"]):
+                copy = generator.generate_demo_case(
+                    TransformationType(asset["transformation"]), post_id=asset["id"], platform="max",
+                    title=asset["title"], hook=asset["hook"], prompt_example=asset["prompt_example"],
+                    hashtags=tuple(asset["hashtags"]),
+                )
+                post = dict(id=asset["id"], title=copy.title, body=copy.body, cta=copy.cta,
+                            hashtags_json=json.dumps(copy.hashtags), utm_url=copy.utm_url)
+                payload = MaxPublisher().dry_run(post, "cards/card.png").payload
+                self.assertIn(asset["prompt_example"].encode("utf-8"), payload["text"].encode("utf-8"))
+                self.assertNotIn("\ufffd", payload["text"])
+                self.assertNotRegex(copy.title + copy.body, r"[a-z]+_[a-z]+")
+
+    def test_invalid_scheduled_copy_never_reaches_max_transport(self) -> None:
+        transport = FakeTransport()
+        publisher = MaxPublisher(publishing_enabled=True, transport=transport)
+        for bad in ("Товар — product_photo", "Комната — interior", "Выполнить указанное изменение фотографии.",
+                    "Сделай нужные изменения фотографии.", "Улучши фото.", "Текст \ufffd"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                publisher.publish(dict(id="invalid",title=bad,body="Убери коробки у дивана.",
+                                       cta="CTA",hashtags_json="[]",utm_url="https://max.ru/bot"), "card.png")
+        self.assertEqual(transport.published, 0)
+
     def test_platform_neutral_generation_builds_platform_utm(self) -> None:
         generated = self.generate(platform="telegram")
         post = self.service.repository.get_post(generated["post_id"])
@@ -721,7 +751,7 @@ class ContentStudioTests(unittest.TestCase):
         post = {
             "id": "post",
             "title": "Demo",
-            "body": DISCLOSURE,
+            "body": "Убери коробки у дивана.",
             "cta": "CTA",
             "hashtags_json": "[]",
             "utm_url": "https://max.ru/bot?utm_source=max",
