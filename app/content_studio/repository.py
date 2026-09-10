@@ -644,6 +644,28 @@ class ContentStudioRepository:
         finally:
             connection.close()
 
+    def scheduled_post_for_slot(
+        self, platform: str, scheduled_time: str
+    ) -> dict[str, Any] | None:
+        """Return the scheduled owner and asset metadata, if any."""
+
+        connection = self.connect()
+        try:
+            row = connection.execute(
+                """SELECT p.id,p.platform,p.scheduled_time,a.category asset_category,
+                          a.checksum asset_checksum
+                   FROM demo_posts p
+                   JOIN demo_results r ON r.id=p.result_id
+                   JOIN demo_assets a ON a.id=r.asset_id
+                   WHERE p.platform=? AND p.scheduled_time=?
+                     AND p.publish_status='scheduled'
+                   ORDER BY p.created_at,p.id LIMIT 1""",
+                (platform, scheduled_time),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            connection.close()
+
     def claim_publication(self, post_id: str, claim_token: str) -> bool:
         """Atomically claim one scheduled send across concurrent timer processes."""
 

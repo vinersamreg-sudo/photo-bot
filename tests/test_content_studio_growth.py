@@ -14,7 +14,7 @@ from PIL import Image
 from app.attribution import parse_start_payload
 from app.content_studio.config import ContentStudioSettings
 from app.content_studio.content_generator import ContentGenerator
-from app.content_studio.models import TransformationType
+from app.content_studio.models import ContentCategory, TransformationType
 from app.content_studio.storage import ContentStorage
 from app.content_studio.growth import FullAutoGrowthEngine, _publish_timezone
 from app.content_studio.publisher import PlatformPublisher
@@ -224,6 +224,41 @@ class ContentStudioGrowthTests(unittest.TestCase):
         self.assertEqual(sum(post["id"].startswith("vk-clip-") for post in posts), 5)
         self.assertEqual(sum(post["id"].startswith("vk-post-") for post in posts), 2)
         self.assertTrue(all(str(post["source_code"]).startswith("src_") for post in posts))
+
+    def test_blocked_category_selects_alternative_for_same_slot(self) -> None:
+        settings = ContentStudioSettings(
+            base_dir=self.root / "fallback-content",
+            database_path=self.root / "fallback-content" / "content.sqlite3",
+            storage_dir=self.root / "fallback-content" / "storage",
+            approved_assets_dir=PROJECT_ROOT / "marketing/assets/approved",
+            content_library_path=PROJECT_ROOT / "marketing/content/library.json",
+            production_database_path=self.root / "missing.sqlite3",
+        )
+        engine = FullAutoGrowthEngine(ContentStudioService(settings))
+        product = next(
+            asset for asset in engine.library if asset.category == ContentCategory.PRODUCTS
+        )
+        alternative = next(
+            asset for asset in engine.library if asset.category != ContentCategory.PRODUCTS
+        )
+        rotated = [product, alternative]
+        chosen = next(
+            asset
+            for asset in rotated
+            if not engine._category_blocked(
+                asset.category.value,
+                [ContentCategory.PRODUCTS.value] * 3,
+                rotated[1:],
+            )
+        )
+        self.assertEqual(chosen.id, alternative.id)
+        self.assertFalse(
+            engine._category_blocked(
+                alternative.category.value,
+                [ContentCategory.PRODUCTS.value] * 3,
+                [product],
+            )
+        )
 
     def test_growth_funnel_reads_only_aggregate_attribution_without_db_mutation(self) -> None:
         production_db = self.root / "production.sqlite3"
