@@ -48,8 +48,13 @@ class FakeRuntime:
     def restart(self):
         self.restarts += 1
         self.pid += 1
-        self.provider = self.environment().values()["IMAGE_PROVIDER"]
-        self.model = MODELS[self.provider]
+        values = self.environment().values()
+        self.provider = values["IMAGE_PROVIDER"]
+        self.model = (
+            values["OPENAI_IMAGE_MODEL"]
+            if self.provider == "openai"
+            else values["GEMINI_IMAGE_MODEL"]
+        )
 
     def wait_healthy(self, *args, **kwargs):
         if self.conflict:
@@ -81,6 +86,23 @@ class ProviderSwitchTests(TestCase):
         self.assertFalse(self.runtime.smokes)
         self.assertFalse(self.history.path.exists())
         self.assertEqual(self.runtime.environment(), before)
+
+    def test_explicit_openai_model_switch_uses_existing_bounded_flow(self):
+        target = "gpt-image-2.5-sunburst-2026-09-08"
+        before = self.runtime.environment()
+        report = run_switch(self.runtime, self.history, "openai", target)
+        self.assertEqual(report["result"], "SWITCHED")
+        self.assertEqual(report["to_model"], target)
+        self.assertEqual(self.runtime.model, target)
+        self.assertEqual(self.runtime.restarts, 1)
+        self.assertEqual(len(self.runtime.smokes), 2)
+        self.assertEqual(
+            self.runtime.environment().values()["OPENAI_IMAGE_MODEL"], target
+        )
+        self.assertEqual(
+            self.runtime.environment().contents,
+            before.contents.replace(b"gpt-image-2\r\n", target.encode() + b"\r\n"),
+        )
 
     def test_status_read_only_no_history_directory_or_api_smoke(self):
         history = self.root / "data" / "ops" / "provider-switch"

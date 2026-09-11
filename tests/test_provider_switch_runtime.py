@@ -166,6 +166,15 @@ class ProviderHostBoundaryTests(TestCase):
         (self.root / ".deploy-sha").write_text("b" * 40)
         self.assertFalse(self.snapshot()["complete_deploy"])
 
+    def test_sunburst_model_is_supported_by_runtime_health(self):
+        target = "gpt-image-2.5-sunburst-2026-09-08"
+        updated = self.environment.replace(b"gpt-image-2\r\n", target.encode() + b"\r\n")
+        self.runtime.env_path.write_bytes(updated)
+        self.values = self.runtime.environment().values()
+        result = self.snapshot()
+        self.assertTrue(result["healthy"], result)
+        self.assertEqual(result["model"], target)
+
     def test_pre_restart_poll_timestamp_cannot_pass_new_runtime_readiness(self):
         result = self.snapshot(started=datetime.now(timezone.utc).timestamp() + 1)
         self.assertFalse(result["max_polling_fresh"])

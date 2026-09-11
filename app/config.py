@@ -16,6 +16,9 @@ from app.commerce import RECEIPT_ITEM_NAME
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SUPPORTED_OPENAI_IMAGE_MODELS = frozenset(
+    {"gpt-image-2", "gpt-image-2.5-sunburst-2026-09-08"}
+)
 
 
 @dataclass(frozen=True)
@@ -363,9 +366,9 @@ def load_settings(
         app_env == "production"
         and image_provider == "openai"
         and image_model
-        and image_model != "gpt-image-2"
+        and image_model not in SUPPORTED_OPENAI_IMAGE_MODELS
     ):
-        raise ValueError("Ravuna v1 production requires OPENAI_IMAGE_MODEL=gpt-image-2")
+        raise ValueError("Ravuna production requires a supported OPENAI_IMAGE_MODEL")
     payment_provider = values.get("PAYMENT_PROVIDER", "disabled").strip().lower() or "disabled"
     if payment_provider not in {"disabled", "robokassa"}:
         raise ValueError("PAYMENT_PROVIDER must be disabled or robokassa")

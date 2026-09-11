@@ -305,6 +305,8 @@ released through the normal, separately approved process:
 sudo /opt/photo-bot/scripts/ravuna provider status
 sudo /opt/photo-bot/scripts/ravuna provider gemini
 sudo /opt/photo-bot/scripts/ravuna provider openai
+sudo /opt/photo-bot/scripts/ravuna provider openai \
+  --model gpt-image-2.5-sunburst-2026-09-08
 ```
 
 `status` is read-only: it reads the live systemd PID's environment, successful MAX
@@ -314,8 +316,10 @@ create history. A configured `.env` value is not presented as an active runtime
 value when they differ. Root access is needed to read the service environment;
 do not grant the application user a general-purpose sudo/Python permission.
 
-Switching is explicit, never scheduled fallback. Only `gemini-3-pro-image` and
-`gpt-image-2` are supported. `ALREADY_ACTIVE` means no image smoke, configuration
+Switching is explicit, never scheduled fallback. `gemini-3-pro-image`,
+`gpt-image-2`, and the pinned `gpt-image-2.5-sunburst-2026-09-08` snapshot are
+supported. Omitting `--model` retains the existing provider default.
+`ALREADY_ACTIVE` means no image smoke, configuration
 write or restart. Otherwise the command requires one healthy runtime, fresh MAX
 polling and authenticated GET `/me`, a completed deployment, matching file/runtime
 configuration, supported schema, clean reconciliation and zero processing and

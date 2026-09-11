@@ -152,6 +152,27 @@ class SettingsTests(TestCase):
             "ROBOKASSA_PASSWORD2": "two",
             "ROBOKASSA_MODE": "production",
         }
+        sunburst = load_settings(
+            environ={
+                "APP_ENV": "production",
+                "BASE_DIR": str(PROJECT_ROOT),
+                "IMAGE_PROVIDER": "openai",
+                "OPENAI_IMAGE_MODEL": "gpt-image-2.5-sunburst-2026-09-08",
+            }
+        )
+        self.assertEqual(
+            sunburst.openai_image_model,
+            "gpt-image-2.5-sunburst-2026-09-08",
+        )
+        with self.assertRaisesRegex(ValueError, "supported OPENAI_IMAGE_MODEL"):
+            load_settings(
+                environ={
+                    "APP_ENV": "production",
+                    "BASE_DIR": str(PROJECT_ROOT),
+                    "IMAGE_PROVIDER": "openai",
+                    "OPENAI_IMAGE_MODEL": "unsupported-image-model",
+                }
+            )
         with self.assertRaisesRegex(ValueError, "explicit"):
             load_settings(environ=baseline)
         settings = load_settings(environ={**baseline, "ROBOKASSA_MODE": "sandbox"})

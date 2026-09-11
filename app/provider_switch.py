@@ -17,8 +17,14 @@ from pathlib import Path
 from dotenv import dotenv_values
 from dotenv.parser import parse_stream
 
+from app.config import SUPPORTED_OPENAI_IMAGE_MODELS
+
 
 MODELS = {"gemini": "gemini-3-pro-image", "openai": "gpt-image-2"}
+SUPPORTED_MODELS = {
+    "gemini": frozenset({MODELS["gemini"]}),
+    "openai": SUPPORTED_OPENAI_IMAGE_MODELS,
+}
 MODEL_KEYS = {"gemini": "GEMINI_IMAGE_MODEL", "openai": "OPENAI_IMAGE_MODEL"}
 PROVIDER_KEYS = {"IMAGE_PROVIDER", "IMAGE_DIRECT_PROMPT_ENABLED", *MODEL_KEYS.values()}
 
@@ -50,8 +56,11 @@ class Environment:
         return dict(sha256=hashlib.sha256(self.contents).hexdigest(), mode=self.mode,
                     uid=self.uid, gid=self.gid)
 
-    def target(self, provider: str) -> Environment:
-        updates = {"IMAGE_PROVIDER": provider, MODEL_KEYS[provider]: MODELS[provider],
+    def target(self, provider: str, model: str | None = None) -> Environment:
+        selected_model = model or MODELS[provider]
+        if selected_model not in SUPPORTED_MODELS[provider]:
+            raise SwitchBlocked("unsupported_target_model")
+        updates = {"IMAGE_PROVIDER": provider, MODEL_KEYS[provider]: selected_model,
                    "IMAGE_DIRECT_PROMPT_ENABLED": "true"}
         pieces, seen = [], set()
         text = self.contents.decode("utf-8")
@@ -181,16 +190,21 @@ class History:
             os.close(descriptor)
 
 
-def run_switch(runtime, history: History, target: str) -> dict:
+def run_switch(
+    runtime, history: History, target: str, target_model: str | None = None
+) -> dict:
     """At most two image calls and one normal + one recovery restart. No loops."""
+    selected_model = target_model or MODELS[target]
+    if selected_model not in SUPPORTED_MODELS[target]:
+        raise SwitchBlocked("unsupported_target_model")
     before = runtime.environment()
     pre = runtime.snapshot(online=True)
-    if pre["provider"] == target and pre["model"] == MODELS[target] and pre["direct_prompt"]:
+    if pre["provider"] == target and pre["model"] == selected_model and pre["direct_prompt"]:
         if pre["healthy"] and pre["config_matches_runtime"]:
             return {"result": "ALREADY_ACTIVE", "restarts": 0}
     entry = dict(timestamp=datetime.now(timezone.utc).isoformat(), source="operator_cli",
                  from_provider=pre["provider"], from_model=pre["model"],
-                 to_provider=target, to_model=MODELS[target], result="BLOCKED")
+                 to_provider=target, to_model=selected_model, result="BLOCKED")
 
     def blocked(reason):
         entry["reason"] = reason
@@ -201,7 +215,7 @@ def run_switch(runtime, history: History, target: str) -> dict:
         return blocked("busy_or_unhealthy")
     if os.name == "posix" and before.mode & 0o037:
         return blocked("unsafe_environment_permissions")
-    desired = before.target(target)
+    desired = before.target(target, selected_model)
     entry["pre_smoke"] = runtime.smoke(desired)
     if not entry["pre_smoke"]["ok"]:
         return blocked("TARGET_UNHEALTHY")
@@ -227,7 +241,7 @@ def run_switch(runtime, history: History, target: str) -> dict:
             return {**entry, "restarts": 0}
         restarts += 1
         runtime.restart()
-        if not runtime.wait_healthy(target, MODELS[target], previous_pid=pre["pid"]):
+        if not runtime.wait_healthy(target, selected_model, previous_pid=pre["pid"]):
             raise SwitchBlocked("post_switch_health_failed")
         entry["post_smoke"] = runtime.smoke(desired)
         if not entry["post_smoke"]["ok"]:
@@ -263,6 +277,7 @@ def run_switch(runtime, history: History, target: str) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Explicit provider switch (two billable synthetic edits); status is read-only.")
     parser.add_argument("action", choices=("status", *MODELS))
+    parser.add_argument("--model")
     parser.add_argument("--root", type=Path, default=Path("/opt/photo-bot"))
     args = parser.parse_args(argv)
     # SDK/provider error loggers may contain raw upstream diagnostics. Output only our allowlisted summary.
@@ -281,7 +296,7 @@ def main(argv=None) -> int:
             if os.name != "posix" or os.geteuid() != 0:
                 raise SwitchBlocked("switch_requires_root_on_production_host")
             with history.lock():
-                report = run_switch(runtime, history, args.action)
+                report = run_switch(runtime, history, args.action, args.model)
     except (Exception, KeyboardInterrupt):
         # No raw exceptions, arbitrary settings, provider responses or paths on stderr.
         report = {"result": "BLOCKED", "reason": "precondition_or_operation_failed_review_private_state"}

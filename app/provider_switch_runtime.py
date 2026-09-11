@@ -23,7 +23,7 @@ from app.direct_prompt import build_direct_prompt
 from app.max_transport import MaxApiClient
 from app.payment_admin import payment_reconciliation_summary
 from app.provider_router import select_image_provider
-from app.provider_switch import Environment, MODELS, SwitchBlocked
+from app.provider_switch import Environment, SUPPORTED_MODELS, SwitchBlocked
 
 
 SMOKE_PROMPT = "  На фото 1 добавь синий круг из фото 2 справа от красного квадрата.\nБелый фон. Тест 🔵 — без текста.  "
@@ -122,9 +122,9 @@ class Runtime:
         host, runtime_values = self._host()
         runtime_values.setdefault("BASE_DIR", str(self.root))
         active = load_settings(environ=runtime_values)
-        provider = active.image_provider if host["active"] and active.image_provider in MODELS else "unknown"
+        provider = active.image_provider if host["active"] and active.image_provider in SUPPORTED_MODELS else "unknown"
         raw_model = active.gemini_image_model if provider == "gemini" else active.openai_image_model
-        model = raw_model if raw_model in MODELS.values() else "unsupported"
+        model = raw_model if raw_model in SUPPORTED_MODELS.get(provider, ()) else "unsupported"
         matches = host["active"] and all(runtime_values.get(k) == v for k, v in environment.values().items())
         data = database_snapshot(configured.database_path)
         poll_timestamp = datetime.fromisoformat(data.pop("poll_success_at") or "1970-01-01T00:00:00+00:00")
@@ -152,7 +152,9 @@ class Runtime:
         complete = source == completed and len(source) == 40 and all(c in "0123456789abcdef" for c in source)
         idle = data["processing"] == data["processing_dialogs"] == data["reserved_credits"] == 0
         healthy = bool(host["active"] and host["runtime_count"] == 1 and matches and complete
-                       and provider in MODELS and model == MODELS[provider] and active.image_direct_prompt_enabled
+                       and provider in SUPPORTED_MODELS
+                       and model in SUPPORTED_MODELS[provider]
+                       and active.image_direct_prompt_enabled
                        and processing_enabled(active)
                        and active.max_transport_mode == "polling" and fresh and api_ok is not False
                        and data["quick_check"] and data["schema"] == CURRENT_SCHEMA_VERSION
