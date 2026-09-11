@@ -151,12 +151,29 @@ class FullAutoGrowthEngine:
                     datetime.strptime(clock, "%H:%M").time(),
                     tzinfo=self.timezone,
                 ).astimezone(timezone.utc).isoformat()
-                if self.repository.slot_has_post(platform, scheduled):
-                    continue
                 rotated = selected[offset % len(selected) :] + selected[: offset % len(selected)]
                 available = [
                     item for item in rotated if item.sha256 not in reservations[platform]
                 ]
+                existing = self.repository.scheduled_post_for_slot(platform, scheduled)
+                if existing:
+                    if not self._category_blocked(
+                        str(existing["asset_category"]),
+                        recent_categories[platform],
+                        available,
+                    ):
+                        continue
+                    # A future scheduled row can become invalid after the
+                    # recent-category history changes. Replace only that row;
+                    # published rows and missed slots are never touched.
+                    if apply:
+                        self.repository.transition_post(
+                            str(existing["id"]),
+                            PostStatus.ARCHIVED,
+                            last_error="novelty_recent_category_saturation_replaced",
+                        )
+                elif self.repository.slot_has_post(platform, scheduled):
+                    continue
                 asset = None
                 category_saturated = False
                 # Search the bounded in-memory rotation fully so an abundant
@@ -165,18 +182,10 @@ class FullAutoGrowthEngine:
                 for candidate in rotated:
                     if candidate.sha256 in reservations[platform]:
                         continue
-                    alternatives = {
-                        item.category.value
-                        for item in available
-                        if item.sha256 != candidate.sha256
-                    }
-                    if (
-                        len(recent_categories[platform][-3:]) == 3
-                        and all(
-                            category == candidate.category.value
-                            for category in recent_categories[platform][-3:]
-                        )
-                        and alternatives - {candidate.category.value}
+                    if self._category_blocked(
+                        candidate.category.value,
+                        recent_categories[platform],
+                        [item for item in available if item.sha256 != candidate.sha256],
                     ):
                         category_saturated = True
                         continue
@@ -254,6 +263,20 @@ class FullAutoGrowthEngine:
             "days_queued": self._days_queued(today),
             "exploration_rate": self.settings.exploration_rate,
         }
+
+    @staticmethod
+    def _category_blocked(
+        category: str,
+        recent_categories: list[str],
+        available: list[LibraryAsset],
+    ) -> bool:
+        recent = recent_categories[-3:]
+        alternatives = {item.category.value for item in available}
+        return (
+            len(recent) == 3
+            and all(value == category for value in recent)
+            and bool(alternatives - {category})
+        )
 
     def publish_due(
         self, *, now: datetime | None = None, apply: bool = False, limit: int = 10
