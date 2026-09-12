@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import ssl
 import time
 from dataclasses import dataclass
@@ -20,6 +21,30 @@ from app.max_adapter import Button
 
 LOGGER = logging.getLogger(__name__)
 
+_SAFE_ERROR_CODE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
+
+
+def _safe_error_code(value: Any) -> str:
+    candidate = str(value or "").strip()
+    return candidate.lower() if _SAFE_ERROR_CODE.fullmatch(candidate) else ""
+
+
+def _safe_error_message(value: Any) -> str:
+    candidate = " ".join(str(value or "").split())[:160]
+    candidate = re.sub(r"https?://\S+", "[url]", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\b\d{6,}\b", "[id]", candidate)
+    candidate = re.sub(r"\b[A-Za-z0-9_-]{24,}\b", "[value]", candidate)
+    return candidate
+
+
+def _safe_request_id(headers: Any) -> str:
+    for name in ("x-request-id", "x-correlation-id", "request-id", "x-trace-id"):
+        candidate = str(headers.get(name, "")).strip()
+        if _SAFE_REQUEST_ID.fullmatch(candidate):
+            return candidate
+    return ""
+
 
 class MaxTransportError(RuntimeError):
     """Safe transport error which never includes response bodies or secret URLs."""
@@ -33,6 +58,7 @@ class MaxTransportError(RuntimeError):
         stage: str = "unknown",
         error_code: str = "",
         error_message: str = "",
+        request_id: str = "",
     ) -> None:
         super().__init__(message)
         self.kind = kind
@@ -40,6 +66,7 @@ class MaxTransportError(RuntimeError):
         self.stage = stage
         self.error_code = error_code
         self.error_message = error_message
+        self.request_id = request_id
 
 
 @dataclass(frozen=True)
@@ -219,13 +246,17 @@ class MaxApiClient:
             error_code = ""
             error_message = ""
             if isinstance(error_payload, dict):
-                error_code = str(
+                error_code = _safe_error_code(
                     error_payload.get("code")
                     or error_payload.get("error_code")
                     or error_payload.get("error")
                     or ""
-                ).lower()
-                error_message = str(error_payload.get("message") or "")[:160]
+                )
+                error_message = _safe_error_message(
+                    error_payload.get("message")
+                    or error_payload.get("description")
+                    or ""
+                )
             if "bot_not_active" in error_code or "bot_inactive" in error_code:
                 kind = "bot_not_active"
             raise MaxTransportError(
@@ -235,6 +266,7 @@ class MaxApiClient:
                 stage=stage,
                 error_code=error_code,
                 error_message=error_message,
+                request_id=_safe_request_id(response.headers),
             )
         try:
             payload = response.json()
@@ -567,10 +599,26 @@ class MaxApiClient:
                     self._sleep(delay)
         except MaxTransportError as exc:
             LOGGER.warning(
-                "MAX image delivery failed (kind=%s,http_status=%s)",
+                "MAX image delivery failed "
+                "(stage=%s,kind=%s,http_status=%s,error_code=%s,"
+                "error_message=%s,request_id=%s)",
+                exc.stage,
                 exc.kind,
                 exc.http_status,
+                exc.error_code or "none",
+                exc.error_message or "none",
+                exc.request_id or "none",
             )
+            if exc.stage == "image_message_send" and exc.http_status == 403:
+                raise MaxTransportError(
+                    "MAX image delivery failed",
+                    kind="transport",
+                    http_status=exc.http_status,
+                    stage="image_delivery_diagnostic",
+                    error_code=exc.error_code,
+                    error_message=exc.error_message,
+                    request_id=exc.request_id,
+                ) from exc
             return None
 
     def send_file(

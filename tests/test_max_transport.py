@@ -376,6 +376,58 @@ class MaxTransportTests(TestCase):
         self.assertEqual(message_attempts, 3)
         self.assertEqual(delays, [0.5, 1.0])
 
+    def test_image_403_preserves_only_sanitized_diagnostic_metadata(self) -> None:
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/uploads":
+                return httpx.Response(200, json={"url": "https://iu.oneme.ru/upload"})
+            return httpx.Response(
+                403,
+                json={
+                    "code": "CHAT.ACCESS.DENIED",
+                    "message": (
+                        "Recipient 123456789 unavailable; "
+                        "token=abcdefghijklmnopqrstuvwxyz012345"
+                    ),
+                },
+                headers={"x-request-id": "max-request-403"},
+            )
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(200, json={"token": "image-token"})
+                )
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "preview.png"
+            preview.write_bytes(b"preview")
+            with self.assertLogs("app.max_transport", level="WARNING") as logs:
+                with self.assertRaises(MaxTransportError) as caught:
+                    client.send_image("42", preview, "private prompt", ())
+
+        error = caught.exception
+        self.assertEqual(error.kind, "transport")
+        self.assertEqual(error.stage, "image_delivery_diagnostic")
+        self.assertEqual(error.http_status, 403)
+        self.assertEqual(error.error_code, "chat.access.denied")
+        self.assertEqual(error.request_id, "max-request-403")
+        self.assertEqual(
+            error.error_message,
+            "Recipient [id] unavailable; token=[value]",
+        )
+        rendered_log = "\n".join(logs.output)
+        self.assertNotIn("max-secret-test", rendered_log)
+        self.assertNotIn("private prompt", rendered_log)
+        self.assertNotIn("123456789", rendered_log)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz012345", rendered_log)
+
     def test_paid_original_is_uploaded_and_sent_as_a_file(self) -> None:
         api_requests = []
         media_requests = []

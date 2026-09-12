@@ -139,6 +139,17 @@ class MaxRuntimeTests(TestCase):
                 )
             )
         )
+        self.assertFalse(
+            _is_permanent_recipient_failure(
+                MaxTransportError(
+                    "diagnostic recipient failure",
+                    kind="transport",
+                    stage="image_delivery_diagnostic",
+                    http_status=403,
+                    error_code="chat.access.denied",
+                )
+            )
+        )
 
     def test_permanent_recipient_failure_does_not_poison_poll_batch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -196,6 +207,42 @@ class MaxRuntimeTests(TestCase):
                     kind="http_error",
                     stage="message_send",
                     http_status=400,
+                ),
+            )
+            with (
+                patch("app.max_runtime.MaxApiClient", return_value=fake_client),
+                patch(
+                    "app.max_runtime.build_max_application",
+                    return_value=(application, fake_client, store),
+                ),
+            ):
+                self.assertEqual(run_polling(settings, stop_event), 0)
+
+            self.assertEqual(application.seen, ["bot_started"])
+            self.assertIsNone(store.get_marker())
+
+    def test_diagnostic_image_403_keeps_marker_for_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base / name).mkdir()
+            settings = Settings(
+                "", "", "test", base,
+                max_bot_token="test-token", max_transport_mode="polling",
+                max_poll_observe_only=False, max_owner_user_ids=("owner",),
+            )
+            stop_event = threading.Event()
+            fake_client = FakeBatchClient(stop_event)
+            database = Database(settings.database_path)
+            store = MaxConversationStore(database)
+            application = FakeBatchApplication(
+                database,
+                MaxTransportError(
+                    "diagnostic recipient failure",
+                    kind="transport",
+                    stage="image_delivery_diagnostic",
+                    http_status=403,
+                    error_code="chat.access.denied",
                 ),
             )
             with (
