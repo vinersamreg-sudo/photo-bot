@@ -107,15 +107,38 @@ class FakeBatchApplication:
             raise self.failure
 
 
+class DurableBatchApplication:
+    def __init__(self, store: MaxConversationStore, failure: MaxTransportError) -> None:
+        self.database = store.database
+        self.store = store
+        self.failure = failure
+        self.handled = []
+
+    def recover_interrupted_processing(self) -> int:
+        return 0
+
+    def handle(self, event) -> bool:
+        if not self.store.begin_event(event.event_key, event.event_type):
+            return False
+        self.handled.append(event.event_type)
+        if event.event_type == "bot_started":
+            self.store.finish_event(event.event_key, False)
+            raise self.failure
+        self.store.finish_event(event.event_key, True)
+        return True
+
+
 class MaxRuntimeTests(TestCase):
     def test_permanent_recipient_failure_classification_is_narrow(self) -> None:
         self.assertTrue(
             _is_permanent_recipient_failure(
                 MaxTransportError(
-                    "recipient unavailable",
-                    kind="forbidden",
+                    "recipient suspended",
+                    kind="recipient_suspended",
                     stage="message_send",
                     http_status=403,
+                    error_code="chat.denied",
+                    error_message="Key: error.dialog.suspended, args: [[id],].",
                 )
             )
         )
@@ -142,14 +165,78 @@ class MaxRuntimeTests(TestCase):
         self.assertFalse(
             _is_permanent_recipient_failure(
                 MaxTransportError(
-                    "diagnostic recipient failure",
-                    kind="transport",
-                    stage="image_delivery_diagnostic",
+                    "unknown forbidden",
+                    kind="forbidden",
+                    stage="message_send",
                     http_status=403,
-                    error_code="chat.access.denied",
+                    error_code="chat.denied",
+                    error_message="Different reason",
                 )
             )
         )
+
+    def test_suspended_dialog_is_terminal_and_replay_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for name in ("data", "logs", "temp"):
+                (base / name).mkdir()
+            settings = Settings(
+                "", "", "test", base,
+                max_bot_token="test-token", max_transport_mode="polling",
+                max_poll_observe_only=False, max_owner_user_ids=("owner",),
+            )
+            database = Database(settings.database_path)
+            store = MaxConversationStore(database)
+            failure = MaxTransportError(
+                "recipient suspended",
+                kind="recipient_suspended",
+                stage="image_message_send",
+                http_status=403,
+                error_code="chat.denied",
+                error_message="Key: error.dialog.suspended, args: [[id],].",
+            )
+
+            first_stop = threading.Event()
+            first_client = FakeBatchClient(first_stop)
+            first_app = DurableBatchApplication(store, failure)
+            with (
+                patch("app.max_runtime.MaxApiClient", return_value=first_client),
+                patch(
+                    "app.max_runtime.build_max_application",
+                    return_value=(first_app, first_client, store),
+                ),
+            ):
+                self.assertEqual(run_polling(settings, first_stop), 0)
+
+            self.assertEqual(first_app.handled, ["bot_started", "message_created"])
+            self.assertEqual(store.get_marker(), 79)
+            with database.read() as connection:
+                statuses = connection.execute(
+                    "SELECT status FROM max_processed_events ORDER BY first_seen_at"
+                ).fetchall()
+                self.assertEqual(
+                    [row["status"] for row in statuses],
+                    ["completed", "completed"],
+                )
+                reserved = connection.execute(
+                    "SELECT COALESCE(SUM(reserved_generation_credits),0) "
+                    "FROM user_credit_accounts"
+                ).fetchone()[0]
+                self.assertEqual(reserved, 0)
+
+            replay_stop = threading.Event()
+            replay_client = FakeBatchClient(replay_stop)
+            replay_app = DurableBatchApplication(store, failure)
+            with (
+                patch("app.max_runtime.MaxApiClient", return_value=replay_client),
+                patch(
+                    "app.max_runtime.build_max_application",
+                    return_value=(replay_app, replay_client, store),
+                ),
+            ):
+                self.assertEqual(run_polling(settings, replay_stop), 0)
+            self.assertEqual(replay_app.handled, [])
+            self.assertEqual(store.get_marker(), 79)
 
     def test_permanent_recipient_failure_does_not_poison_poll_batch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -168,10 +255,12 @@ class MaxRuntimeTests(TestCase):
             application = FakeBatchApplication(
                 database,
                 MaxTransportError(
-                    "recipient unavailable",
-                    kind="forbidden",
+                    "recipient suspended",
+                    kind="recipient_suspended",
                     stage="message_send",
                     http_status=403,
+                    error_code="chat.denied",
+                    error_message="Key: error.dialog.suspended, args: [[id],].",
                 ),
             )
             with (

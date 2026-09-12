@@ -428,6 +428,42 @@ class MaxTransportTests(TestCase):
         self.assertNotIn("123456789", rendered_log)
         self.assertNotIn("abcdefghijklmnopqrstuvwxyz012345", rendered_log)
 
+    def test_suspended_dialog_403_has_narrow_permanent_classification(self) -> None:
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/uploads":
+                return httpx.Response(200, json={"url": "https://iu.oneme.ru/upload"})
+            return httpx.Response(
+                403,
+                json={
+                    "code": "chat.denied",
+                    "message": "Key: error.dialog.suspended, args: [[123456789],].",
+                },
+            )
+
+        client = MaxApiClient(
+            "test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(200, json={"token": "image-token"})
+                )
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "preview.png"
+            preview.write_bytes(b"preview")
+            with self.assertRaises(MaxTransportError) as caught:
+                client.send_image("42", preview, "caption", ())
+
+        error = caught.exception
+        self.assertEqual(error.kind, "recipient_suspended")
+        self.assertEqual(error.stage, "image_message_send")
+        self.assertEqual(error.error_code, "chat.denied")
+        self.assertIn("error.dialog.suspended", error.error_message)
+
     def test_paid_original_is_uploaded_and_sent_as_a_file(self) -> None:
         api_requests = []
         media_requests = []

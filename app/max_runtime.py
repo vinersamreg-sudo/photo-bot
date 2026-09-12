@@ -36,11 +36,12 @@ _RECIPIENT_DELIVERY_STAGES = {
 def _is_permanent_recipient_failure(exc: MaxTransportError) -> bool:
     """Return true only when retrying the same recipient cannot succeed."""
 
-    if exc.kind == "bot_not_active":
-        return True
     return (
         exc.stage in _RECIPIENT_DELIVERY_STAGES
-        and exc.http_status in {403, 404}
+        and exc.kind == "recipient_suspended"
+        and exc.http_status == 403
+        and exc.error_code == "chat.denied"
+        and "error.dialog.suspended" in exc.error_message.casefold()
     )
 
 
@@ -209,6 +210,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                             except MaxTransportError as exc:
                                 store.finish_event(event.event_key, False)
                                 if _is_permanent_recipient_failure(exc):
+                                    store.finish_event(event.event_key, True)
                                     LOGGER.warning(
                                         "MAX event skipped after permanent recipient "
                                         "failure (event_type=%s,kind=%s,stage=%s,"
@@ -239,6 +241,7 @@ def run_polling(settings: Settings, stop_event: threading.Event) -> int:
                             application.handle(event)
                         except MaxTransportError as exc:
                             if _is_permanent_recipient_failure(exc):
+                                store.finish_event(event.event_key, True)
                                 LOGGER.warning(
                                     "MAX event skipped after permanent recipient "
                                     "failure (event_type=%s,kind=%s,stage=%s,"
