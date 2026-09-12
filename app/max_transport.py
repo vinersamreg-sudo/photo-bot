@@ -46,6 +46,18 @@ def _safe_request_id(headers: Any) -> str:
     return ""
 
 
+def _is_suspended_dialog_delivery(
+    status: Optional[int], code: str, message: str
+) -> bool:
+    """Match only MAX's proven recipient-scoped suspended-dialog response."""
+
+    return (
+        status == 403
+        and code == "chat.denied"
+        and "error.dialog.suspended" in message.casefold()
+    )
+
+
 class MaxTransportError(RuntimeError):
     """Safe transport error which never includes response bodies or secret URLs."""
 
@@ -259,6 +271,10 @@ class MaxApiClient:
                 )
             if "bot_not_active" in error_code or "bot_inactive" in error_code:
                 kind = "bot_not_active"
+            if _is_suspended_dialog_delivery(
+                response.status_code, error_code, error_message
+            ):
+                kind = "recipient_suspended"
             raise MaxTransportError(
                 f"MAX API returned HTTP {response.status_code}",
                 kind=kind,
@@ -609,6 +625,8 @@ class MaxApiClient:
                 exc.error_message or "none",
                 exc.request_id or "none",
             )
+            if exc.kind == "recipient_suspended":
+                raise
             if exc.stage == "image_message_send" and exc.http_status == 403:
                 raise MaxTransportError(
                     "MAX image delivery failed",
