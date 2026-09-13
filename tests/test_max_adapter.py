@@ -191,7 +191,12 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(len(version_history_actions()), 4)
 
     def test_zero_balance_main_menu_offers_both_one_time_packages(self) -> None:
-        menu = main_menu(0, 0, "https://ravuna.ru/p/" + "a" * 32)
+        menu = main_menu(
+            0,
+            0,
+            "https://ravuna.ru/p/" + "a" * 32,
+            "payment:status:" + "a" * 32,
+        )
         actions = {button.text: button.action for button in menu.buttons}
         self.assertEqual(
             actions["Купить пакет — 49 ₽"],
@@ -200,6 +205,14 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(
             actions["Купить 100 обработок + 50 оригиналов — 1990 ₽"],
             "package:buy:large",
+        )
+        self.assertEqual(
+            actions["Проверить оплату"],
+            "payment:status:" + "a" * 32,
+        )
+        self.assertIn(
+            "баланс обновится автоматически в течение нескольких секунд",
+            menu.text,
         )
 
     def test_main_menu_shows_processing_and_original_balances(self) -> None:

@@ -108,7 +108,10 @@ def new_source_view() -> View:
 
 
 def main_menu(
-    remaining: int, originals: int, payment_url: str | None = None
+    remaining: int,
+    originals: int,
+    payment_url: str | None = None,
+    payment_status_action: str | None = None,
 ) -> View:
     balance_text = (
         "Ваш баланс:\n"
@@ -122,9 +125,16 @@ def main_menu(
             + balance_text
             + "\n\nУ вас закончились обработки.\n"
             "Чтобы обработать новую фотографию, приобретите пакет Ravuna — 49 ₽."
+            + (
+                "\n\nПосле подтверждения оплаты баланс обновится автоматически "
+                "в течение нескольких секунд."
+                if payment_url
+                else ""
+            )
         )
         buttons = (
             Button("Купить пакет — 49 ₽", payment_url or "package:buy"),
+            *((Button("Проверить оплату", payment_status_action),) if payment_status_action else ()),
             Button(
                 "Купить 100 обработок + 50 оригиналов — 1990 ₽",
                 "package:buy:large",
