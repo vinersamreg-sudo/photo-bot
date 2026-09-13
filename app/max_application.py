@@ -116,7 +116,8 @@ PAYMENT_OFFER_TEXT = (
     "В пакет входит:\n"
     "• 2 обработки фотографий\n"
     "• оригинал этой фотографии без водяного знака\n\n"
-    "Пакет начислится сразу после оплаты."
+    "После подтверждения оплаты баланс обновится автоматически "
+    "в течение нескольких секунд."
 )
 
 
@@ -130,12 +131,17 @@ def _package_offer_text(product_code: str) -> str:
         f"• {package.generation_credits} обработок фотографий\n"
         f"• {package.unlock_entitlements} оригиналов без водяного знака\n\n"
         "Разовая покупка. Автосписаний и подписки нет.\n\n"
-        "Пакет начислится сразу после оплаты."
+        "После подтверждения оплаты баланс обновится автоматически "
+        "в течение нескольких секунд."
     )
 
 
 def _pay_button_text(product_code: str) -> str:
     return f"Оплатить {continuation_package(product_code).price_minor // 100} ₽"
+
+
+def _payment_status_button(order: PaymentOrder) -> Button:
+    return Button("Проверить оплату", f"payment:status:{order.public_token}")
 PENDING_EDIT_PAYMENT_TEXT = (
     "У вас закончились обработки.\n\n"
     "Чтобы обработать эту фотографию, приобретите пакет Ravuna.\n\n"
@@ -724,6 +730,77 @@ class MaxApplication:
                 screen="payment_refresh_failed",
             )
 
+    def _show_payment_status(self, event: MaxIncomingEvent, token: str) -> None:
+        """Render owned order and ledger state without confirming payment."""
+
+        try:
+            order = self.payments.order_for_platform_user(token, event.user_id)
+        except (PaymentError, PaymentUnavailable):
+            self._send_message(
+                event.user_id,
+                "Не удалось найти эту оплату.",
+                (Button("← Назад", "nav:back:main"),),
+                screen="payment_status_invalid",
+            )
+            return
+
+        if order.status in {
+            PaymentStatus.PAID,
+            PaymentStatus.DELIVERY_PENDING,
+            PaymentStatus.DELIVERED,
+            PaymentStatus.PARTIALLY_REFUNDED,
+        }:
+            balance = self.demo.commerce.balance(order.user_id).available
+            originals = self.demo.commerce.entitlement_balance(order.user_id).available
+            self._send_message(
+                event.user_id,
+                "Оплата подтверждена ✅\n\n"
+                "Ваш баланс:\n"
+                f"⚡ Обработки: {balance}\n"
+                f"🖼 Оригиналы без водяного знака: {originals}",
+                (Button("← Назад", "nav:back:main"),),
+                screen="payment_status_paid",
+            )
+            return
+
+        if order.status is PaymentStatus.PENDING and self.payments.is_reusable_order(order):
+            self._send_message(
+                event.user_id,
+                "Оплата пока не подтверждена.\n\n"
+                "Если Robokassa показала ошибку, попробуйте оплатить через СБП "
+                "или другой картой.",
+                (
+                    Button("Повторить оплату", self.payments.short_payment_url(order)),
+                    _payment_status_button(order),
+                    Button("← Назад", "nav:back:main"),
+                ),
+                screen="payment_status_pending",
+            )
+            return
+
+        if order.status in {PaymentStatus.PENDING, PaymentStatus.EXPIRED}:
+            self._send_message(
+                event.user_id,
+                "Оплата не подтверждена. Ссылка на оплату устарела.",
+                (
+                    Button(
+                        "Обновить ссылку на оплату",
+                        f"payment:renew:{order.public_token}",
+                    ),
+                    Button("← Назад", "nav:back:main"),
+                ),
+                screen="payment_status_expired",
+            )
+            return
+
+        self._send_message(
+            event.user_id,
+            "Оплата отменена или не завершена. Начислений не было.\n\n"
+            "Откройте нужный пакет и попробуйте оплатить снова.",
+            (Button("← Назад", "nav:back:main"),),
+            screen="payment_status_failed",
+        )
+
     def _render_refreshed_checkout(
         self, event: MaxIncomingEvent, order: PaymentOrder
     ) -> None:
@@ -741,6 +818,7 @@ class MaxApplication:
                         else _pay_button_text(order.product_code),
                         payment_url,
                     ),
+                    _payment_status_button(order),
                     Button("← Назад", "nav:back:main"),
                 ),
                 screen="payment_offer",
@@ -776,6 +854,7 @@ class MaxApplication:
                 _package_offer_text(order.product_code),
                 (
                     Button(_pay_button_text(order.product_code), payment_url),
+                    _payment_status_button(order),
                     Button("← Назад", "nav:back:work"),
                 ),
                 screen="payment_offer",
@@ -820,6 +899,7 @@ class MaxApplication:
                 ),
                 (
                     Button(_pay_button_text(order.product_code), payment_url),
+                    _payment_status_button(order),
                     Button("← Назад", "nav:back:main"),
                 ),
                 screen="pending_payment_offer",
@@ -1035,6 +1115,7 @@ class MaxApplication:
         self._reset_dialog_to_main(user_id, event_key)
         self.store.update(user_id, user_id=account_id)
         payment_url = None
+        payment_status_action = None
         if balance == 0 and self.settings.payments_enabled:
             try:
                 order = self.payments.create_order(
@@ -1044,10 +1125,14 @@ class MaxApplication:
                     account_purchase=True,
                 )
                 payment_url = self.payments.short_payment_url(order)
+                payment_status_action = f"payment:status:{order.public_token}"
             except (PaymentError, PaymentUnavailable) as exc:
                 self._record_payment_preparation_failure(exc)
                 LOGGER.warning("Start payment offer is temporarily unavailable")
-        self._send_view(user_id, main_menu(balance, originals, payment_url))
+        self._send_view(
+            user_id,
+            main_menu(balance, originals, payment_url, payment_status_action),
+        )
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
         self.store.transition(
@@ -1267,6 +1352,11 @@ class MaxApplication:
                 event,
                 dialog,
                 f"pay_{action.rsplit(':', 1)[-1]}",
+            )
+        elif action.startswith("payment:status:"):
+            self._show_payment_status(
+                event,
+                action.rsplit(":", 1)[-1],
             )
         elif action.startswith("payment:renew:"):
             self._refresh_checkout(
@@ -2321,15 +2411,18 @@ class MaxApplication:
                 pending_request_id=request_id,
             )
             payment_url = self.payments.short_payment_url(order)
+            status_button = _payment_status_button(order)
         except (PaymentError, PaymentUnavailable) as exc:
             self._record_payment_preparation_failure(exc)
             payment_url = "package:buy"
+            status_button = None
         self._send_image(
             event.user_id,
             source_path,
             PENDING_EDIT_PAYMENT_TEXT,
             (
                 Button("Оплатить 49 ₽", payment_url),
+                *((status_button,) if status_button is not None else ()),
                 Button(
                     "100 обработок + 50 оригиналов — 1990 ₽",
                     "package:buy:large",
@@ -2442,11 +2535,14 @@ class MaxApplication:
                 product_code=product_code,
             )
             payment_url = self.payments.short_payment_url(order)
+            status_button = _payment_status_button(order)
         except (PaymentError, PaymentUnavailable) as exc:
             self._record_payment_preparation_failure(exc)
             payment_url = "package:buy"
+            status_button = None
         offer_buttons = (
             Button(_pay_button_text(product_code), payment_url),
+            *((status_button,) if status_button is not None else ()),
             Button(
                 "100 обработок + 50 оригиналов — 1990 ₽",
                 "package:offer:large",

@@ -2313,6 +2313,111 @@ class MaxApplicationTests(TestCase):
                 "delivered",
             )
 
+    def test_payment_status_is_read_only_and_shows_live_balance_after_resulturl(self) -> None:
+        self.generate_first()
+        paid_app, payments = self.paid_application()
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        offer = self.transport.messages[-1]
+        self.assertIn(
+            "баланс обновится автоматически в течение нескольких секунд",
+            offer[1],
+        )
+        status_button = next(
+            button for button in offer[2] if button.text == "Проверить оплату"
+        )
+        token = status_button.action.rsplit(":", 1)[-1]
+
+        paid_app.handle(
+            self.event("message_callback", action=status_button.action)
+        )
+        pending = self.transport.messages[-1]
+        self.assertIn("Оплата пока не подтверждена", pending[1])
+        self.assertIn("СБП или другой картой", pending[1])
+        with self.database.read() as connection:
+            order = connection.execute(
+                "SELECT * FROM payment_orders WHERE public_token=?", (token,)
+            ).fetchone()
+            self.assertEqual(order["status"], "pending")
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants"
+                ).fetchone()[0],
+                0,
+            )
+
+        signature = hashlib.sha256(
+            (
+                f"49.00:{order['provider_invoice_id']}:two:"
+                f"Shp_order={order['public_token']}"
+            ).encode()
+        ).hexdigest()
+        self.assertTrue(
+            payments.process_webhook(
+                {
+                    "OutSum": "49.00",
+                    "InvId": str(order["provider_invoice_id"]),
+                    "Shp_order": order["public_token"],
+                    "SignatureValue": signature,
+                },
+                method="POST",
+                path="/payments/robokassa/result",
+            ).accepted
+        )
+        file_count = len(self.transport.files)
+        paid_app.handle(
+            self.event("message_callback", action=status_button.action)
+        )
+        confirmed = self.transport.messages[-1]
+        self.assertIn("Оплата подтверждена ✅", confirmed[1])
+        self.assertIn("⚡ Обработки: 3", confirmed[1])
+        self.assertIn("🖼 Оригиналы без водяного знака: 1", confirmed[1])
+        self.assertEqual(len(self.transport.files), file_count)
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM continuation_pack_grants"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_events").fetchone()[0],
+                1,
+            )
+
+    def test_expired_payment_status_offers_refresh_without_mutation(self) -> None:
+        self.generate_first()
+        paid_app, _payments = self.paid_application()
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        status_button = next(
+            button
+            for button in self.transport.messages[-1][2]
+            if button.text == "Проверить оплату"
+        )
+        token = status_button.action.rsplit(":", 1)[-1]
+        self.clock.advance(31 * 60)
+
+        paid_app.handle(
+            self.event("message_callback", action=status_button.action)
+        )
+
+        status = self.transport.messages[-1]
+        self.assertIn("Ссылка на оплату устарела", status[1])
+        self.assertEqual(status[2][0].text, "Обновить ссылку на оплату")
+        self.assertEqual(status[2][0].action, f"payment:renew:{token}")
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT status FROM payment_orders WHERE public_token=?", (token,)
+                ).fetchone()[0],
+                "pending",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM payment_audit WHERE event_type='checkout_expired'"
+                ).fetchone()[0],
+                0,
+            )
+
     def test_unlock_offer_reuses_selected_preview_without_creating_payment(self) -> None:
         self.generate_first()
         paid_app, _payments = self.paid_application()
@@ -2347,6 +2452,10 @@ class MaxApplicationTests(TestCase):
             [(button.text, button.action) for button in offers[0][2]],
             [
                 ("Оплатить 49 ₽", offers[0][2][0].action),
+                (
+                    "Проверить оплату",
+                    offers[0][2][1].action,
+                ),
                 (
                     "100 обработок + 50 оригиналов — 1990 ₽",
                     "package:offer:large",
