@@ -44,6 +44,7 @@ from app.max_application import (
     PAYMENT_OFFER_TEXT,
     PHOTO_ACCEPTED_TEXT,
     PROCESSING_TEXT,
+    TWO_PHOTOS_ACCEPTED_TEXT,
 )
 from app.max_conversation import MaxConversationStore
 from app.max_transport import MaxIncomingEvent, MaxTransportError, parse_update
@@ -1025,7 +1026,7 @@ class MaxApplicationTests(TestCase):
         dialog = self.store.get("u1")
         self.assertEqual(dialog.state, "waiting_for_prompt")
         self.assertEqual(dialog.pending_action, "two_sources")
-        self.assertIn("Фото 1 и Фото 2 приняты", self.transport.messages[-1][1])
+        self.assertEqual(self.transport.messages[-1][1], TWO_PHOTOS_ACCEPTED_TEXT)
         provider_calls = self.provider.calls
         self.app.handle(
             self.event("message_created", image_url="https://iu.oneme.ru/third")
@@ -1100,6 +1101,38 @@ class MaxApplicationTests(TestCase):
             self.demo.commerce.balance(self.store.get("u1").user_id).available,
             1,
         )
+
+    def test_two_images_without_caption_acknowledges_both_and_replay_is_idempotent(self) -> None:
+        first_url = "https://iu.oneme.ru/no-caption-first"
+        second_url = "https://iu.oneme.ru/no-caption-second"
+        second = self.base / "no-caption-second.png"
+        Image.new("RGB", (240, 320), "red").save(second)
+        self.transport.sources_by_url = {
+            first_url: self.source,
+            second_url: second,
+        }
+        event = self.event(
+            "message_created",
+            image_url=first_url,
+            image_urls=(first_url, second_url),
+            image_attachment_count=2,
+        )
+
+        self.assertTrue(self.app.handle(event))
+        message_count = len(self.transport.messages)
+        self.assertFalse(self.app.handle(event))
+
+        dialog = self.store.get("u1")
+        self.assertEqual(dialog.state, "waiting_for_prompt")
+        self.assertEqual(dialog.pending_action, "two_sources")
+        self.assertEqual(self.transport.downloaded_urls, [first_url, second_url])
+        self.assertEqual(len(self.transport.messages), message_count)
+        self.assertEqual(self.transport.messages[-1][1], TWO_PHOTOS_ACCEPTED_TEXT)
+        self.assertEqual(
+            [(button.text, button.action) for button in self.transport.messages[-1][2]],
+            [("← Назад", "nav:back:main")],
+        )
+        self.assertEqual(self.provider.calls, 0)
 
     def test_raw_max_update_with_one_image_keeps_existing_flow(self) -> None:
         image_url = "https://iu.oneme.ru/one-message-only"

@@ -95,6 +95,10 @@ pending request; a previous or latest completed work is never used as fallback.
 - After the first source, Ravuna offers “Продолжить с одной фотографией” and
   “Добавить вторую фотографию”. A third source is rejected with
   “Можно использовать максимум 2 фотографии”.
+- When two sources arrive in one message without a caption, Ravuna confirms that
+  both photos were received and asks only for the instruction; it never offers
+  to add a second photo that is already stored. The same confirmation is used
+  when the second source arrives in a later message.
 - The provider receives the unchanged prompt followed by source image 1 and,
   when present, source image 2. Ravuna does not infer semantic roles for them.
 - Both private sources and their lineage survive a zero-balance pending request

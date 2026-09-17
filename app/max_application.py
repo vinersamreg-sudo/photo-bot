@@ -88,6 +88,10 @@ LOGGER = logging.getLogger(__name__)
 PHOTO_ACCEPTED_TEXT = (
     "Фото 1 принято.\n\nЧто хотите изменить?"
 )
+TWO_PHOTOS_ACCEPTED_TEXT = (
+    "Обе фотографии получены ✅ Теперь напишите, что именно нужно изменить "
+    "или перенести с одного фото на другое."
+)
 PHOTO_REUSED_TEXT = (
     "Что хотите изменить?"
 )
@@ -1690,7 +1694,8 @@ class MaxApplication:
                 user_id=session.user_id, session_id=session.session_id,
                 current_gallery_item_id=item_id, current_version_id=None,
                 pending_request_id=None,
-                selected_scenario_id=None, pending_action="initial",
+                selected_scenario_id=None,
+                pending_action="two_sources" if len(image_urls) == 2 else "initial",
             )
             inline_prompt = event.text or ""
             if inline_prompt.strip().lower() == "/start":
@@ -1715,15 +1720,23 @@ class MaxApplication:
                     )
                 self._receive_prompt(prompt_event, updated)
             else:
-                self._send_message(
-                    event.user_id,
-                    PHOTO_ACCEPTED_TEXT,
-                    (
-                        Button("Продолжить с одним фото", "source:one"),
-                        Button("➕ Добавить второе фото", "source:add-second"),
-                        Button("← Назад", "nav:back:main"),
-                    ),
-                )
+                if len(image_urls) == 2:
+                    self._send_message(
+                        event.user_id,
+                        TWO_PHOTOS_ACCEPTED_TEXT,
+                        (Button("← Назад", "nav:back:main"),),
+                        screen="waiting_for_prompt",
+                    )
+                else:
+                    self._send_message(
+                        event.user_id,
+                        PHOTO_ACCEPTED_TEXT,
+                        (
+                            Button("Продолжить с одним фото", "source:one"),
+                            Button("➕ Добавить второе фото", "source:add-second"),
+                            Button("← Назад", "nav:back:main"),
+                        ),
+                    )
 
     def _receive_secondary_source(
         self, event: MaxIncomingEvent, dialog: MaxDialog
@@ -1758,7 +1771,7 @@ class MaxApplication:
         )
         self._send_message(
             event.user_id,
-            "Фото 1 и Фото 2 приняты.\n\nТеперь напишите один запрос для обработки.",
+            TWO_PHOTOS_ACCEPTED_TEXT,
             (Button("← Назад", "nav:back:main"),),
             screen="waiting_for_prompt",
         )
