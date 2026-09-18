@@ -379,6 +379,38 @@ production authorization; CI uses synthetic fixtures and mock HTTP/systemd only.
 - VPS loss requires infrastructure restore plus encrypted backup restoration;
   source redeploy alone is not data recovery.
 
+## Commercial intelligence
+
+Generate a deterministic business audit from a copied SQLite snapshot; never run
+the command against a writable production path:
+
+```bash
+scripts/ravuna commercial-audit \
+  --database /private/snapshots/photo_bot.sqlite3 \
+  --from 2026-09-03 --to 2026-09-10 \
+  --compare baseline=2026-08-20,2026-08-27 \
+  --timezone Europe/Samara \
+  --markdown-out commercial.md --json-out commercial.json
+```
+
+Boundaries are half-open (`from <= timestamp < to`); date-only values use Samara
+UTC+4 by default. `--compare LABEL=FROM,TO` may be repeated and each window is
+calculated independently, preventing boundary double-counting. The tool opens
+SQLite with `mode=ro` and `query_only`, checks schema compatibility and
+`quick_check`, and never initializes or migrates the database.
+
+Payments require both an authoritative paid order and its unique continuation
+grant. Funnel uploads use recorded product upload events; attribution is
+supplementary. Retention denominators exclude cohorts not yet aged 7/14/30 days.
+The historic-heavy-user comparison uses the snapshot's lifetime top confirmed
+payer consistently across all comparison windows. Pending/expired counts describe
+the current known state of orders created inside each window, because historical
+state-at-date cannot be reconstructed from the present schema.
+JTBD prompt text is classified in memory and discarded; output contains only
+aggregate clusters and deterministic masked IDs. Full prompts, platform IDs,
+secrets and paths are never emitted. Actual provider cost is reported as
+`NOT MEASURABLE` unless an authoritative billed-cost source exists.
+
 ## Output safety
 
 Operator reports and support notes must not contain platform user IDs, tokens,
