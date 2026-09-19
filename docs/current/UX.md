@@ -111,6 +111,12 @@ pending request; a previous or latest completed work is never used as fallback.
 - Primary action depends on entitlement/allowance state.
 - “Исправить” must explain in one response what to type, with short examples.
 - When no edits remain, do not invite correction; offer the existing package.
+- A clear correction asking to remove Ravuna's own «ОБРАЗЕЦ»/watermark or to
+  obtain the original never calls the image provider or changes the edit
+  balance. Ravuna explains that the mark belongs only to the preview and offers
+  the existing original action; without an available original entitlement it
+  opens the existing target-scoped package flow. Requests to remove unrelated
+  text from the customer's source remain normal edits.
 - Every callback must produce visible feedback or a clear unavailable message.
 - The processing text is temporary. A finished watermarked preview is sent as a
   new native image message, adopted as the active UI message, and only then is
