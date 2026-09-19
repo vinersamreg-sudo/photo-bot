@@ -43,6 +43,7 @@ from app.max_application import (
     PAYMENT_LINK_TEXT,
     PAYMENT_OFFER_TEXT,
     PHOTO_ACCEPTED_TEXT,
+    PREVIEW_WATERMARK_GUIDANCE_TEXT,
     PROCESSING_TEXT,
     TWO_PHOTOS_ACCEPTED_TEXT,
 )
@@ -2597,6 +2598,120 @@ class MaxApplicationTests(TestCase):
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 0,
             )
+
+    def test_preview_sample_removal_offers_original_without_generation_or_debit(self) -> None:
+        self.generate_first()
+        dialog = self.store.get("u1")
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_unlock_entitlements(
+                connection,
+                user_id=dialog.user_id,
+                delta=1,
+                reason="watermark guidance test",
+                idempotency_key="watermark-guidance-entitlement",
+            )
+        provider_calls = self.provider.calls
+        balance = self.demo.commerce.balance(dialog.user_id).available
+
+        self.callback("result:correct")
+        self.app.handle(
+            self.event("message_created", text="убери слово образец")
+        )
+
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.demo.commerce.balance(dialog.user_id).available, balance)
+        self.assertEqual(self.transport.images[-1][2], PREVIEW_WATERMARK_GUIDANCE_TEXT)
+        self.assertIn(
+            ("⬇️ Получить оригинал без водяного знака", "result:unlock"),
+            [(button.text, button.action) for button in self.transport.images[-1][3]],
+        )
+
+    def test_preview_watermark_removal_offers_original_without_generation(self) -> None:
+        self.generate_first()
+        dialog = self.store.get("u1")
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_unlock_entitlements(
+                connection,
+                user_id=dialog.user_id,
+                delta=1,
+                reason="watermark guidance test",
+                idempotency_key="watermark-guidance-watermark-entitlement",
+            )
+        provider_calls = self.provider.calls
+
+        self.callback("result:correct")
+        self.app.handle(
+            self.event("message_created", text="Пожалуйста, убери водяной знак")
+        )
+
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertIn("добавляет Ravuna", self.transport.images[-1][2])
+
+    def test_unrelated_source_text_removal_remains_normal_correction(self) -> None:
+        self.generate_first()
+        self.settings = replace(self.settings, image_direct_prompt_enabled=True)
+        self.app.settings = self.settings
+        dialog = self.store.get("u1")
+        provider_calls = self.provider.calls
+        balance = self.demo.commerce.balance(dialog.user_id).available
+
+        self.clock.advance(2)
+        self.callback("result:correct")
+        self.app.handle(
+            self.event("message_created", text="убери надпись с футболки")
+        )
+
+        self.assertEqual(self.provider.calls, provider_calls + 1)
+        self.assertEqual(
+            self.demo.commerce.balance(dialog.user_id).available,
+            balance - 1,
+        )
+
+    def test_preview_watermark_request_without_entitlement_uses_payment_flow(self) -> None:
+        self.generate_first()
+        self.app, _payments = self.paid_application()
+        dialog = self.store.get("u1")
+        provider_calls = self.provider.calls
+        balance = self.demo.commerce.balance(dialog.user_id).available
+
+        self.callback("result:correct")
+        self.app.handle(
+            self.event("message_created", text="хочу оригинал без водяного знака")
+        )
+
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.demo.commerce.balance(dialog.user_id).available, balance)
+        self.assertIn(PREVIEW_WATERMARK_GUIDANCE_TEXT, self.transport.messages[-1][1])
+        self.assertIn(PAYMENT_OFFER_TEXT, self.transport.messages[-1][1])
+        with self.database.read() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0],
+                1,
+            )
+
+    def test_preview_watermark_request_replay_is_idempotent(self) -> None:
+        self.generate_first()
+        dialog = self.store.get("u1")
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_unlock_entitlements(
+                connection,
+                user_id=dialog.user_id,
+                delta=1,
+                reason="watermark replay test",
+                idempotency_key="watermark-guidance-replay-entitlement",
+            )
+        self.callback("result:correct")
+        event = self.event("message_created", text="дай оригинал")
+        provider_calls = self.provider.calls
+        balance = self.demo.commerce.balance(dialog.user_id).available
+
+        self.assertTrue(self.app.handle(event))
+        image_count = len(self.transport.images)
+        self.assertFalse(self.app.handle(event))
+
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(len(self.transport.images), image_count)
+        self.assertEqual(self.demo.commerce.balance(dialog.user_id).available, balance)
 
     def test_back_from_waiting_for_photo_returns_main_without_provider_call(self) -> None:
         self.app.handle(self.event("bot_started"))

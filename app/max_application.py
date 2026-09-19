@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import sqlite3
 import threading
 from datetime import datetime
@@ -114,6 +115,33 @@ CORRECTION_REQUEST_TEXT = (
     "• убрать лишний предмет;\n"
     "• изменить цвет одежды;\n"
     "• сохранить лицо без изменений."
+)
+PREVIEW_WATERMARK_GUIDANCE_TEXT = (
+    "Надпись «ОБРАЗЕЦ» добавляет Ravuna только на превью. "
+    "Повторная обработка её не удалит.\n\n"
+    "Получите оригинал без водяного знака."
+)
+_PREVIEW_WATERMARK_REQUESTS = (
+    re.compile(
+        r"\b(?:убер\w*|удал\w*|стер\w*|сним\w*|избав\w*|без)\b"
+        r".{0,32}\b(?:слово\s+|надпис\w*\s+)?образец\b"
+    ),
+    re.compile(
+        r"\bобразец\b.{0,32}"
+        r"\b(?:убер\w*|удал\w*|стер\w*|сним\w*|избав\w*)\b"
+    ),
+    re.compile(
+        r"\b(?:убер\w*|удал\w*|стер\w*|сним\w*|избав\w*|без)\b"
+        r".{0,32}\bводян\w*\s+(?:знак\w*|надпис\w*)\b"
+    ),
+    re.compile(
+        r"\b(?:дай\w*|дайте|получ\w*|скача\w*|пришл\w*|отправ\w*|хочу|нуж\w*)\b"
+        r".{0,32}\bоригинал\w*\b"
+    ),
+    re.compile(
+        r"\боригинал\w*\b.{0,32}"
+        r"\b(?:дай\w*|дайте|получ\w*|скача\w*|пришл\w*|отправ\w*|нуж\w*)\b"
+    ),
 )
 PAYMENT_OFFER_TEXT = (
     "Пакет Ravuna — 49 ₽\n\n"
@@ -1827,6 +1855,12 @@ class MaxApplication:
             return
         if len(clean_prompt) > self.settings.max_prompt_length:
             raise InvalidInputError("Prompt is too long")
+        if (
+            dialog.state == "waiting_for_correction"
+            and self._is_preview_watermark_request(clean_prompt)
+        ):
+            self._show_preview_watermark_guidance(event, dialog)
+            return
         if not self.settings.image_direct_prompt_enabled:
             prompt = clean_prompt
         if not dialog.session_id or not self._session_is_usable(dialog.session_id):
@@ -1875,6 +1909,49 @@ class MaxApplication:
             )
             return
         self._generate(event, updated, correction=mode == "correction")
+
+    @staticmethod
+    def _is_preview_watermark_request(text: str) -> bool:
+        normalized = re.sub(r"\s+", " ", text.casefold().replace("ё", "е")).strip()
+        return any(pattern.search(normalized) for pattern in _PREVIEW_WATERMARK_REQUESTS)
+
+    def _show_preview_watermark_guidance(
+        self, event: MaxIncomingEvent, dialog: MaxDialog
+    ) -> None:
+        if not dialog.user_id or not dialog.current_version_id:
+            raise InvalidInputError("No current version for original delivery")
+        current = self.store.transition(
+            event.user_id,
+            "result_ready",
+            event_key=event.event_key,
+            force=True,
+            pending_prompt=None,
+            pending_action=NAV_WORK,
+        )
+        if self.demo.commerce.entitlement_balance(dialog.user_id).available <= 0:
+            self._show_continuation_pack_offer(
+                event,
+                current,
+                intro_text=PREVIEW_WATERMARK_GUIDANCE_TEXT,
+            )
+            return
+        self._send_image(
+            event.user_id,
+            self._selected_preview_path(current),
+            PREVIEW_WATERMARK_GUIDANCE_TEXT,
+            (
+                Button(
+                    "⬇️ Получить оригинал без водяного знака",
+                    "result:unlock",
+                ),
+                Button("← Назад", "nav:back:work"),
+            ),
+            screen="original_guidance",
+            context={
+                "gallery_item_id": current.current_gallery_item_id,
+                "version_id": current.current_version_id,
+            },
+        )
 
     def _show_intent_ambiguity(
         self, platform_user_id: str, _exc: IntentAmbiguityError
@@ -2506,6 +2583,8 @@ class MaxApplication:
         event: MaxIncomingEvent,
         dialog: MaxDialog,
         product_code: str = PRODUCT_CODE,
+        *,
+        intro_text: Optional[str] = None,
     ) -> None:
         """Show the selected result with its direct, idempotent checkout link."""
 
@@ -2565,18 +2644,21 @@ class MaxApplication:
             ),
             Button("← Назад", "nav:back:work"),
         )
+        offer_text = _package_offer_text(product_code)
+        if intro_text:
+            offer_text = f"{intro_text}\n\n{offer_text}"
         if self.settings.max_single_screen_ui_enabled and dialog.current_version_id:
             self._send_image(
                 event.user_id,
                 self._selected_preview_path(dialog),
-                _package_offer_text(product_code),
+                offer_text,
                 offer_buttons,
                 screen="payment_offer",
             )
         else:
             self._send_message(
                 event.user_id,
-                _package_offer_text(product_code),
+                offer_text,
                 offer_buttons,
             )
         self.attribution.record_event(
