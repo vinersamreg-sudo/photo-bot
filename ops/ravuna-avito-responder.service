@@ -1,0 +1,45 @@
+[Unit]
+Description=Ravuna Avito first-response bridge
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/ravuna-avito/.env
+
+[Service]
+Type=simple
+User=photoapp
+Group=photoapp
+WorkingDirectory=/opt/ravuna-avito/current
+EnvironmentFile=/opt/ravuna-avito/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/ravuna-avito/current/venv/bin/python -m app.avito_responder.cli run
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+PrivateDevices=true
+DevicePolicy=closed
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+RemoveIPC=true
+ReadWritePaths=/opt/ravuna-avito/data
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ravuna-avito-responder
+
+[Install]
+WantedBy=multi-user.target

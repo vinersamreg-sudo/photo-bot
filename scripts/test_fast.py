@@ -51,6 +51,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "tests.test_gallery",
         "tests.test_backup_maintenance_operations",
     ),
+    "avito": ("tests.test_avito_responder",),
 }
 TAIL_LINES = 80
 

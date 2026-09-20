@@ -55,6 +55,8 @@ historical evidence or when a current document links to a specific record.
 - `site/public/`: published Ravuna static site.
 - `site/tests/`: site and legal-page checks.
 - `scripts/`: operator, release and diagnostic tools.
+- `app/avito_responder/`: isolated, fail-closed Avito first-response bridge;
+  it never invokes the customer image, commerce, payment or MAX flows.
 - `ops/`: systemd, nginx and trusted certificate assets.
 - `.github/workflows/`: tests, deploy, site, backup and bounded E2E workflows.
 - `tests/`: `unittest` product and infrastructure tests.
@@ -148,6 +150,9 @@ with this list.
 - Do not use real customer data for tests.
 - Use synthetic adult images for bounded visual validation.
 - Do not expose SQLite or private storage through nginx.
+- Avito automation runs as a separate service and stores only its bounded
+  webhook/reply diagnostics. It never downloads customer images or writes the
+  main Ravuna database.
 - Do not follow symlinks during cleanup or file delivery.
 
 ## Permissions and external actions

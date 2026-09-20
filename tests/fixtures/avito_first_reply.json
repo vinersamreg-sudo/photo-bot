@@ -1,0 +1,29 @@
+{
+  "item_id": 77,
+  "messages": [
+    {
+      "id": "synthetic-image",
+      "author_id": 20,
+      "direction": "in",
+      "type": "image",
+      "created": 1790000000,
+      "content": {
+        "image": {
+          "sizes": {
+            "640x480": "https://example.invalid/synthetic.jpg"
+          }
+        }
+      }
+    },
+    {
+      "id": "synthetic-text",
+      "author_id": 20,
+      "direction": "in",
+      "type": "text",
+      "created": 1790000001,
+      "content": {
+        "text": "Сделайте фон светлее"
+      }
+    }
+  ]
+}
