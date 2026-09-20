@@ -113,3 +113,27 @@ path outside it. This is a hard path boundary from private customer storage.
 
 Engineering documentation does not replace legal review. Public legal texts are
 maintained in `site/public/legal/` and must remain consistent with actual data flow.
+
+## Avito responder boundary
+
+The Avito responder has a separate mode-600 environment and private SQLite
+database. `client_id`, `client_secret`, access tokens and the OpenAI key are
+never logged or stored in its event tables. Webhook payloads are not retained:
+only event/message/chat/listing identifiers, timestamps and processing status
+are stored, plus the bounded outbound reply required for diagnostics.
+Completed diagnostic records are retained for 30 days by default; pending or
+in-flight work is not deleted by that cleanup.
+
+Avito does not provide customer images to the model in this MVP. The responder
+uses authenticated message history to verify webhook identifiers before any
+send, treats customer text as untrusted model input, and never lets model output
+invoke tools or choose a price. A timeout after an outbound mutation is
+reconciled against chat history rather than retried blindly.
+
+The public callback uses a 43-character URL-safe secret path held only in the
+private environment. Nginx accepts POST only, caps the body, applies a dedicated
+rate limit and short proxy timeouts, and forwards no arbitrary request headers.
+The secret path is an outer abuse barrier, not authentication: every runnable
+event is still verified through authenticated Avito chat/message reads. The
+service binds only to loopback and its systemd sandbox has no capabilities or
+device access and can write only `/opt/ravuna-avito/data`.

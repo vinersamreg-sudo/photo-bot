@@ -23,6 +23,24 @@ Content Studio is a separate runtime and release procedure using
 `ravuna-content-publisher.timer`. Main-bot deployment must not deploy, restart or
 rewrite Content Studio.
 
+The Avito first responder is deployed separately by the manual-only
+`.github/workflows/deploy-avito.yml`. It requires canonical-main ancestry and a
+green exact-SHA release gate, uses the `production` GitHub Environment, and may
+restart only `ravuna-avito-responder.service`. Its release layout is
+`/opt/ravuna-avito/releases/<SHA>` plus an atomic `current` symlink; its private
+environment and SQLite live outside releases. Fresh provisioning forces
+`AVITO_AUTO_REPLY_ENABLED=false` and one allowed listing. The workflow installs
+the narrow nginx callback only after staging/import checks and never subscribes
+the Avito webhook or activates replies.
+
+Before the first Avito deploy, a root operator must install
+`ops/ravuna-avito-deploy.sudoers` as mode 0440 after `visudo -cf`; the workflow
+does not grant itself privileges. Rollback first unsubscribes an already
+registered Avito webhook, then uses `ops/rollback_ravuna_avito.sh` to restore the
+previous nginx files/current release or stop/disable a failed first release.
+The Avito `.env` and SQLite are always preserved. Main-bot, Content Studio,
+Admin Journal, site contents and retention are outside this deployment boundary.
+
 ## Canonical history contract
 
 - `main` is the canonical release history for both deployed runtime lineages.

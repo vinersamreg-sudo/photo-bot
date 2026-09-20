@@ -27,6 +27,30 @@ The application acknowledges no successful edit until provider output, storage,
 gallery persistence and delivery reach their required states. Technical or
 delivery failures must not consume the user’s edit allowance.
 
+## Avito first-response bridge
+
+The optional Avito MVP is a separate `ravuna-avito-responder.service`, release
+root, environment and SQLite database. Its loopback webhook persists a bounded
+event and returns immediately. A worker waits exactly eight seconds after the
+latest inbound message in the chat, verifies the message and listing through
+authenticated Avito API reads, then may send one first text response. New
+inbound messages reset the durable deadline. The bridge never downloads Avito
+images, calls Ravuna image processing, or reads/writes the main customer,
+commerce, payment or gallery data.
+
+The feature is fail-closed behind `AVITO_AUTO_REPLY_ENABLED=false` and an
+explicit `AVITO_ALLOWED_ITEM_IDS` allowlist. Per-chat claims, unique webhook and
+message identifiers, seller-direction filtering and a durable closed/sent state
+prevent concurrent replies, replay and webhook loops.
+
+The durable job states are `pending -> processing -> sending -> sent`, with
+terminal skipped/failed/uncertain states. Processing and sending carry a bounded
+lease. A newer inbound event increments the chat revision and debounce deadline
+without clearing an active lease. Expired processing is reclaimed atomically;
+expired sending is reconciled against authenticated Avito history before the
+single controlled retry is permitted. Ambiguous outcomes close as `uncertain`
+and are never resent blindly.
+
 ## Module boundaries
 
 - `config.py`: immutable environment-derived settings.

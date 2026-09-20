@@ -10,4 +10,9 @@ if [ "${1:-}" = "provider" ]; then
   cd "$ROOT"
   exec "$PYTHON" -m app.provider_switch "$@" --root "$ROOT"
 fi
+if [ "${1:-}" = "avito" ]; then
+  shift
+  cd "$ROOT"
+  exec "$PYTHON" -m app.avito_responder.cli "$@"
+fi
 exec "$PYTHON" -m app.content_studio.cli "$@"

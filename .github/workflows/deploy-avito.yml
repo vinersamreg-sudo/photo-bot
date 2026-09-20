@@ -1,0 +1,156 @@
+name: Ravuna Avito responder deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact 40-character commit SHA from canonical main history
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: ravuna-avito-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Avito deployment target
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require canonical ancestry and exact-SHA release CI
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          python scripts/validate_deploy_target.py \
+            --target-sha "$TARGET_SHA" --canonical-ref origin/main
+          gh api -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100" \
+            > "$RUNNER_TEMP/check-runs.json"
+          python - <<'PY'
+          import json, os
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "check-runs.json"), encoding="utf-8") as stream:
+              payload = json.load(stream)
+          target = os.environ["TARGET_SHA"]
+          if not any(
+              run.get("name") == "Canonical release gate"
+              and run.get("head_sha") == target
+              and run.get("conclusion") == "success"
+              for run in payload.get("check_runs", ())
+          ):
+              raise SystemExit("Exact target has no successful canonical CI check")
+          PY
+
+  deploy:
+    name: Deploy isolated Avito responder
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      SSH_HOST: ${{ secrets.HETZNER_HOST }}
+      SSH_USER: ${{ secrets.HETZNER_USER }}
+      SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+      SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
+      AVITO_CLIENT_ID_SECRET: ${{ secrets.AVITO_CLIENT_ID }}
+      AVITO_CLIENT_SECRET_SECRET: ${{ secrets.AVITO_CLIENT_SECRET }}
+      OPENAI_API_KEY_SECRET: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require deployment secrets without printing values
+        run: |
+          set -euo pipefail
+          for name in SSH_HOST SSH_USER SSH_PORT SSH_PRIVATE_KEY AVITO_CLIENT_ID_SECRET AVITO_CLIENT_SECRET_SECRET OPENAI_API_KEY_SECRET; do
+            test -n "${!name}" || { echo "Required production secret is missing: $name" >&2; exit 1; }
+          done
+      - name: Build byte-exact committed artifact
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$RUNNER_TEMP/ravuna-avito"
+          python scripts/build_deploy_artifact.py --revision "$TARGET_SHA" \
+            --archive "$RUNNER_TEMP/ravuna-avito/release.tar.gz" \
+            --manifest "$RUNNER_TEMP/ravuna-avito/manifest.json"
+      - name: Build fresh fail-closed environment candidate
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, secrets
+          from pathlib import Path
+
+          def line(name: str, value: str) -> str:
+              if "\n" in value or "\r" in value:
+                  raise SystemExit(f"newline is not allowed in {name}")
+              escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+              return f'{name}="{escaped}"'
+
+          values = {
+              "AVITO_AUTO_REPLY_ENABLED": "false",
+              "AVITO_BASE_DIR": "/opt/ravuna-avito/data",
+              "AVITO_DATABASE_PATH": "/opt/ravuna-avito/data/avito_responder.sqlite3",
+              "AVITO_CLIENT_ID": os.environ["AVITO_CLIENT_ID_SECRET"],
+              "AVITO_CLIENT_SECRET": os.environ["AVITO_CLIENT_SECRET_SECRET"],
+              "AVITO_ACCOUNT_USER_ID": "0",
+              "AVITO_ALLOWED_ITEM_IDS": "8191967914",
+              "AVITO_API_BASE_URL": "https://api.avito.ru",
+              "AVITO_WEBHOOK_HOST": "127.0.0.1",
+              "AVITO_WEBHOOK_PORT": "8093",
+              "AVITO_WEBHOOK_SECRET": secrets.token_urlsafe(32),
+              "AVITO_REPLY_MODEL": "gpt-5.4-mini",
+              "AVITO_REPLY_CONTEXT_MESSAGES": "6",
+              "AVITO_REPLY_MAX_CONTEXT_CHARS": "4000",
+              "AVITO_REPLY_TIMEOUT_SECONDS": "15",
+              "AVITO_HTTP_TIMEOUT_SECONDS": "10",
+              "AVITO_DIAGNOSTIC_RETENTION_DAYS": "30",
+              "AVITO_PROCESSING_LEASE_SECONDS": "60",
+              "AVITO_SEND_RECONCILE_GRACE_SECONDS": "120",
+              "OPENAI_API_KEY": os.environ["OPENAI_API_KEY_SECRET"],
+          }
+          target = Path(os.environ["RUNNER_TEMP"]) / "ravuna-avito" / "avito.env"
+          target.write_text("\n".join(line(key, value) for key, value in values.items()) + "\n", encoding="utf-8", newline="\n")
+          target.chmod(0o600)
+          PY
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Upload private stage
+        run: |
+          set -euo pipefail
+          STAGE_ROOT="/var/tmp/ravuna-avito-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "install -d -m 700 '$STAGE_ROOT'"
+          scp -P "$SSH_PORT" \
+            "$RUNNER_TEMP/ravuna-avito/release.tar.gz" \
+            "$RUNNER_TEMP/ravuna-avito/manifest.json" \
+            "$RUNNER_TEMP/ravuna-avito/avito.env" \
+            "$SSH_USER@$SSH_HOST:$STAGE_ROOT/"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "chmod 600 '$STAGE_ROOT/avito.env'"
+          echo "STAGE_ROOT=$STAGE_ROOT" >> "$GITHUB_ENV"
+      - name: Execute Avito-only atomic deploy
+        run: |
+          set -euo pipefail
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "install -d -m 700 '$STAGE_ROOT/source' && tar -xzf '$STAGE_ROOT/release.tar.gz' -C '$STAGE_ROOT/source' && bash '$STAGE_ROOT/source/ops/deploy_ravuna_avito.sh' '$STAGE_ROOT' '$TARGET_SHA'"
+      - name: Remove runner-side secret candidate
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ravuna-avito/avito.env"

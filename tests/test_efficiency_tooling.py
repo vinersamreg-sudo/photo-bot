@@ -10,7 +10,8 @@ from scripts.test_fast import PROFILES
 class EfficiencyToolingTests(TestCase):
     def test_fast_profiles_cover_required_domains_without_full_discovery(self) -> None:
         self.assertEqual(
-            set(PROFILES), {"max", "payments", "openai", "providers", "site", "storage"}
+            set(PROFILES),
+            {"avito", "max", "payments", "openai", "providers", "site", "storage"},
         )
         for targets in PROFILES.values():
             self.assertTrue(targets)

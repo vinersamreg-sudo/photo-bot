@@ -375,6 +375,37 @@ production authorization; CI uses synthetic fixtures and mock HTTP/systemd only.
 
 - systemd is the only runtime manager; no nohup/cron/watchdog duplicates.
 - Start/stop through the scoped scripts/systemd procedures.
+
+## Avito first responder
+
+The isolated service is `ravuna-avito-responder.service` under
+`/opt/ravuna-avito`; it must never be coupled to `photo-bot.service`. Safe local
+status is available through `scripts/ravuna avito status`. A synthetic text-only
+preview can be generated without Avito delivery using:
+
+```bash
+scripts/ravuna avito dry-run --fixture tests/fixtures/avito_first_reply.json
+```
+
+The dry-run may call the configured text model but never calls Avito send. The
+receiver can remain running while `AVITO_AUTO_REPLY_ENABLED=false`; events are
+acknowledged and recorded as ignored, never queued for later surprise delivery.
+Enabling requires a non-empty one-listing allowlist, credentials, account id and
+OpenAI key. Webhook subscription and the public HTTPS nginx route are separate
+production activation steps and are not implied by installing the service.
+
+Production releases use `.github/workflows/deploy-avito.yml` with an exact
+canonical SHA. The first deploy also requires the reviewed sudoers allowlist to
+be installed and validated by root. Post-deploy probes require the local and
+HTTPS secret route to reject malformed input, a wrong secret to return 404,
+non-POST methods to be rejected and oversized bodies to return 413. Auto replies
+remain off; webhook registration is a later explicit operation.
+
+Rollback order is: unsubscribe the Avito webhook if registered, run
+`ops/rollback_ravuna_avito.sh <previous-release> <nginx-backup>`, and verify only
+the Avito service/nginx. For a failed first release omit the previous release so
+the Avito service is stopped and disabled. Never remove `/opt/ravuna-avito/.env`
+or `data/`, and never restart `photo-bot.service` as part of this procedure.
 - After restart verify SQLite, processing, MAX poll freshness and payment recovery.
 - VPS loss requires infrastructure restore plus encrypted backup restoration;
   source redeploy alone is not data recovery.
