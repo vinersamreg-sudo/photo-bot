@@ -38,14 +38,22 @@ class AvitoResponderService:
         type_allowed = event.message_type not in {"system", "call"}
         item_allowed = event.item_id == 0 or event.item_id in self.settings.allowed_item_ids
         eligible = bool(
-            self.settings.auto_reply_enabled
+            self.settings.processing_enabled
             and direction_allowed and author_allowed and account_allowed
             and type_allowed and item_allowed
         )
-        inserted, scheduled = self.repository.record_event(event, eligible=eligible)
+        inserted, scheduled = self.repository.record_event(
+            event,
+            eligible=eligible,
+            inbound_valid=direction_allowed and author_allowed and account_allowed and type_allowed,
+            allowlist_pass=item_allowed,
+            reopen_observed=self.settings.mode == "live",
+        )
         return {"accepted": True, "duplicate": not inserted, "scheduled": scheduled}
 
     def process_one_due(self, *, now: datetime | None = None) -> str:
+        if not self.settings.processing_enabled:
+            return "idle"
         claim = self.repository.claim_due(now=now)
         if claim is None:
             return "idle"
@@ -87,9 +95,21 @@ class AvitoResponderService:
                 self.repository.release_for_newer_revision(claim)
                 return "superseded"
             if not self.repository.prepare_reply(
-                claim, generated.text, self.settings.reply_model, generated.response_id
+                claim,
+                generated.text,
+                self.settings.reply_model,
+                generated.response_id,
+                bundle_message_count=claim.revision,
+                attachment_count=context.image_count,
             ):
                 return "duplicate_reply"
+            if self.settings.mode == "observe":
+                if not self.repository.mark_observed(claim):
+                    return "duplicate_reply"
+                return "observed"
+            if self.settings.mode != "live":
+                self._finish_claim(claim, "failed", "send_barrier")
+                return "failed"
             if not self.repository.mark_sending(claim):
                 return "duplicate_reply"
             try:
@@ -129,6 +149,8 @@ class AvitoResponderService:
                     now - timedelta(days=self.settings.diagnostic_retention_days)
                 )
                 next_cleanup = now + timedelta(hours=1)
+            if not self.settings.processing_enabled:
+                continue
             if self.settings.auto_reply_enabled:
                 recovery = self.recover_one_sending(now=now)
                 if recovery != "idle":
@@ -139,6 +161,8 @@ class AvitoResponderService:
                 LOGGER.info("Avito first-response job completed (result=%s)", result)
 
     def recover_one_sending(self, *, now: datetime | None = None) -> str:
+        if self.settings.mode != "live":
+            return "idle"
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         attempt = self.repository.recoverable_sending(now=current)
         if attempt is None:

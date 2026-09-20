@@ -127,7 +127,7 @@ rm -f "$ENV_CANDIDATE"
 test ! -L "$ENV_FILE"
 test "$(stat -c '%a' "$ENV_FILE")" = 600
 test "$(stat -c '%U:%G' "$ENV_FILE")" = photoapp:photoapp
-grep -Eq '^AVITO_AUTO_REPLY_ENABLED="?false"?$' "$ENV_FILE"
+grep -Eq '^AVITO_RESPONDER_MODE="?(off|observe|live)"?$' "$ENV_FILE"
 grep -Eq '^AVITO_ALLOWED_ITEM_IDS="?8191967914"?$' "$ENV_FILE"
 
 if [ "$CURRENT_STATE" != target ]; then
@@ -160,7 +160,8 @@ STATUS=$(cd "$FINAL_RELEASE" && \
 python3 - "$STATUS" <<'PY'
 import json, sys
 status = json.loads(sys.argv[1])
-assert status["enabled"] is False
+assert status["mode"] in {"off", "observe", "live"}
+assert status["enabled"] is (status["mode"] == "live")
 assert status["allowed_item_count"] == 1
 assert status["debounce_seconds"] == 8
 assert status["model"] == "gpt-5.4-mini"
