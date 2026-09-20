@@ -38,6 +38,11 @@ Before the first Avito deploy, a root operator must install
 does not grant itself privileges. Rollback first unsubscribes an already
 registered Avito webhook, then uses `ops/rollback_ravuna_avito.sh` to restore the
 previous nginx files/current release or stop/disable a failed first release.
+The `current` link is accepted only when it resolves to a real release directory;
+broken, cyclic, non-symlink and out-of-tree states fail closed. First-release
+rollback removes only that link while preserving `.env` and `data`. Deploy-time
+CLI probes always run from the exact release root and never depend on the SSH
+session working directory.
 The Avito `.env` and SQLite are always preserved. Main-bot, Content Studio,
 Admin Journal, site contents and retention are outside this deployment boundary.
 

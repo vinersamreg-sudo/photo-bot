@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+. "$SCRIPT_DIR/ravuna_avito_current.sh"
 ROOT=/opt/ravuna-avito
 PREVIOUS_RELEASE=${1:-}
 NGINX_BACKUP=${2:-}
@@ -23,19 +25,19 @@ if [ -n "$NGINX_BACKUP" ]; then
 fi
 
 if [ -n "$PREVIOUS_RELEASE" ]; then
-  PREVIOUS_RELEASE=$(readlink -f "$PREVIOUS_RELEASE")
+  PREVIOUS_RELEASE=$(readlink -e "$PREVIOUS_RELEASE")
   case "$PREVIOUS_RELEASE" in
     "$ROOT"/releases/*) ;;
     *) echo "previous release must be under $ROOT/releases" >&2; exit 2 ;;
   esac
   test -d "$PREVIOUS_RELEASE"
-  ln -sfn "$PREVIOUS_RELEASE" "$ROOT/current.rollback"
-  mv -Tf "$ROOT/current.rollback" "$ROOT/current"
+  ravuna_avito_set_current "$ROOT" "$PREVIOUS_RELEASE"
   sudo -n systemctl restart ravuna-avito-responder.service
   test "$(systemctl is-active ravuna-avito-responder.service)" = active
 else
   sudo -n systemctl stop ravuna-avito-responder.service
   sudo -n systemctl disable ravuna-avito-responder.service
+  ravuna_avito_remove_current "$ROOT"
 fi
 
 # Webhook unsubscription is an explicit Avito API/dashboard action performed

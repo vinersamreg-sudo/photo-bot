@@ -8,6 +8,8 @@ fi
 
 STAGE_ROOT=$1
 TARGET_SHA=$2
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+. "$SCRIPT_DIR/ravuna_avito_current.sh"
 ROOT=/opt/ravuna-avito
 RELEASES=$ROOT/releases
 FINAL_RELEASE=$RELEASES/$TARGET_SHA
@@ -30,7 +32,9 @@ sudo -n install -d -o photoapp -g photoapp -m 0755 "$ROOT" "$RELEASES"
 sudo -n install -d -o photoapp -g photoapp -m 0700 "$ROOT/data"
 install -d -m 0700 "$BACKUP_ROOT"
 
-OLD_CURRENT=$(readlink -f "$ROOT/current" 2>/dev/null || true)
+ravuna_avito_inspect_current "$ROOT" "$FINAL_RELEASE"
+CURRENT_STATE=$RAVUNA_AVITO_CURRENT_STATE
+OLD_CURRENT=$RAVUNA_AVITO_PREVIOUS_RELEASE
 OLD_SERVICE_ACTIVE=$(systemctl is-active ravuna-avito-responder.service 2>/dev/null || true)
 PHOTO_PID=$(systemctl show photo-bot.service --property=MainPID --value)
 PHOTO_RESTARTS=$(systemctl show photo-bot.service --property=NRestarts --value)
@@ -52,6 +56,7 @@ fi
 
 SWITCHED=0
 NGINX_CHANGED=0
+SERVICE_TOUCHED=0
 rollback() {
   status=$?
   trap - EXIT
@@ -65,14 +70,19 @@ rollback() {
     sudo -n nginx -t && sudo -n systemctl reload nginx.service
   fi
   if [ "$SWITCHED" -eq 1 ]; then
-    if [ -n "$OLD_CURRENT" ] && [ -d "$OLD_CURRENT" ]; then
-      ln -sfn "$OLD_CURRENT" "$ROOT/current.rollback"
-      mv -Tf "$ROOT/current.rollback" "$ROOT/current"
-      if [ "$OLD_SERVICE_ACTIVE" = active ]; then
-        sudo -n systemctl restart ravuna-avito-responder.service
-      else
-        sudo -n systemctl stop ravuna-avito-responder.service
-      fi
+    if [ -n "$OLD_CURRENT" ]; then
+      ravuna_avito_set_current "$ROOT" "$OLD_CURRENT"
+    else
+      ravuna_avito_remove_current "$ROOT" "$FINAL_RELEASE"
+    fi
+  fi
+  if [ "$SERVICE_TOUCHED" -eq 1 ]; then
+    if [ "$OLD_SERVICE_ACTIVE" = active ] && [ -e "$ROOT/current" ]; then
+      sudo -n install -o root -g root -m 0644 \
+        "$ROOT/current/ops/ravuna-avito-responder.service" \
+        /etc/systemd/system/ravuna-avito-responder.service
+      sudo -n systemctl daemon-reload
+      sudo -n systemctl restart ravuna-avito-responder.service
     else
       sudo -n systemctl stop ravuna-avito-responder.service
       sudo -n systemctl disable ravuna-avito-responder.service
@@ -120,9 +130,10 @@ test "$(stat -c '%U:%G' "$ENV_FILE")" = photoapp:photoapp
 grep -Eq '^AVITO_AUTO_REPLY_ENABLED="?false"?$' "$ENV_FILE"
 grep -Eq '^AVITO_ALLOWED_ITEM_IDS="?8191967914"?$' "$ENV_FILE"
 
-ln -sfn "$FINAL_RELEASE" "$ROOT/current.new"
-mv -Tf "$ROOT/current.new" "$ROOT/current"
-SWITCHED=1
+if [ "$CURRENT_STATE" != target ]; then
+  ravuna_avito_set_current "$ROOT" "$FINAL_RELEASE"
+  SWITCHED=1
+fi
 
 sudo -n install -o root -g root -m 0644 \
   "$ROOT/current/ops/ravuna-avito-responder.service" \
@@ -136,14 +147,16 @@ sudo -n install -o root -g root -m 0644 \
 NGINX_CHANGED=1
 sudo -n nginx -t
 
+SERVICE_TOUCHED=1
 sudo -n systemctl daemon-reload
 sudo -n systemctl enable ravuna-avito-responder.service
 sudo -n systemctl restart ravuna-avito-responder.service
 test "$(systemctl is-active ravuna-avito-responder.service)" = active
 test "$(systemctl show ravuna-avito-responder.service --property=NRestarts --value)" = 0
 
-STATUS=$("$ROOT/current/venv/bin/python" "$ROOT/current/ops/run_ravuna_avito_env.py" \
-  "$ENV_FILE" -- "$ROOT/current/venv/bin/python" -m app.avito_responder.cli status)
+STATUS=$(cd "$FINAL_RELEASE" && \
+  "$FINAL_RELEASE/venv/bin/python" "$FINAL_RELEASE/ops/run_ravuna_avito_env.py" \
+  "$ENV_FILE" -- "$FINAL_RELEASE/venv/bin/python" -m app.avito_responder.cli status)
 python3 - "$STATUS" <<'PY'
 import json, sys
 status = json.loads(sys.argv[1])
@@ -152,9 +165,10 @@ assert status["allowed_item_count"] == 1
 assert status["debounce_seconds"] == 8
 assert status["model"] == "gpt-5.4-mini"
 PY
-DRY_RUN=$("$ROOT/current/venv/bin/python" "$ROOT/current/ops/run_ravuna_avito_env.py" \
-  "$ENV_FILE" -- "$ROOT/current/venv/bin/python" -m app.avito_responder.cli dry-run \
-  --fixture "$ROOT/current/tests/fixtures/avito_first_reply.json")
+DRY_RUN=$(cd "$FINAL_RELEASE" && \
+  "$FINAL_RELEASE/venv/bin/python" "$FINAL_RELEASE/ops/run_ravuna_avito_env.py" \
+  "$ENV_FILE" -- "$FINAL_RELEASE/venv/bin/python" -m app.avito_responder.cli dry-run \
+  --fixture "$FINAL_RELEASE/tests/fixtures/avito_first_reply.json")
 python3 - "$DRY_RUN" <<'PY'
 import json, sys
 result = json.loads(sys.argv[1])
