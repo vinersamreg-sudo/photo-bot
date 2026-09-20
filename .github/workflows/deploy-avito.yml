@@ -102,7 +102,7 @@ jobs:
               return f'{name}="{escaped}"'
 
           values = {
-              "AVITO_AUTO_REPLY_ENABLED": "false",
+              "AVITO_RESPONDER_MODE": "off",
               "AVITO_BASE_DIR": "/opt/ravuna-avito/data",
               "AVITO_DATABASE_PATH": "/opt/ravuna-avito/data/avito_responder.sqlite3",
               "AVITO_CLIENT_ID": os.environ["AVITO_CLIENT_ID_SECRET"],

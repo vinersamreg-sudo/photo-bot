@@ -388,9 +388,12 @@ scripts/ravuna avito dry-run --fixture tests/fixtures/avito_first_reply.json
 ```
 
 The dry-run may call the configured text model but never calls Avito send. The
-receiver can remain running while `AVITO_AUTO_REPLY_ENABLED=false`; events are
-acknowledged and recorded as ignored, never queued for later surprise delivery.
-Enabling requires a non-empty one-listing allowlist, credentials, account id and
+receiver can remain in `AVITO_RESPONDER_MODE=off`; events are acknowledged and
+recorded as ignored. In `observe`, real eligible events are debounced, verified
+and stored as `observed` drafts, while both orchestration and API-client barriers
+forbid outbound delivery. Only explicit `live` may send. Observe drafts do not
+set `first_reply_sent_at`, so a later controlled live test remains possible.
+Observe/live require a non-empty one-listing allowlist, credentials, account id and
 OpenAI key. Webhook subscription and the public HTTPS nginx route are separate
 production activation steps and are not implied by installing the service.
 

@@ -4,11 +4,12 @@ import http.client
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -104,7 +105,7 @@ class AvitoResponderTests(TestCase):
         self.settings = AvitoResponderSettings.from_environment(
             self.root,
             {
-                "AVITO_AUTO_REPLY_ENABLED": "true",
+                "AVITO_RESPONDER_MODE": "live",
                 "AVITO_CLIENT_ID": "client",
                 "AVITO_CLIENT_SECRET": "secret",
                 "AVITO_ACCOUNT_USER_ID": "10",
@@ -121,15 +122,169 @@ class AvitoResponderTests(TestCase):
 
     def test_configuration_is_disabled_by_default_and_debounce_is_fixed(self) -> None:
         settings = AvitoResponderSettings.from_environment(self.root, {})
+        self.assertEqual(settings.mode, "off")
         self.assertFalse(settings.auto_reply_enabled)
         self.assertEqual(settings.debounce_seconds, 8)
         self.assertEqual(settings.reply_model, "gpt-5.4-mini")
         with self.assertRaises(ValueError):
             settings.require_runtime_webhook()
+        legacy = AvitoResponderSettings.from_environment(
+            self.root, {"AVITO_AUTO_REPLY_ENABLED": "true"}
+        )
+        self.assertEqual(legacy.mode, "off")
         with self.assertRaises(ValueError):
-            AvitoResponderSettings.from_environment(
-                self.root, {"AVITO_AUTO_REPLY_ENABLED": "true"}
+            AvitoResponderSettings.from_environment(self.root, {"AVITO_RESPONDER_MODE": "invalid"})
+        with self.assertRaises(ValueError):
+            AvitoResponderSettings.from_environment(self.root, {"AVITO_RESPONDER_MODE": "observe"})
+
+    def test_existing_database_adds_observe_diagnostic_columns(self) -> None:
+        old_database = self.root / "old.sqlite3"
+        with closing(sqlite3.connect(old_database)) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE webhook_events(
+                    event_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,
+                    chat_id TEXT NOT NULL,item_id INTEGER NOT NULL,
+                    received_at TEXT NOT NULL,status TEXT NOT NULL
+                );
+                CREATE TABLE reply_attempts(
+                    id TEXT PRIMARY KEY,chat_id TEXT NOT NULL UNIQUE,
+                    source_revision INTEGER NOT NULL,reply_text TEXT,model TEXT,
+                    status TEXT NOT NULL,provider_response_id TEXT,
+                    avito_message_id TEXT,error_class TEXT,
+                    send_attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+                );
+                """
             )
+        AvitoRepository(old_database).initialize()
+        with closing(sqlite3.connect(old_database)) as connection:
+            event_columns = {row[1] for row in connection.execute("PRAGMA table_info(webhook_events)")}
+            attempt_columns = {row[1] for row in connection.execute("PRAGMA table_info(reply_attempts)")}
+        self.assertTrue({"direction", "inbound_valid", "allowlist_pass"} <= event_columns)
+        self.assertTrue(
+            {"bundle_message_count", "attachment_count", "context_fetched_at"}
+            <= attempt_columns
+        )
+
+    def test_observe_bundles_generates_once_and_never_sends(self) -> None:
+        settings = AvitoResponderSettings.from_environment(
+            self.root,
+            {
+                "AVITO_RESPONDER_MODE": "observe",
+                "AVITO_CLIENT_ID": "client",
+                "AVITO_CLIENT_SECRET": "secret",
+                "AVITO_ACCOUNT_USER_ID": "10",
+                "AVITO_ALLOWED_ITEM_IDS": "77",
+                "AVITO_WEBHOOK_SECRET": WEBHOOK_SECRET,
+                "OPENAI_API_KEY": "openai",
+            },
+        )
+        messages = (
+            ChatMessage("message-1", 20, "in", "image", "", 1, 1),
+            ChatMessage("message-2", 20, "in", "text", "Сделайте фон светлее", 0, 2),
+        )
+        api = FakeApi(messages)
+        generator = FakeGenerator()
+        service = AvitoResponderService(settings, self.repository, api, generator)
+        service.accept_webhook(payload())
+        service.accept_webhook(payload("event-2", "message-2", created=1_790_000_001))
+        self.assertEqual(service.process_one_due(now=datetime.now(timezone.utc) + timedelta(seconds=7)), "idle")
+        self.assertEqual(service.process_one_due(now=datetime.now(timezone.utc) + timedelta(seconds=9)), "observed")
+        self.assertEqual(api.send_calls, 0)
+        self.assertEqual(len(generator.contexts), 1)
+        self.assertEqual(generator.contexts[0].image_count, 1)
+        self.assertEqual(self.repository.status(), {"observed": 1})
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            attempt = connection.execute(
+                """SELECT status,send_attempts,bundle_message_count,attachment_count,
+                          context_fetched_at FROM reply_attempts"""
+            ).fetchone()
+            job = connection.execute(
+                "SELECT first_reply_sent_at,automation_closed_at FROM chat_jobs"
+            ).fetchone()
+        self.assertEqual(attempt[:4], ("observed", 0, 2, 1))
+        self.assertTrue(attempt[4])
+        self.assertEqual(job, (None, None))
+
+    def test_observe_duplicate_and_followup_do_not_generate_another_draft(self) -> None:
+        settings = AvitoResponderSettings.from_environment(
+            self.root,
+            {
+                "AVITO_RESPONDER_MODE": "observe",
+                "AVITO_CLIENT_ID": "client", "AVITO_CLIENT_SECRET": "secret",
+                "AVITO_ACCOUNT_USER_ID": "10", "AVITO_ALLOWED_ITEM_IDS": "77",
+                "AVITO_WEBHOOK_SECRET": WEBHOOK_SECRET, "OPENAI_API_KEY": "openai",
+            },
+        )
+        api = FakeApi((ChatMessage("message-1", 20, "in", "text", "Ретушь", 0, 1),))
+        generator = FakeGenerator()
+        service = AvitoResponderService(settings, self.repository, api, generator)
+        self.assertFalse(service.accept_webhook(payload())["duplicate"])
+        self.assertTrue(service.accept_webhook(payload())["duplicate"])
+        self.assertEqual(service.process_one_due(now=datetime.now(timezone.utc) + timedelta(seconds=9)), "observed")
+        followup = service.accept_webhook(payload("event-2", "message-2", created=1_790_000_100))
+        self.assertFalse(followup["scheduled"])
+        self.assertEqual(service.process_one_due(now=datetime.now(timezone.utc) + timedelta(seconds=30)), "idle")
+        self.assertEqual(len(generator.contexts), 1)
+        self.assertEqual(api.send_calls, 0)
+
+    def test_off_mode_does_not_process_a_preexisting_pending_job(self) -> None:
+        self.repository.record_event(
+            IncomingEvent.from_webhook(payload()), eligible=True, now=NOW
+        )
+        off = AvitoResponderSettings.from_environment(self.root, {})
+        api = FakeApi((ChatMessage("message-1", 20, "in", "text", "Ретушь", 0, 1),))
+        generator = FakeGenerator()
+        service = AvitoResponderService(off, self.repository, api, generator)
+        self.assertEqual(service.process_one_due(now=NOW + timedelta(seconds=9)), "idle")
+        self.assertEqual(generator.contexts, [])
+        self.assertEqual(api.send_calls, 0)
+        self.assertEqual(self.repository.status(), {"pending": 1})
+
+    def test_observe_model_failure_is_terminal_without_send(self) -> None:
+        values = {
+            "AVITO_RESPONDER_MODE": "observe", "AVITO_CLIENT_ID": "client",
+            "AVITO_CLIENT_SECRET": "secret", "AVITO_ACCOUNT_USER_ID": "10",
+            "AVITO_ALLOWED_ITEM_IDS": "77", "AVITO_WEBHOOK_SECRET": WEBHOOK_SECRET,
+            "OPENAI_API_KEY": "openai",
+        }
+        settings = AvitoResponderSettings.from_environment(self.root, values)
+        api = FakeApi((ChatMessage("message-1", 20, "in", "text", "Ретушь", 0, 1),))
+
+        class BrokenGenerator(FakeGenerator):
+            def generate(self, context: ReplyContext) -> GeneratedReply:
+                raise RuntimeError("synthetic model failure")
+
+        service = AvitoResponderService(settings, self.repository, api, BrokenGenerator())
+        service.accept_webhook(payload())
+        self.assertEqual(service.process_one_due(now=datetime.now(timezone.utc) + timedelta(seconds=9)), "failed")
+        self.assertEqual(api.send_calls, 0)
+        self.assertEqual(self.repository.status(), {"failed": 1})
+
+    def test_observed_chat_can_transition_to_live_on_new_message(self) -> None:
+        observe_values = {
+            "AVITO_RESPONDER_MODE": "observe", "AVITO_CLIENT_ID": "client",
+            "AVITO_CLIENT_SECRET": "secret", "AVITO_ACCOUNT_USER_ID": "10",
+            "AVITO_ALLOWED_ITEM_IDS": "77", "AVITO_WEBHOOK_SECRET": WEBHOOK_SECRET,
+            "OPENAI_API_KEY": "openai",
+        }
+        observe = AvitoResponderSettings.from_environment(self.root, observe_values)
+        api = FakeApi((ChatMessage("message-1", 20, "in", "text", "Ретушь", 0, 1),))
+        service = AvitoResponderService(observe, self.repository, api, FakeGenerator())
+        service.accept_webhook(payload())
+        self.assertEqual(service.process_one_due(now=datetime.now(timezone.utc) + timedelta(seconds=9)), "observed")
+        live = AvitoResponderSettings.from_environment(
+            self.root, {**observe_values, "AVITO_RESPONDER_MODE": "live"}
+        )
+        api.messages = (
+            ChatMessage("message-1", 20, "in", "text", "Ретушь", 0, 1),
+            ChatMessage("message-2", 20, "in", "text", "Сделайте светлее", 0, 2),
+        )
+        live_service = AvitoResponderService(live, self.repository, api, FakeGenerator())
+        self.assertTrue(live_service.accept_webhook(payload("event-2", "message-2"))["scheduled"])
+        self.assertEqual(live_service.process_one_due(now=datetime.now(timezone.utc) + timedelta(seconds=9)), "sent")
+        self.assertEqual(api.send_calls, 1)
 
     def test_each_new_message_resets_eight_second_debounce(self) -> None:
         first = IncomingEvent.from_webhook(payload())
@@ -615,7 +770,8 @@ class WebhookTests(TestCase):
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("push:", workflow)
         self.assertIn("environment: production", workflow)
-        self.assertIn('"AVITO_AUTO_REPLY_ENABLED": "false"', workflow)
+        self.assertIn('"AVITO_RESPONDER_MODE": "off"', workflow)
+        self.assertNotIn('"AVITO_AUTO_REPLY_ENABLED"', workflow)
         self.assertIn('"AVITO_ALLOWED_ITEM_IDS": "8191967914"', workflow)
         self.assertNotIn("systemctl restart photo-bot", deploy)
         self.assertNotIn("systemctl reload photo-bot", deploy)
@@ -663,6 +819,7 @@ class WebhookTests(TestCase):
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["enabled"], False)
+        self.assertEqual(json.loads(completed.stdout)["mode"], "off")
 
     def test_current_helpers_cover_first_and_second_release_rollbacks(self) -> None:
         if os.name == "nt":
@@ -756,6 +913,7 @@ class AvitoApiClientTests(TestCase):
 
         client = AvitoApiClient(
             "client", "secret", "https://api.avito.test",
+            allow_send=True,
             transport=httpx.MockTransport(handler),
         )
         try:
@@ -766,6 +924,20 @@ class AvitoApiClientTests(TestCase):
         self.assertEqual(messages[0].image_count, 1)
         self.assertEqual(sent, "sent-1")
         self.assertEqual(sum(request.url.path == "/token/" for request in requests), 1)
+
+    def test_send_boundary_blocks_before_any_http_request(self) -> None:
+        requests: list[httpx.Request] = []
+        client = AvitoApiClient(
+            "client", "secret", "https://api.avito.test",
+            transport=httpx.MockTransport(lambda request: requests.append(request)),
+        )
+        try:
+            with self.assertRaises(AvitoApiError) as raised:
+                client.send_message(10, "chat", "Здравствуйте")
+        finally:
+            client.close()
+        self.assertEqual(raised.exception.operation, "send_disabled")
+        self.assertEqual(requests, [])
 
 
 class AvitoCliTests(TestCase):

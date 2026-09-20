@@ -27,11 +27,13 @@ class AvitoApiClient:
         base_url: str,
         *,
         timeout_seconds: int = 10,
+        allow_send: bool = False,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.client_id = client_id
         self.client_secret = client_secret
         self.base_url = base_url.rstrip("/")
+        self.allow_send = allow_send
         self.client = httpx.Client(timeout=timeout_seconds, transport=transport)
         self._token = ""
         self._token_expires_at = 0.0
@@ -59,6 +61,8 @@ class AvitoApiClient:
         return tuple(sorted((ChatMessage.from_api(value) for value in values), key=lambda item: item.created))
 
     def send_message(self, user_id: int, chat_id: str, text: str) -> str:
+        if not self.allow_send:
+            raise AvitoApiError("send_disabled", None)
         result = self._request(
             "POST",
             f"/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages",

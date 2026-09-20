@@ -29,7 +29,8 @@ green exact-SHA release gate, uses the `production` GitHub Environment, and may
 restart only `ravuna-avito-responder.service`. Its release layout is
 `/opt/ravuna-avito/releases/<SHA>` plus an atomic `current` symlink; its private
 environment and SQLite live outside releases. Fresh provisioning forces
-`AVITO_AUTO_REPLY_ENABLED=false` and one allowed listing. The workflow installs
+`AVITO_RESPONDER_MODE=off` and one allowed listing. Existing `off`, `observe` or
+`live` mode is preserved byte-for-byte by ordinary deploy. The workflow installs
 the narrow nginx callback only after staging/import checks and never subscribes
 the Avito webhook or activates replies.
 

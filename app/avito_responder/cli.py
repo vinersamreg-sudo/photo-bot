@@ -46,7 +46,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         jobs = repository.status() if settings.database_path.exists() else {}
         print(json.dumps({
+            "mode": settings.mode,
             "enabled": settings.auto_reply_enabled,
+            "processing_enabled": settings.processing_enabled,
+            "send_enabled": settings.auto_reply_enabled,
             "allowed_item_count": len(settings.allowed_item_ids),
             "debounce_seconds": 8,
             "model": settings.reply_model,
@@ -82,10 +85,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     settings.require_runtime_webhook()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if settings.auto_reply_enabled:
+    if settings.processing_enabled:
         api = AvitoApiClient(
             settings.client_id, settings.client_secret, settings.api_base_url,
             timeout_seconds=settings.http_timeout_seconds,
+            allow_send=settings.auto_reply_enabled,
         )
         openai_client = OpenAI(
             api_key=settings.openai_api_key,

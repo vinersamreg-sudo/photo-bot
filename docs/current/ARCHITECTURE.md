@@ -38,13 +38,16 @@ inbound messages reset the durable deadline. The bridge never downloads Avito
 images, calls Ravuna image processing, or reads/writes the main customer,
 commerce, payment or gallery data.
 
-The feature is fail-closed behind `AVITO_AUTO_REPLY_ENABLED=false` and an
-explicit `AVITO_ALLOWED_ITEM_IDS` allowlist. Per-chat claims, unique webhook and
+The feature is fail-closed behind a single `AVITO_RESPONDER_MODE` setting and an
+explicit `AVITO_ALLOWED_ITEM_IDS` allowlist. `off` records callbacks as ignored,
+`observe` runs verification, debounce, context loading and draft generation but
+cannot send, and only explicit `live` permits delivery. Per-chat claims, unique webhook and
 message identifiers, seller-direction filtering and a durable closed/sent state
 prevent concurrent replies, replay and webhook loops.
 
-The durable job states are `pending -> processing -> sending -> sent`, with
-terminal skipped/failed/uncertain states. Processing and sending carry a bounded
+The durable job states are `pending -> processing -> observed` without delivery,
+or `pending -> processing -> sending -> sent` in live mode, with terminal
+skipped/failed/uncertain states. Processing and sending carry a bounded
 lease. A newer inbound event increments the chat revision and debounce deadline
 without clearing an active lease. Expired processing is reclaimed atomically;
 expired sending is reconciled against authenticated Avito history before the

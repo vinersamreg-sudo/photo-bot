@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 class AvitoResponderSettings:
     base_dir: Path
     database_path: Path
-    auto_reply_enabled: bool = False
+    mode: str = "off"
     client_id: str = field(default="", repr=False)
     client_secret: str = field(default="", repr=False)
     account_user_id: int = 0
@@ -37,6 +37,14 @@ class AvitoResponderSettings:
     def webhook_path(self) -> str:
         return f"/integrations/avito/{self.webhook_secret}/messages"
 
+    @property
+    def processing_enabled(self) -> bool:
+        return self.mode in {"observe", "live"}
+
+    @property
+    def auto_reply_enabled(self) -> bool:
+        return self.mode == "live"
+
     @classmethod
     def from_environment(
         cls, project_root: Path, environ: Mapping[str, str] | None = None
@@ -58,10 +66,13 @@ class AvitoResponderSettings:
         webhook_secret = values.get("AVITO_WEBHOOK_SECRET", "").strip()
         if webhook_secret and not _valid_webhook_secret(webhook_secret):
             raise ValueError("AVITO_WEBHOOK_SECRET must be a 43-character URL-safe secret")
+        mode = values.get("AVITO_RESPONDER_MODE", "off").strip().lower() or "off"
+        if mode not in {"off", "observe", "live"}:
+            raise ValueError("AVITO_RESPONDER_MODE must be off, observe or live")
         settings = cls(
             base_dir=base,
             database_path=database_path.resolve(),
-            auto_reply_enabled=_boolean(values, "AVITO_AUTO_REPLY_ENABLED", False),
+            mode=mode,
             client_id=values.get("AVITO_CLIENT_ID", "").strip(),
             client_secret=values.get("AVITO_CLIENT_SECRET", "").strip(),
             account_user_id=_integer(values, "AVITO_ACCOUNT_USER_ID", 0, minimum=0),
@@ -87,7 +98,7 @@ class AvitoResponderSettings:
                 values, "AVITO_SEND_RECONCILE_GRACE_SECONDS", 120, minimum=30, maximum=600
             ),
         )
-        if settings.auto_reply_enabled:
+        if settings.processing_enabled:
             missing = [
                 name for name, value in (
                     ("AVITO_CLIENT_ID", settings.client_id),
@@ -99,7 +110,7 @@ class AvitoResponderSettings:
                 ) if not value
             ]
             if missing:
-                raise ValueError("Avito auto reply requires " + ", ".join(missing))
+                raise ValueError("Avito observe/live mode requires " + ", ".join(missing))
         if settings.webhook_host not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("Avito webhook listener must bind to loopback")
         return settings
@@ -107,18 +118,6 @@ class AvitoResponderSettings:
     def require_runtime_webhook(self) -> None:
         if not _valid_webhook_secret(self.webhook_secret):
             raise ValueError("Avito webhook runtime requires AVITO_WEBHOOK_SECRET")
-
-
-def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
-    raw = values.get(name)
-    if raw is None or not raw.strip():
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be true or false")
 
 
 def _integer(

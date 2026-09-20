@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     chat_id TEXT NOT NULL,
     item_id INTEGER NOT NULL,
     received_at TEXT NOT NULL,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    direction TEXT NOT NULL DEFAULT '',
+    inbound_valid INTEGER NOT NULL DEFAULT 0,
+    allowlist_pass INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS chat_jobs (
     chat_id TEXT PRIMARY KEY,
@@ -47,6 +50,9 @@ CREATE TABLE IF NOT EXISTS reply_attempts (
     avito_message_id TEXT,
     error_class TEXT,
     send_attempts INTEGER NOT NULL DEFAULT 0,
+    bundle_message_count INTEGER NOT NULL DEFAULT 0,
+    attachment_count INTEGER NOT NULL DEFAULT 0,
+    context_fetched_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -71,19 +77,40 @@ class AvitoRepository:
             self.path.parent.chmod(0o700)
         with closing(self._connect()) as connection:
             connection.executescript(SCHEMA)
-            columns = {
+            attempt_columns = {
                 str(row[1]) for row in connection.execute("PRAGMA table_info(reply_attempts)")
             }
-            if "send_attempts" not in columns:
-                connection.execute(
-                    "ALTER TABLE reply_attempts ADD COLUMN send_attempts INTEGER NOT NULL DEFAULT 0"
-                )
+            for name, definition in (
+                ("send_attempts", "INTEGER NOT NULL DEFAULT 0"),
+                ("bundle_message_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("attachment_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("context_fetched_at", "TEXT"),
+            ):
+                if name not in attempt_columns:
+                    connection.execute(f"ALTER TABLE reply_attempts ADD COLUMN {name} {definition}")
+            event_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(webhook_events)")
+            }
+            for name, definition in (
+                ("direction", "TEXT NOT NULL DEFAULT ''"),
+                ("inbound_valid", "INTEGER NOT NULL DEFAULT 0"),
+                ("allowlist_pass", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in event_columns:
+                    connection.execute(f"ALTER TABLE webhook_events ADD COLUMN {name} {definition}")
             connection.commit()
         if os.name != "nt":
             self.path.chmod(0o600)
 
     def record_event(
-        self, event: IncomingEvent, *, eligible: bool, now: datetime | None = None
+        self,
+        event: IncomingEvent,
+        *,
+        eligible: bool,
+        inbound_valid: bool = False,
+        allowlist_pass: bool = False,
+        reopen_observed: bool = False,
+        now: datetime | None = None,
     ) -> tuple[bool, bool]:
         received = _utc(now)
         due = received + timedelta(seconds=self.debounce_seconds)
@@ -91,8 +118,9 @@ class AvitoRepository:
             connection.execute("BEGIN IMMEDIATE")
             inserted = connection.execute(
                 """INSERT OR IGNORE INTO webhook_events(
-                       event_id,message_id,chat_id,item_id,received_at,status
-                   ) VALUES(?,?,?,?,?,?)""",
+                       event_id,message_id,chat_id,item_id,received_at,status,
+                       direction,inbound_valid,allowlist_pass
+                   ) VALUES(?,?,?,?,?,?,?,?,?)""",
                 (
                     event.event_id,
                     event.message_id,
@@ -100,6 +128,9 @@ class AvitoRepository:
                     event.item_id,
                     received.isoformat(),
                     "pending" if eligible else "ignored",
+                    event.direction,
+                    int(inbound_valid),
+                    int(allowlist_pass),
                 ),
             ).rowcount
             scheduled = 0
@@ -132,7 +163,8 @@ class AvitoRepository:
                            END,
                            updated_at=excluded.updated_at
                        WHERE chat_jobs.first_reply_sent_at IS NULL
-                         AND chat_jobs.automation_closed_at IS NULL""",
+                         AND chat_jobs.automation_closed_at IS NULL
+                         AND (chat_jobs.status!='observed' OR ?)""",
                     (
                         event.chat_id,
                         event.item_id,
@@ -140,8 +172,14 @@ class AvitoRepository:
                         received.isoformat(),
                         due.isoformat(),
                         received.isoformat(),
+                        int(reopen_observed),
                     ),
                 ).rowcount
+                if not scheduled:
+                    connection.execute(
+                        "UPDATE webhook_events SET status='ignored' WHERE event_id=?",
+                        (event.event_id,),
+                    )
             connection.commit()
         return bool(inserted), bool(scheduled)
 
@@ -243,6 +281,8 @@ class AvitoRepository:
         model: str,
         provider_response_id: str | None,
         *,
+        bundle_message_count: int = 0,
+        attachment_count: int = 0,
         now: datetime | None = None,
     ) -> bool:
         timestamp = _utc(now).isoformat()
@@ -264,10 +304,28 @@ class AvitoRepository:
                 connection.commit()
                 return False
             inserted = connection.execute(
-                """INSERT OR IGNORE INTO reply_attempts(
+                """INSERT INTO reply_attempts(
                        id,chat_id,source_revision,reply_text,model,status,
-                       provider_response_id,created_at,updated_at
-                   ) VALUES(?,?,?,?,?,'prepared',?,?,?)""",
+                       provider_response_id,send_attempts,bundle_message_count,
+                       attachment_count,context_fetched_at,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,'prepared',?,0,?,?,?,?,?)
+                   ON CONFLICT(chat_id) DO UPDATE SET
+                       id=excluded.id,
+                       source_revision=excluded.source_revision,
+                       reply_text=excluded.reply_text,
+                       model=excluded.model,
+                       status='prepared',
+                       provider_response_id=excluded.provider_response_id,
+                       avito_message_id=NULL,
+                       error_class=NULL,
+                       send_attempts=0,
+                       bundle_message_count=excluded.bundle_message_count,
+                       attachment_count=excluded.attachment_count,
+                       context_fetched_at=excluded.context_fetched_at,
+                       created_at=excluded.created_at,
+                       updated_at=excluded.updated_at
+                   WHERE reply_attempts.status='observed'
+                     AND reply_attempts.source_revision<excluded.source_revision""",
                 (
                     uuid.uuid4().hex,
                     claim.chat_id,
@@ -275,12 +333,46 @@ class AvitoRepository:
                     text,
                     model,
                     provider_response_id,
+                    bundle_message_count,
+                    attachment_count,
+                    timestamp,
                     timestamp,
                     timestamp,
                 ),
             ).rowcount
             connection.commit()
         return bool(inserted)
+
+    def mark_observed(
+        self, claim: ClaimedChat, *, now: datetime | None = None
+    ) -> bool:
+        timestamp = _utc(now).isoformat()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job_changed = connection.execute(
+                """UPDATE chat_jobs SET status='observed',lock_token=NULL,lock_until=NULL,
+                          updated_at=? WHERE chat_id=? AND revision=? AND status='processing'
+                          AND lock_token=? AND first_reply_sent_at IS NULL
+                          AND automation_closed_at IS NULL""",
+                (timestamp, claim.chat_id, claim.revision, claim.lock_token),
+            ).rowcount
+            attempt_changed = 0
+            if job_changed:
+                attempt_changed = connection.execute(
+                    """UPDATE reply_attempts SET status='observed',updated_at=?
+                       WHERE chat_id=? AND source_revision=? AND status='prepared'
+                         AND send_attempts=0""",
+                    (timestamp, claim.chat_id, claim.revision),
+                ).rowcount
+            if not attempt_changed:
+                connection.rollback()
+                return False
+            connection.execute(
+                "UPDATE webhook_events SET status='observed' WHERE chat_id=? AND status='pending'",
+                (claim.chat_id,),
+            )
+            connection.commit()
+        return True
 
     def mark_sending(
         self, claim: ClaimedChat, *, now: datetime | None = None
