@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import os
+import subprocess
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -630,6 +631,108 @@ class WebhookTests(TestCase):
         self.assertIn("ravuna-avito-responder.service", sudoers)
         self.assertNotIn("restart photo-bot", sudoers)
         self.assertNotIn("/bin/bash", sudoers)
+
+    def test_deploy_cli_probe_is_release_rooted_from_arbitrary_cwd(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        deploy = (root / "ops" / "deploy_ravuna_avito.sh").read_text(encoding="utf-8")
+        self.assertIn('STATUS=$(cd "$FINAL_RELEASE" &&', deploy)
+        self.assertIn('DRY_RUN=$(cd "$FINAL_RELEASE" &&', deploy)
+        self.assertNotIn('"$ROOT/current/venv/bin/python" -m app.avito_responder.cli', deploy)
+        environment = os.environ.copy()
+        for name in tuple(environment):
+            if name.startswith("AVITO_") or name == "OPENAI_API_KEY":
+                environment.pop(name)
+        with tempfile.TemporaryDirectory() as caller_directory:
+            completed = subprocess.run(
+                [
+                    os.fspath(Path(os.sys.executable)),
+                    "-c",
+                    (
+                        "import os, runpy, sys; "
+                        "os.chdir(sys.argv[1]); "
+                        "sys.argv=['app.avito_responder.cli', 'status']; "
+                        "runpy.run_module('app.avito_responder.cli', run_name='__main__')"
+                    ),
+                    str(root),
+                ],
+                cwd=caller_directory,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["enabled"], False)
+
+    def test_current_helpers_cover_first_and_second_release_rollbacks(self) -> None:
+        if os.name == "nt":
+            self.skipTest("symlink shell contract is exercised on Linux CI")
+        root = Path(__file__).resolve().parents[1]
+        helper = root / "ops" / "ravuna_avito_current.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            releases = base / "releases"
+            first = releases / ("a" * 40)
+            second = releases / ("b" * 40)
+            first.mkdir(parents=True)
+            second.mkdir()
+            env_file = base / ".env"
+            data = base / "data"
+            env_file.write_text("secret\n", encoding="utf-8")
+            data.mkdir()
+            command = f'''set -eu
+. "$1"
+ravuna_avito_inspect_current "$2" "$3"
+test "$RAVUNA_AVITO_CURRENT_STATE" = absent
+ravuna_avito_set_current "$2" "$3"
+test "$(readlink -e "$2/current")" = "$(readlink -e "$3")"
+ravuna_avito_remove_current "$2" "$3"
+test ! -e "$2/current" && test ! -L "$2/current"
+test -f "$2/.env" && test -d "$2/data"
+ravuna_avito_set_current "$2" "$3"
+ravuna_avito_inspect_current "$2" "$4"
+test "$RAVUNA_AVITO_CURRENT_STATE" = previous
+test "$RAVUNA_AVITO_PREVIOUS_RELEASE" = "$(readlink -e "$3")"
+ravuna_avito_set_current "$2" "$4"
+ravuna_avito_set_current "$2" "$RAVUNA_AVITO_PREVIOUS_RELEASE"
+test "$(readlink -e "$2/current")" = "$(readlink -e "$3")"
+test "$(readlink "$2/current")" != "$2/current"
+'''
+            completed = subprocess.run(
+                ["bash", "-c", command, "bash", str(helper), str(base), str(first), str(second)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_current_helpers_fail_closed_for_broken_or_non_symlink_current(self) -> None:
+        if os.name == "nt":
+            self.skipTest("symlink shell contract is exercised on Linux CI")
+        root = Path(__file__).resolve().parents[1]
+        helper = root / "ops" / "ravuna_avito_current.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            release = base / "releases" / ("a" * 40)
+            release.mkdir(parents=True)
+            current = base / "current"
+            current.symlink_to(current)
+            cyclic = subprocess.run(
+                ["bash", "-c", '. "$1"; ravuna_avito_inspect_current "$2" "$3"', "bash", str(helper), str(base), str(release)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            current.unlink()
+            current.write_text("not a symlink", encoding="utf-8")
+            regular = subprocess.run(
+                ["bash", "-c", '. "$1"; ravuna_avito_inspect_current "$2" "$3"', "bash", str(helper), str(base), str(release)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(cyclic.returncode, 0)
+        self.assertNotEqual(regular.returncode, 0)
 
 
 class AvitoApiClientTests(TestCase):
