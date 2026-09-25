@@ -1733,6 +1733,16 @@ class MaxApplicationTests(TestCase):
             )
         self.callback("result:unlock")
         self.assertTrue(self.transport.files)
+        self.assertEqual(
+            self.demo.commerce.entitlement_balance(dialog.user_id).available, 0
+        )
+        with self.database.read() as connection:
+            delivered_version = connection.execute(
+                "SELECT unlock_status,delivery_count FROM gallery_versions WHERE id=?",
+                (dialog.current_version_id,),
+            ).fetchone()
+        self.assertEqual(delivered_version["unlock_status"], "unlocked")
+        self.assertEqual(delivered_version["delivery_count"], 1)
         original_message = f"file-{len(self.transport.files)}"
         confirmation_message = self.app.ui.current("u1").message_id
         self.assertNotEqual(confirmation_message, result_message)
@@ -1797,6 +1807,54 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.app.ui.current("u1").message_id, active.message_id)
         self.assertEqual(self.transport.edits[-1][0], active.message_id)
         self.assertNotIn(original_message, self.transport.deletes)
+
+    def test_failed_original_delivery_releases_entitlement_and_retry_is_safe(self) -> None:
+        self.generate_first()
+        dialog = self.store.get("u1")
+        with self.database.transaction() as connection:
+            self.demo.commerce.grant_continuation_pack(
+                connection,
+                user_id=dialog.user_id,
+                payment_order_id="test-original-delivery-failure-order",
+                payment_intent_id="test-original-delivery-failure-intent",
+            )
+        provider_calls = self.provider.calls
+        edit_balance = self.demo.commerce.balance(dialog.user_id)
+        self.transport.file_delivery = False
+
+        self.callback("result:unlock")
+        self.assertEqual(
+            self.demo.commerce.entitlement_balance(dialog.user_id).available, 1
+        )
+        self.assertIn("Право на скачивание сохранено", self.transport.messages[-1][1])
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.demo.commerce.balance(dialog.user_id), edit_balance)
+
+        self.callback("result:unlock")
+        self.assertEqual(len(self.transport.files), 2)
+        self.assertEqual(
+            self.demo.commerce.entitlement_balance(dialog.user_id).available, 1
+        )
+        self.assertEqual(self.provider.calls, provider_calls)
+        self.assertEqual(self.demo.commerce.balance(dialog.user_id), edit_balance)
+        with self.database.read() as connection:
+            statuses = connection.execute(
+                "SELECT status,COUNT(*) AS count FROM unlock_entitlements "
+                "WHERE user_id=? GROUP BY status",
+                (dialog.user_id,),
+            ).fetchall()
+            version = connection.execute(
+                "SELECT unlock_status,delivery_count FROM gallery_versions WHERE id=?",
+                (dialog.current_version_id,),
+            ).fetchone()
+            failures = connection.execute(
+                "SELECT COUNT(*) FROM product_events "
+                "WHERE event_type='original_delivery_failed'",
+            ).fetchone()[0]
+        self.assertEqual({row["status"]: row["count"] for row in statuses}, {"available": 1})
+        self.assertEqual(version["unlock_status"], "demo")
+        self.assertEqual(version["delivery_count"], 0)
+        self.assertEqual(failures, 2)
 
     def test_start_and_direct_reupload_after_result_keep_one_active_screen(self) -> None:
         self.enable_single_screen()
