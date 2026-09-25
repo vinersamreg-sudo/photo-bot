@@ -222,6 +222,7 @@ class MaxApiClient:
         self._owns_media_client = media_client is None
         self._sleep = sleeper
         self.last_status_code: int | None = None
+        self.last_request_id = ""
 
     def close(self) -> None:
         self.client.close()
@@ -244,6 +245,7 @@ class MaxApiClient:
                 stage=stage,
             ) from exc
         self.last_status_code = response.status_code
+        self.last_request_id = _safe_request_id(response.headers)
         if response.status_code >= 400:
             kind = {
                 401: "invalid_token",
@@ -282,17 +284,27 @@ class MaxApiClient:
                 stage=stage,
                 error_code=error_code,
                 error_message=error_message,
-                request_id=_safe_request_id(response.headers),
+                request_id=self.last_request_id,
             )
         try:
             payload = response.json()
         except (ValueError, json.JSONDecodeError) as exc:
             raise MaxTransportError(
-                "MAX API returned invalid JSON", kind="invalid_response"
+                "MAX API returned invalid JSON",
+                kind="invalid_response",
+                http_status=response.status_code,
+                stage=stage,
+                error_code="invalid_json",
+                request_id=self.last_request_id,
             ) from exc
         if not isinstance(payload, dict):
             raise MaxTransportError(
-                "MAX API returned unexpected data", kind="invalid_response"
+                "MAX API returned unexpected data",
+                kind="invalid_response",
+                http_status=response.status_code,
+                stage=stage,
+                error_code="unexpected_payload",
+                request_id=self.last_request_id,
             )
         return payload
 
@@ -392,7 +404,14 @@ class MaxApiClient:
         message = data.get("message") if isinstance(data.get("message"), dict) else data
         message_id = ((message.get("body") or {}).get("mid")) if isinstance(message, dict) else None
         if not message_id:
-            raise MaxTransportError("MAX did not confirm a message id")
+            raise MaxTransportError(
+                "MAX did not confirm a message id",
+                kind="invalid_response",
+                http_status=self.last_status_code,
+                stage=f"{stage}_response",
+                error_code="missing_message_id",
+                request_id=self.last_request_id,
+            )
         return str(message_id)
 
     def edit_message(
@@ -531,8 +550,25 @@ class MaxApiClient:
         )
         url = upload.get("url")
         if not isinstance(url, str):
-            raise MaxTransportError("MAX did not return a file upload URL")
-        self._validate_media_url(url)
+            raise MaxTransportError(
+                "MAX did not return a file upload URL",
+                kind="invalid_response",
+                http_status=self.last_status_code,
+                stage="file_upload_init_response",
+                error_code="missing_upload_url",
+                request_id=self.last_request_id,
+            )
+        try:
+            self._validate_media_url(url)
+        except MaxTransportError as exc:
+            raise MaxTransportError(
+                "MAX returned an invalid file upload URL",
+                kind="invalid_response",
+                http_status=self.last_status_code,
+                stage="file_upload_url_validation",
+                error_code="invalid_upload_url",
+                request_id=self.last_request_id,
+            ) from exc
         name = upload_name or file_path.name
         content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
         try:
@@ -557,24 +593,46 @@ class MaxApiClient:
                 kind="http_error",
                 http_status=response.status_code,
                 stage="file_upload_content",
-                error_code=str(
+                error_code=_safe_error_code(
                     error_payload.get("code") or ""
                     if isinstance(error_payload, dict)
                     else ""
-                ).lower(),
-                error_message=str(
+                ),
+                error_message=_safe_error_message(
                     error_payload.get("message") or ""
                     if isinstance(error_payload, dict)
                     else ""
-                )[:160],
+                ),
+                request_id=_safe_request_id(response.headers),
             )
-        try:
-            result = response.json()
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise MaxTransportError("MAX file upload returned invalid JSON") from exc
-        token = result.get("token") or upload.get("token")
+        # MAX documents two successful upload response shapes: the media token
+        # may be returned by POST /uploads while the upload URL responds with a
+        # non-JSON acknowledgement, or the upload response itself may contain
+        # the token.  Prefer the already confirmed init token and parse the
+        # upload body only when it is still needed.
+        token = upload.get("token")
         if not token:
-            raise MaxTransportError("MAX file upload did not return a media token")
+            try:
+                result = response.json()
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise MaxTransportError(
+                    "MAX file upload returned invalid JSON without a media token",
+                    kind="invalid_response",
+                    http_status=response.status_code,
+                    stage="file_upload_content_response",
+                    error_code="invalid_json",
+                    request_id=_safe_request_id(response.headers),
+                ) from exc
+            token = result.get("token") if isinstance(result, dict) else None
+        if not token:
+            raise MaxTransportError(
+                "MAX file upload did not return a media token",
+                kind="invalid_response",
+                http_status=response.status_code,
+                stage="file_upload_content_response",
+                error_code="missing_media_token",
+                request_id=_safe_request_id(response.headers),
+            )
         return str(token)
 
     def send_image(
@@ -686,12 +744,13 @@ class MaxApiClient:
             LOGGER.warning(
                 "MAX file delivery failed "
                 "(stage=%s,kind=%s,http_status=%s,error_code=%s,"
-                "error_message=%s)",
+                "error_message=%s,request_id=%s)",
                 exc.stage,
                 exc.kind,
                 exc.http_status,
                 exc.error_code or "none",
                 exc.error_message or "none",
+                exc.request_id or "none",
             )
             return None
 

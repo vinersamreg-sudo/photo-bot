@@ -511,6 +511,127 @@ class MaxTransportTests(TestCase):
         self.assertEqual(attachment["payload"]["token"], "file-token")
         self.assertEqual(len(media_requests), 1)
 
+    def test_file_upload_accepts_init_token_with_non_json_acknowledgement(self) -> None:
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/uploads":
+                return httpx.Response(
+                    200,
+                    json={
+                        "url": "https://fu.oneme.ru/upload",
+                        "token": "init-file-token",
+                    },
+                )
+            if request.url.path == "/messages":
+                attachment = json.loads(request.content)["attachments"][0]
+                self.assertEqual(attachment["payload"]["token"], "init-file-token")
+                return httpx.Response(
+                    200, json={"message": {"body": {"mid": "sent-from-init-token"}}}
+                )
+            raise AssertionError(f"Unexpected request: {request.url.path}")
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(200, text="<retval>1</retval>")
+                )
+            ),
+            sleeper=lambda _seconds: None,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original.png"
+            original.write_bytes(b"synthetic-original")
+            self.assertEqual(
+                client.send_file("42", original, "Original", ()),
+                "sent-from-init-token",
+            )
+
+    def test_file_upload_failure_logs_sanitized_stage_and_request_id(self) -> None:
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/uploads":
+                return httpx.Response(
+                    200, json={"url": "https://fu.oneme.ru/upload"}
+                )
+            raise AssertionError("Message send must not run without a media token")
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(
+                        200,
+                        text="not-json max-secret-test",
+                        headers={"x-request-id": "max-upload-request-1"},
+                    )
+                )
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original.png"
+            original.write_bytes(b"synthetic-original")
+            with self.assertLogs("app.max_transport", level="WARNING") as logs:
+                self.assertIsNone(client.send_file("42", original, "Original", ()))
+
+        diagnostic = "\n".join(logs.output)
+        self.assertIn("stage=file_upload_content_response", diagnostic)
+        self.assertIn("kind=invalid_response", diagnostic)
+        self.assertIn("http_status=200", diagnostic)
+        self.assertIn("error_code=invalid_json", diagnostic)
+        self.assertIn("request_id=max-upload-request-1", diagnostic)
+        self.assertNotIn("max-secret-test", diagnostic)
+
+    def test_file_send_failure_retains_http_metadata(self) -> None:
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/uploads":
+                return httpx.Response(
+                    200, json={"url": "https://fu.oneme.ru/upload"}
+                )
+            if request.url.path == "/messages":
+                return httpx.Response(
+                    503,
+                    json={"code": "temporarily.unavailable", "message": "retry later"},
+                    headers={"x-correlation-id": "max-send-request-1"},
+                )
+            raise AssertionError(f"Unexpected request: {request.url.path}")
+
+        client = MaxApiClient(
+            "max-secret-test",
+            client=httpx.Client(
+                base_url="https://platform-api2.max.ru",
+                transport=httpx.MockTransport(api_handler),
+                headers={"Authorization": "max-secret-test"},
+            ),
+            media_client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(
+                        200, json={"token": "file-token"}
+                    )
+                )
+            ),
+            sleeper=lambda _seconds: None,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original.png"
+            original.write_bytes(b"synthetic-original")
+            with self.assertLogs("app.max_transport", level="WARNING") as logs:
+                self.assertIsNone(client.send_file("42", original, "Original", ()))
+
+        diagnostic = "\n".join(logs.output)
+        self.assertIn("stage=file_message_send", diagnostic)
+        self.assertIn("http_status=503", diagnostic)
+        self.assertIn("error_code=temporarily.unavailable", diagnostic)
+        self.assertIn("request_id=max-send-request-1", diagnostic)
+
     def test_file_delivery_retries_documented_attachment_not_ready(self) -> None:
         api_requests = []
         delays = []
