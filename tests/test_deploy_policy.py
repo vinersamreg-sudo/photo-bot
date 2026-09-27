@@ -142,9 +142,12 @@ class DeployPolicyTests(TestCase):
         self.assertIn("--canonical-ref origin/main", self.site_deploy_workflow)
 
     def test_preserves_runtime_state(self) -> None:
-        for path in (".env", "venv/", "data/", "logs/", "temp/", "/site/", "/app/content_studio/", "/marketing/", "/app/admin_journal.py", "/scripts/run_admin_journal.py", "/ops/ravuna-admin-journal.service", "/ops/ravuna-retention-cleanup.service", "/ops/ravuna-retention-cleanup.timer"):
+        for path in (".env", ".deploy-sha", "venv/", "data/", "logs/", "temp/", "/site/", "/app/content_studio/", "/marketing/", "/app/admin_journal.py", "/scripts/run_admin_journal.py", "/ops/ravuna-admin-journal.service", "/ops/ravuna-retention-cleanup.service", "/ops/ravuna-retention-cleanup.timer"):
             self.assertIn(f"--exclude='{path}'", self.workflow)
         self.assertNotIn("--delete-excluded", self.workflow)
+        self.assertIn("--exclude='__pycache__/'", self.workflow)
+        self.assertIn("--exclude='*.pyc'", self.workflow)
+        self.assertIn("--delete-delay --delay-updates", self.workflow)
         self.assertIn('"$RUNNER_TEMP/ravuna-release/source/" "$SSH_USER@$SSH_HOST:/opt/photo-bot/"', self.workflow)
 
     def test_ravuna_payment_nginx_is_root_installed_and_preflighted(self) -> None:
@@ -266,9 +269,16 @@ class DeployPolicyTests(TestCase):
             self.assertIn(f"assert migration_v{version}", self.workflow)
 
     def test_records_deployed_commit_after_healthcheck(self) -> None:
-        health_position = self.workflow.rindex('"$ROOT"/scripts/healthcheck.sh')
+        install_position = self.workflow.index("- name: Install and verify production")
+        health_position = self.workflow.index(
+            '"$ROOT"/scripts/healthcheck.sh', install_position
+        )
         marker_position = self.workflow.rindex("data/deployed_commit.txt")
         self.assertGreater(marker_position, health_position)
+        self.assertGreater(
+            marker_position,
+            self.workflow.index("Verify ResultURL transport"),
+        )
 
     def test_migration_copy_gate_runs_before_service_stop(self) -> None:
         gate = self.workflow.index(
@@ -356,7 +366,14 @@ class DeployPolicyTests(TestCase):
         self.assertNotIn("adjust_generation_credits", self.workflow)
 
     def test_successful_deploy_restarts_exactly_once_without_a_second_runtime(self) -> None:
-        self.assertEqual(self.workflow.count("systemctl restart photo-bot.service"), 1)
+        install = self.workflow.split("- name: Install and verify production", 1)[1].split(
+            "- name: Verify ResultURL transport", 1
+        )[0]
+        recovery = self.workflow.split(
+            "- name: Recover stopped runtime after failed deployment", 1
+        )[1]
+        self.assertEqual(install.count("systemctl restart photo-bot.service"), 1)
+        self.assertEqual(recovery.count("systemctl restart photo-bot.service"), 1)
         self.assertIn('test "$MAIN_PID" != "$OLD_PID"', self.workflow)
         self.assertIn("--property=NRestarts --value)", self.workflow)
         self.assertIn("pgrep -u photoapp", self.workflow)
@@ -364,6 +381,33 @@ class DeployPolicyTests(TestCase):
         self.assertIn("WHERE name='poll_last_success'", self.workflow)
         for forbidden in ("DUPLICATE_LOG", "duplicate_polling_instance", "timeout 10", "nohup", "crontab", "pkill"):
             self.assertNotIn(forbidden, self.workflow)
+
+    def test_failed_sync_recovers_once_and_does_not_advance_markers(self) -> None:
+        sync = self.workflow.split("- name: Synchronize application files", 1)[1].split(
+            "- name: Install and verify production", 1
+        )[0]
+        recovery = self.workflow.split(
+            "- name: Recover stopped runtime after failed deployment", 1
+        )[1]
+        finalize = self.workflow.split(
+            "- name: Finalize successful deployment markers", 1
+        )[1].split("- name: Recover stopped runtime after failed deployment", 1)[0]
+        self.assertLess(
+            sync.index('service-stop-intent'),
+            sync.index("systemctl stop photo-bot.service"),
+        )
+        self.assertIn("if: failure() && steps.snapshot.outcome == 'success'", recovery)
+        self.assertIn("service-recovery-attempted", recovery)
+        self.assertLess(
+            recovery.index('service-recovery-attempted'),
+            recovery.index("systemctl restart photo-bot.service"),
+        )
+        self.assertEqual(recovery.count("systemctl restart photo-bot.service"), 1)
+        self.assertNotIn(".deploy-sha", recovery)
+        self.assertNotIn("deployed_commit.txt", recovery)
+        self.assertIn("if: success() && env.DEPLOY_CONFIGURED == 'true'", finalize)
+        self.assertIn('> "$ROOT/.deploy-sha.tmp"', finalize)
+        self.assertIn('mv "$ROOT/.deploy-sha.tmp" "$ROOT/.deploy-sha"', finalize)
 
     def test_deploy_refuses_to_interrupt_active_processing(self) -> None:
         self.assertIn("Require idle production before deployment", self.workflow)
@@ -374,8 +418,9 @@ class DeployPolicyTests(TestCase):
 
     def test_deploy_records_sha_without_modifying_sandbox_settings(self) -> None:
         self.assertNotIn("set_env ROBOKASSA_SANDBOX", self.workflow)
-        self.assertIn('printf \'%s\\n\' "$DEPLOY_SHA" > "$ROOT/.deploy-sha"', self.workflow)
-        self.assertIn('chmod 600 "$ROOT/.deploy-sha"', self.workflow)
+        self.assertIn('printf \'%s\\n\' "$DEPLOY_SHA" > "$ROOT/.deploy-sha.tmp"', self.workflow)
+        self.assertIn('chmod 600 "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/.deploy-sha.tmp"', self.workflow)
+        self.assertIn('mv "$ROOT/.deploy-sha.tmp" "$ROOT/.deploy-sha"', self.workflow)
 
     def test_systemd_template_uses_least_privilege_and_restart_safety(self) -> None:
         service = SERVICE.read_text(encoding="utf-8")

@@ -33,6 +33,8 @@ def build_release(repository: Path, revision: str, archive: Path, manifest: Path
         path = PurePosixPath(name)
         if kind != "blob" or mode not in {"100644", "100755"} or path.is_absolute() or ".." in path.parts:
             raise ValueError("unsupported release member")
+        if "__pycache__" in path.parts or path.suffix == ".pyc":
+            raise ValueError("generated Python cache must not enter a release")
         if path.parts[0] in {".env", ".git", "venv", "data", "logs", "temp"} and name not in {"data/.gitkeep", "logs/.gitkeep", "temp/.gitkeep"}:
             raise ValueError("mutable or private content must not enter a release")
         entries[name] = {"blob": oid, "executable": mode == "100755"}

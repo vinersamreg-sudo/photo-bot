@@ -144,6 +144,20 @@ class CommittedArtifactTests(TestCase):
         with self.assertRaises(ValueError):
             build_release(self.repo, self.git("rev-parse", "HEAD").decode().strip(), self.archive, self.manifest)
 
+    def test_tracked_python_cache_is_rejected_as_generated_content(self):
+        cache = self.repo / "app" / "__pycache__" / "module.cpython-312.pyc"
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(b"synthetic generated cache")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "synthetic cache")
+        with self.assertRaises(ValueError):
+            build_release(
+                self.repo,
+                self.git("rev-parse", "HEAD").decode().strip(),
+                self.archive,
+                self.manifest,
+            )
+
 
 class DeployDryRunTests(TestCase):
     def test_health_preflight_never_contacts_real_host_systemd(self):
@@ -157,7 +171,7 @@ class DeployDryRunTests(TestCase):
         workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
         block = workflow.split("- name: Synchronize application files", 1)[1].split("- name: Install and verify production", 1)[0]
         filters = ["--exclude=" + value for value in re.findall(r"--exclude='([^']+)'", block)]
-        protected = (".env", "data/db.sqlite3", "logs/app.log", "temp/source.png", "venv/bin/python", "app/content_studio/service.py", "app/admin_journal.py", "scripts/run_admin_journal.py", "site/public/index.html", "ops/ravuna-retention-cleanup.timer", "ops/ravuna-retention-cleanup.service", "ops/ravuna-admin-journal.service", "marketing/assets/example.png")
+        protected = (".env", ".deploy-sha", "data/db.sqlite3", "logs/app.log", "temp/source.png", "venv/bin/python", "app/content_studio/service.py", "app/admin_journal.py", "scripts/run_admin_journal.py", "site/public/index.html", "ops/ravuna-retention-cleanup.timer", "ops/ravuna-retention-cleanup.service", "ops/ravuna-admin-journal.service", "marketing/assets/example.png")
         with tempfile.TemporaryDirectory() as directory:
             source, target = Path(directory) / "source", Path(directory) / "target"
             for name in (*protected, "app/main.py"):
@@ -167,10 +181,30 @@ class DeployDryRunTests(TestCase):
                     path.write_bytes(data)
             # --delete must not remove protected paths absent from the new artifact.
             (source / "scripts/run_admin_journal.py").unlink()
-            subprocess.run(["rsync", "-a", "--delete", *filters, str(source) + "/", str(target) + "/"], check=True)
+            cache = target / "app" / "__pycache__" / "root-owned.pyc"
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(b"generated")
+            cache.parent.chmod(0o500)
+            try:
+                subprocess.run(
+                    [
+                        "rsync",
+                        "-a",
+                        "--delete",
+                        "--delete-delay",
+                        "--delay-updates",
+                        *filters,
+                        str(source) + "/",
+                        str(target) + "/",
+                    ],
+                    check=True,
+                )
+            finally:
+                cache.parent.chmod(0o700)
             for name in protected:
                 self.assertEqual((target / name).read_bytes(), b"existing", name)
             self.assertEqual((target / "app/main.py").read_bytes(), b"new")
+            self.assertEqual(cache.read_bytes(), b"generated")
 
     def test_embedded_shell_and_python_are_syntax_valid_without_execution(self):
         git_bash = Path("C:/Program Files/Git/bin/bash.exe")

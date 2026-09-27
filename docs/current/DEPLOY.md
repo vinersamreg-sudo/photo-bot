@@ -86,6 +86,11 @@ code/entry points, site tree and retention unit files. Main-bot deploy does not
 install, enable, stop or restart their services/timers. Existing shared `venv/`
 packages are not installed/upgraded by this workflow. Requirements must match;
 dependency-changing releases require separately approved provisioning before deploy.
+Generated Python cache (`__pycache__/`, `*.pyc`) is neither authoritative release
+content nor an rsync deletion target. The current `.deploy-sha` marker is also
+protected from sync deletion and changes only in the final success step. Sync uses
+delayed updates/deletes so an interrupted transfer does not replace the previously
+deployed tree piecemeal.
 
 ## Fail-closed contract
 
@@ -141,9 +146,13 @@ This workflow neither changes the allowlist nor installs retention/admin units.
 14. Record the exact validated `target_sha` only after successful health checks.
 15. Verify ResultURL transport without creating payment state.
 
-No automatic rollback is performed on failure. Preserve the private staging
-evidence and report whether the service was stopped or code/migration already
-applied; recover only through an explicitly authorized, schema-compatible procedure.
+If a deploy fails after recording its stop intent and the service is inactive,
+the workflow performs at most one bounded recovery restart and verifies health,
+MAX connectivity and a single runtime. The original deploy remains failed and
+the previous completion markers remain unchanged. No code/database rollback is
+attempted automatically. Preserve the private staging evidence and report whether
+code or migration was already applied; any rollback remains an explicitly
+authorized, schema-compatible procedure.
 Staging evidence is not uploaded to GitHub and is not automatically deleted (its
 SQLite copy contains private data); remove it later under the operator retention policy.
 
