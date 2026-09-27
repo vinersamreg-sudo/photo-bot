@@ -284,6 +284,7 @@ jobs:
           PY
               chmod 600 "$BACKUP_FILE"
             fi
+            : > "$STAGE_ROOT/service-stop-intent"
             if systemctl cat photo-bot.service >/dev/null 2>&1; then
               sudo -n systemctl stop photo-bot.service
             fi
@@ -291,9 +292,11 @@ jobs:
               /opt/photo-bot/scripts/stop_bot.sh
             fi
           REMOTE
-          rsync -az --delete \
+          rsync -az --delete --delete-delay --delay-updates \
             --exclude='.git/' \
             --exclude='/.github/' \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
             --exclude='.env' \
             --exclude='venv/' \
             --exclude='data/' \
@@ -332,8 +335,6 @@ jobs:
             test "$(stat -c '%U:%G' "$ROOT")" = "photoapp:photoapp"
             "$ROOT"/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" verify \
               --env-file "$ROOT/.env" --snapshot "$STAGE_ROOT/env-before.json"
-            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/.deploy-sha"
-            chmod 600 "$ROOT/.deploy-sha"
             cd "$ROOT"
             "$ROOT"/venv/bin/python --version
             "$ROOT"/venv/bin/pip check
@@ -636,10 +637,6 @@ jobs:
             "$ROOT"/venv/bin/python -m app.main launch-status
             "$ROOT"/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" verify \
               --env-file "$ROOT/.env" --snapshot "$STAGE_ROOT/env-before.json"
-            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
-            mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
-            test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"
-            printf 'deployed_commit=%s\n' "$DEPLOY_SHA"
           REMOTE
       - name: Verify ResultURL transport
         if: env.DEPLOY_CONFIGURED == 'true'
@@ -672,3 +669,59 @@ jobs:
         run: |
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
             "/opt/photo-bot/venv/bin/python '$STAGE_ROOT/source/scripts/deploy_env_guard.py' verify --env-file /opt/photo-bot/.env --snapshot '$STAGE_ROOT/env-before.json'"
+      - name: Finalize successful deployment markers
+        if: success() && env.DEPLOY_CONFIGURED == 'true'
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$TARGET_SHA" "$STAGE_ROOT" <<'REMOTE'
+            set -euo pipefail
+            ROOT=/opt/photo-bot
+            DEPLOY_SHA="$1"
+            STAGE_ROOT="$2"
+            systemctl is-active --quiet photo-bot.service
+            test "$(pgrep -u photoapp -f '^/opt/photo-bot/venv/bin/python -m app.main run$' | wc -l)" -eq 1
+            "$ROOT"/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" verify \
+              --env-file "$ROOT/.env" --snapshot "$STAGE_ROOT/env-before.json"
+            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/data/deployed_commit.txt.tmp"
+            printf '%s\n' "$DEPLOY_SHA" > "$ROOT/.deploy-sha.tmp"
+            chmod 600 "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/.deploy-sha.tmp"
+            mv "$ROOT/data/deployed_commit.txt.tmp" "$ROOT/data/deployed_commit.txt"
+            mv "$ROOT/.deploy-sha.tmp" "$ROOT/.deploy-sha"
+            test "$(cat "$ROOT/data/deployed_commit.txt")" = "$DEPLOY_SHA"
+            test "$(cat "$ROOT/.deploy-sha")" = "$DEPLOY_SHA"
+            rm -f "$STAGE_ROOT/service-stop-intent"
+            printf 'deployed_commit=%s\n' "$DEPLOY_SHA"
+          REMOTE
+      - name: Recover stopped runtime after failed deployment
+        if: failure() && steps.snapshot.outcome == 'success'
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$STAGE_ROOT" <<'REMOTE'
+            set -euo pipefail
+            ROOT=/opt/photo-bot
+            STAGE_ROOT="$1"
+            if [ ! -f "$STAGE_ROOT/service-stop-intent" ]; then
+              printf 'runtime_recovery=not_required\n'
+              exit 0
+            fi
+            if systemctl is-active --quiet photo-bot.service; then
+              printf 'runtime_recovery=already_active\n'
+              exit 0
+            fi
+            if [ -e "$STAGE_ROOT/service-recovery-attempted" ]; then
+              echo "Runtime recovery was already attempted" >&2
+              exit 1
+            fi
+            : > "$STAGE_ROOT/service-recovery-attempted"
+            sudo -n systemctl restart photo-bot.service
+            READY=0
+            for attempt in $(seq 1 24); do
+              if "$ROOT"/scripts/healthcheck.sh && "$ROOT"/venv/bin/python -m app.main max-check; then
+                READY=1
+                break
+              fi
+              sleep 3
+            done
+            test "$READY" = 1
+            test "$(pgrep -u photoapp -f '^/opt/photo-bot/venv/bin/python -m app.main run$' | wc -l)" -eq 1
+            test "$(systemctl show photo-bot.service --property=NRestarts --value)" = 0
+            printf 'runtime_recovery=PASS\n'
+          REMOTE

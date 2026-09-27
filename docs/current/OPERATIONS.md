@@ -375,6 +375,9 @@ production authorization; CI uses synthetic fixtures and mock HTTP/systemd only.
 
 - systemd is the only runtime manager; no nohup/cron/watchdog duplicates.
 - Start/stop through the scoped scripts/systemd procedures.
+- Canonical deploy ignores generated `__pycache__/` and `*.pyc`. If a deploy
+  fails after stopping the bot, its bounded failure handler may perform one
+  recovery restart; it never advances deployment markers or retries the deploy.
 
 ## Avito first responder
 
