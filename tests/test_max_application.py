@@ -2549,7 +2549,7 @@ class MaxApplicationTests(TestCase):
                     offers[0][2][1].action,
                 ),
                 (
-                    "100 обработок + 50 оригиналов — 1990 ₽",
+                    "💎 Большой пакет — 1990 ₽",
                     "package:offer:large",
                 ),
                 ("← Назад", "nav:back:work"),

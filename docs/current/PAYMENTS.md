@@ -44,8 +44,9 @@
 8. The browser return opens Ravuna in MAX. A return before ResultURL shows
    “Проверяем оплату…” and does not grant or consume anything.
 
-The MAX checkout also exposes “Проверить оплату”. It is a read-only lookup of
-the owned PaymentOrder and current ledgers: paid shows current balances, pending
+An already-created pending MAX checkout exposes “Проверить оплату”; the ordinary
+purchase/zero-balance screen does not. It is a read-only lookup of the owned
+PaymentOrder and current ledgers: paid shows current balances, pending
 explains that provider confirmation has not arrived, and an expired checkout
 offers the existing owner-verified refresh action. This check never calls grant
 or delivery logic; ResultURL remains the only authoritative confirmation.
