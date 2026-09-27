@@ -171,7 +171,7 @@ class DeployDryRunTests(TestCase):
         workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
         block = workflow.split("- name: Synchronize application files", 1)[1].split("- name: Install and verify production", 1)[0]
         filters = ["--exclude=" + value for value in re.findall(r"--exclude='([^']+)'", block)]
-        protected = (".env", "data/db.sqlite3", "logs/app.log", "temp/source.png", "venv/bin/python", "app/content_studio/service.py", "app/admin_journal.py", "scripts/run_admin_journal.py", "site/public/index.html", "ops/ravuna-retention-cleanup.timer", "ops/ravuna-retention-cleanup.service", "ops/ravuna-admin-journal.service", "marketing/assets/example.png")
+        protected = (".env", ".deploy-sha", "data/db.sqlite3", "logs/app.log", "temp/source.png", "venv/bin/python", "app/content_studio/service.py", "app/admin_journal.py", "scripts/run_admin_journal.py", "site/public/index.html", "ops/ravuna-retention-cleanup.timer", "ops/ravuna-retention-cleanup.service", "ops/ravuna-admin-journal.service", "marketing/assets/example.png")
         with tempfile.TemporaryDirectory() as directory:
             source, target = Path(directory) / "source", Path(directory) / "target"
             for name in (*protected, "app/main.py"):

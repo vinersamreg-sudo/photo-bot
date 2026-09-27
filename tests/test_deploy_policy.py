@@ -142,7 +142,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("--canonical-ref origin/main", self.site_deploy_workflow)
 
     def test_preserves_runtime_state(self) -> None:
-        for path in (".env", "venv/", "data/", "logs/", "temp/", "/site/", "/app/content_studio/", "/marketing/", "/app/admin_journal.py", "/scripts/run_admin_journal.py", "/ops/ravuna-admin-journal.service", "/ops/ravuna-retention-cleanup.service", "/ops/ravuna-retention-cleanup.timer"):
+        for path in (".env", ".deploy-sha", "venv/", "data/", "logs/", "temp/", "/site/", "/app/content_studio/", "/marketing/", "/app/admin_journal.py", "/scripts/run_admin_journal.py", "/ops/ravuna-admin-journal.service", "/ops/ravuna-retention-cleanup.service", "/ops/ravuna-retention-cleanup.timer"):
             self.assertIn(f"--exclude='{path}'", self.workflow)
         self.assertNotIn("--delete-excluded", self.workflow)
         self.assertIn("--exclude='__pycache__/'", self.workflow)

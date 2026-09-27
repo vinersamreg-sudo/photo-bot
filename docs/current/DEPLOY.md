@@ -87,8 +87,10 @@ install, enable, stop or restart their services/timers. Existing shared `venv/`
 packages are not installed/upgraded by this workflow. Requirements must match;
 dependency-changing releases require separately approved provisioning before deploy.
 Generated Python cache (`__pycache__/`, `*.pyc`) is neither authoritative release
-content nor an rsync deletion target. Sync uses delayed updates/deletes so an
-interrupted transfer does not replace the previously deployed tree piecemeal.
+content nor an rsync deletion target. The current `.deploy-sha` marker is also
+protected from sync deletion and changes only in the final success step. Sync uses
+delayed updates/deletes so an interrupted transfer does not replace the previously
+deployed tree piecemeal.
 
 ## Fail-closed contract
 
