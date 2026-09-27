@@ -48,6 +48,8 @@ from app.gallery import GalleryService, GalleryVersion
 from app.edit_intent import parse_edit_intent
 from app.max_adapter import (
     Button,
+    LARGE_PACKAGE_BUTTON_TEXT,
+    LARGE_PACKAGE_SUMMARY_TEXT,
     MaxDemoAdapter,
     View,
     delete_confirmation_view,
@@ -149,7 +151,9 @@ PAYMENT_OFFER_TEXT = (
     "• 2 обработки фотографий\n"
     "• оригинал этой фотографии без водяного знака\n\n"
     "После подтверждения оплаты баланс обновится автоматически "
-    "в течение нескольких секунд."
+    "в течение нескольких секунд.\n\n"
+    "Большой пакет:\n"
+    + LARGE_PACKAGE_SUMMARY_TEXT
 )
 
 
@@ -2514,7 +2518,7 @@ class MaxApplication:
                 Button("Оплатить 49 ₽", payment_url),
                 *((status_button,) if status_button is not None else ()),
                 Button(
-                    "100 обработок + 50 оригиналов — 1990 ₽",
+                    LARGE_PACKAGE_BUTTON_TEXT,
                     "package:buy:large",
                 ),
                 Button("← Назад", "nav:back:main"),
@@ -2636,7 +2640,7 @@ class MaxApplication:
             Button(_pay_button_text(product_code), payment_url),
             *((status_button,) if status_button is not None else ()),
             Button(
-                "100 обработок + 50 оригиналов — 1990 ₽",
+                LARGE_PACKAGE_BUTTON_TEXT,
                 "package:offer:large",
             ) if product_code == PRODUCT_CODE else Button(
                 "2 обработки + 1 оригинал — 49 ₽",

@@ -187,12 +187,17 @@ Selecting either offer binds checkout to that exact package. A refreshed link
 must render the same price and package; it must never fall back to the 49 ₽
 package or to another photo/request.
 
-Every created checkout includes “Проверить оплату”. The check reads only the
-owned Ravuna order and current credit/entitlement ledgers. A confirmed order
+An ordinary purchase/zero-balance screen does not include “Проверить оплату”.
+The action appears only in the context of an already-created pending checkout.
+It reads only the owned Ravuna order and current credit/entitlement ledgers. A confirmed order
 shows current balances; a pending order explains that Robokassa has not yet
 confirmed it and offers the same checkout; an expired link offers the existing
 owner-verified refresh flow. The button never grants, delivers or treats a
 browser return as payment confirmation.
+
+The zero-balance screen uses “Купить пакет — 49 ₽” and the mobile-safe
+“💎 Большой пакет — 1990 ₽” button labels. Its text keeps the full large-package
+composition visible: “100 обработок + 50 оригиналов — 1990 ₽”.
 
 Do not call the package “generations”. Browser return pages explain that only the
 server ResultURL confirms payment.

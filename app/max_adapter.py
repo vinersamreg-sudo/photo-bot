@@ -52,6 +52,9 @@ LEGAL_TEXT = (
     "и принимаете условия сервиса."
 )
 
+LARGE_PACKAGE_BUTTON_TEXT = "💎 Большой пакет — 1990 ₽"
+LARGE_PACKAGE_SUMMARY_TEXT = "100 обработок + 50 оригиналов — 1990 ₽"
+
 
 @dataclass(frozen=True)
 class Button:
@@ -125,6 +128,8 @@ def main_menu(
             + balance_text
             + "\n\nУ вас закончились обработки.\n"
             "Чтобы обработать новую фотографию, приобретите пакет Ravuna — 49 ₽."
+            "\n\nБольшой пакет:\n"
+            + LARGE_PACKAGE_SUMMARY_TEXT
             + (
                 "\n\nПосле подтверждения оплаты баланс обновится автоматически "
                 "в течение нескольких секунд."
@@ -134,9 +139,8 @@ def main_menu(
         )
         buttons = (
             Button("Купить пакет — 49 ₽", payment_url or "package:buy"),
-            *((Button("Проверить оплату", payment_status_action),) if payment_status_action else ()),
             Button(
-                "Купить 100 обработок + 50 оригиналов — 1990 ₽",
+                LARGE_PACKAGE_BUTTON_TEXT,
                 "package:buy:large",
             ),
             Button("📁 Мои работы", "studio:works"),
@@ -282,7 +286,7 @@ def result_actions(remaining: int) -> View:
                 Button("⬇️ Получить оригинал", "result:unlock", 0),
                 Button("💳 Купить 2 обработки — 49 ₽", "package:offer", 1),
                 Button(
-                    "💳 100 обработок + 50 оригиналов — 1990 ₽",
+                    LARGE_PACKAGE_BUTTON_TEXT,
                     "package:offer:large",
                     2,
                 ),
@@ -359,7 +363,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
             Button("🎁 Поделиться и получить бонус", "result:share"),
             Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
             Button(
-                "💳 100 обработок + 50 оригиналов — 1990 ₽",
+                LARGE_PACKAGE_BUTTON_TEXT,
                 "package:offer:large",
             ),
             Button("История версий", "work:history"),
