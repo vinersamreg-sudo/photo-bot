@@ -52,8 +52,13 @@ LEGAL_TEXT = (
     "и принимаете условия сервиса."
 )
 
-LARGE_PACKAGE_BUTTON_TEXT = "💎 Большой пакет — 1990 ₽"
-LARGE_PACKAGE_SUMMARY_TEXT = "100 обработок + 50 оригиналов — 1990 ₽"
+SMALL_PURCHASE_BUTTON_TEXT = "Купить за 49 ₽"
+LARGE_PURCHASE_BUTTON_TEXT = "Купить за 1990 ₽"
+PURCHASE_OPTIONS_TEXT = (
+    "Выберите вариант:\n\n"
+    "⚡ 2 обработки + 1 оригинал — 49 ₽\n\n"
+    "💎 100 обработок + 50 оригиналов — 1990 ₽"
+)
 
 
 @dataclass(frozen=True)
@@ -127,9 +132,9 @@ def main_menu(
             + "\n\n"
             + balance_text
             + "\n\nУ вас закончились обработки.\n"
-            "Чтобы обработать новую фотографию, приобретите пакет Ravuna — 49 ₽."
-            "\n\nБольшой пакет:\n"
-            + LARGE_PACKAGE_SUMMARY_TEXT
+            "Чтобы обработать новую фотографию, выберите подходящий вариант."
+            "\n\n"
+            + PURCHASE_OPTIONS_TEXT
             + (
                 "\n\nПосле подтверждения оплаты баланс обновится автоматически "
                 "в течение нескольких секунд."
@@ -138,9 +143,9 @@ def main_menu(
             )
         )
         buttons = (
-            Button("Купить пакет — 49 ₽", payment_url or "package:buy"),
+            Button(SMALL_PURCHASE_BUTTON_TEXT, payment_url or "package:buy"),
             Button(
-                LARGE_PACKAGE_BUTTON_TEXT,
+                LARGE_PURCHASE_BUTTON_TEXT,
                 "package:buy:large",
             ),
             Button("📁 Мои работы", "studio:works"),
@@ -280,13 +285,14 @@ def result_actions(remaining: int) -> View:
         "Пригласите друга — бонус начислится после его первой обработки."
     )
     if remaining <= 0:
+        text += "\n\n" + PURCHASE_OPTIONS_TEXT
         return View(
             text,
             (
                 Button("⬇️ Получить оригинал", "result:unlock", 0),
-                Button("💳 Купить 2 обработки — 49 ₽", "package:offer", 1),
+                Button(SMALL_PURCHASE_BUTTON_TEXT, "package:offer", 1),
                 Button(
-                    LARGE_PACKAGE_BUTTON_TEXT,
+                    LARGE_PURCHASE_BUTTON_TEXT,
                     "package:offer:large",
                     2,
                 ),
@@ -361,9 +367,9 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
         return (
             Button("⬇ Получить оригинал", "result:unlock"),
             Button("🎁 Поделиться и получить бонус", "result:share"),
-            Button("💳 Купить ещё 2 обработки — 49 ₽", "package:offer"),
+            Button(SMALL_PURCHASE_BUTTON_TEXT, "package:offer"),
             Button(
-                LARGE_PACKAGE_BUTTON_TEXT,
+                LARGE_PURCHASE_BUTTON_TEXT,
                 "package:offer:large",
             ),
             Button("История версий", "work:history"),
