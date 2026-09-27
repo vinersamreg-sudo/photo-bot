@@ -48,8 +48,9 @@ from app.gallery import GalleryService, GalleryVersion
 from app.edit_intent import parse_edit_intent
 from app.max_adapter import (
     Button,
-    LARGE_PACKAGE_BUTTON_TEXT,
-    LARGE_PACKAGE_SUMMARY_TEXT,
+    LARGE_PURCHASE_BUTTON_TEXT,
+    PURCHASE_OPTIONS_TEXT,
+    SMALL_PURCHASE_BUTTON_TEXT,
     MaxDemoAdapter,
     View,
     delete_confirmation_view,
@@ -146,41 +147,27 @@ _PREVIEW_WATERMARK_REQUESTS = (
     ),
 )
 PAYMENT_OFFER_TEXT = (
-    "Пакет Ravuna — 49 ₽\n\n"
-    "В пакет входит:\n"
-    "• 2 обработки фотографий\n"
-    "• оригинал этой фотографии без водяного знака\n\n"
+    PURCHASE_OPTIONS_TEXT
+    + "\n\nРазовая покупка. Автосписаний и подписки нет.\n\n"
     "После подтверждения оплаты баланс обновится автоматически "
-    "в течение нескольких секунд.\n\n"
-    "Большой пакет:\n"
-    + LARGE_PACKAGE_SUMMARY_TEXT
+    "в течение нескольких секунд."
 )
 
 
 def _package_offer_text(product_code: str) -> str:
-    if product_code == PRODUCT_CODE:
-        return PAYMENT_OFFER_TEXT
-    package = continuation_package(product_code)
-    return (
-        f"Пакет Ravuna — {package.price_minor // 100} ₽\n\n"
-        "В пакет входит:\n"
-        f"• {package.generation_credits} обработок фотографий\n"
-        f"• {package.unlock_entitlements} оригиналов без водяного знака\n\n"
-        "Разовая покупка. Автосписаний и подписки нет.\n\n"
-        "После подтверждения оплаты баланс обновится автоматически "
-        "в течение нескольких секунд."
-    )
+    continuation_package(product_code)
+    return PAYMENT_OFFER_TEXT
 
 
 def _pay_button_text(product_code: str) -> str:
-    return f"Оплатить {continuation_package(product_code).price_minor // 100} ₽"
+    return f"Купить за {continuation_package(product_code).price_minor // 100} ₽"
 
 
 def _payment_status_button(order: PaymentOrder) -> Button:
     return Button("Проверить оплату", f"payment:status:{order.public_token}")
 PENDING_EDIT_PAYMENT_TEXT = (
     "У вас закончились обработки.\n\n"
-    "Чтобы обработать эту фотографию, приобретите пакет Ravuna.\n\n"
+    "Чтобы обработать эту фотографию, выберите подходящий вариант.\n\n"
     + PAYMENT_OFFER_TEXT
 )
 # Kept as a compatibility symbol for older integrations; this screen is no
@@ -453,10 +440,11 @@ class MaxApplication:
         if isinstance(exc, DemoLimitError):
             self._send_error(
                 event.user_id,
-                "Бесплатные обработки закончились.",
+                "Бесплатные обработки закончились.\n\n" + PURCHASE_OPTIONS_TEXT,
                 (
                     Button("⬇ Получить оригинал", "result:unlock"),
-                    Button("Пакет Ravuna — 49 ₽", "package:offer"),
+                    Button(SMALL_PURCHASE_BUTTON_TEXT, "package:offer"),
+                    Button(LARGE_PURCHASE_BUTTON_TEXT, "package:offer:large"),
                     Button("📂 Мои работы", "studio:works"),
                     Button("← Назад", "nav:back:work"),
                 ),
@@ -832,7 +820,7 @@ class MaxApplication:
         self._send_message(
             event.user_id,
             "Оплата отменена или не завершена. Начислений не было.\n\n"
-            "Откройте нужный пакет и попробуйте оплатить снова.",
+            "Вернитесь к выбору и попробуйте оплатить снова.",
             (Button("← Назад", "nav:back:main"),),
             screen="payment_status_failed",
         )
@@ -849,9 +837,7 @@ class MaxApplication:
                 _package_offer_text(order.product_code),
                 (
                     Button(
-                        "Купить пакет — 49 ₽"
-                        if order.product_code == PRODUCT_CODE
-                        else _pay_button_text(order.product_code),
+                        _pay_button_text(order.product_code),
                         payment_url,
                     ),
                     _payment_status_button(order),
@@ -930,7 +916,7 @@ class MaxApplication:
                     PENDING_EDIT_PAYMENT_TEXT
                     if order.product_code == PRODUCT_CODE
                     else "У вас закончились обработки.\n\n"
-                    "Чтобы обработать эту фотографию, приобретите пакет Ravuna.\n\n"
+                    "Чтобы обработать эту фотографию, выберите подходящий вариант.\n\n"
                     + _package_offer_text(order.product_code)
                 ),
                 (
@@ -1241,8 +1227,8 @@ class MaxApplication:
             self._send_message(
                 event.user_id,
                 "Условия использования\n\n"
-                "Сервис создаёт демо-обработку. Пакет доступа Ravuna включает "
-                "две обработки и один оригинал. Оплата пока недоступна.",
+                "Сервис создаёт демо-обработку. Вариант за 49 ₽ включает "
+                "2 обработки и 1 оригинал. Оплата пока недоступна.",
                 (Button("← Назад", "settings"),),
             )
             return
@@ -2515,10 +2501,10 @@ class MaxApplication:
             source_path,
             PENDING_EDIT_PAYMENT_TEXT,
             (
-                Button("Оплатить 49 ₽", payment_url),
+                Button(SMALL_PURCHASE_BUTTON_TEXT, payment_url),
                 *((status_button,) if status_button is not None else ()),
                 Button(
-                    LARGE_PACKAGE_BUTTON_TEXT,
+                    LARGE_PURCHASE_BUTTON_TEXT,
                     "package:buy:large",
                 ),
                 Button("← Назад", "nav:back:main"),
@@ -2640,10 +2626,10 @@ class MaxApplication:
             Button(_pay_button_text(product_code), payment_url),
             *((status_button,) if status_button is not None else ()),
             Button(
-                LARGE_PACKAGE_BUTTON_TEXT,
+                LARGE_PURCHASE_BUTTON_TEXT,
                 "package:offer:large",
             ) if product_code == PRODUCT_CODE else Button(
-                "2 обработки + 1 оригинал — 49 ₽",
+                SMALL_PURCHASE_BUTTON_TEXT,
                 "package:offer",
             ),
             Button("← Назад", "nav:back:work"),
@@ -3311,6 +3297,8 @@ class MaxApplication:
             if dialog and dialog.user_id
             else 0
         )
+        if remaining <= 0 and not history and not version_detail:
+            caption += "\n\n" + PURCHASE_OPTIONS_TEXT
         if version_detail:
             buttons = (
                 Button("← Предыдущая", "work:previous"),

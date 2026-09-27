@@ -1678,7 +1678,7 @@ class MaxApplicationTests(TestCase):
 
         unlock_event = self.callback("result:unlock")
         self.assertIn(
-            "Пакет Ravuna — 49 ₽",
+            "⚡ 2 обработки + 1 оригинал — 49 ₽",
             self.transport.messages[-1][1],
         )
         self.assertNotIn(str(attempt["original_result_path"]), self.transport.messages[-1][1])
@@ -1959,7 +1959,7 @@ class MaxApplicationTests(TestCase):
         button_texts = [button.text for button in buttons]
         self.assertNotIn("Исправить", button_texts)
         self.assertNotIn("📷 Другое фото", button_texts)
-        self.assertIn("💳 Купить 2 обработки — 49 ₽", button_texts)
+        self.assertIn("Купить за 49 ₽", button_texts)
         self.assertIn("⬇️ Получить оригинал", button_texts)
 
     def test_zero_balance_start_shows_direct_purchase_and_blocks_stale_upload(self) -> None:
@@ -1973,9 +1973,10 @@ class MaxApplicationTests(TestCase):
 
         menu = self.transport.messages[-1]
         self.assertIn("У вас закончились обработки.", menu[1])
-        self.assertIn("приобретите пакет Ravuna — 49 ₽", menu[1])
+        self.assertIn("⚡ 2 обработки + 1 оригинал — 49 ₽", menu[1])
+        self.assertIn("💎 100 обработок + 50 оригиналов — 1990 ₽", menu[1])
         buy = menu[2][0]
-        self.assertEqual(buy.text, "Купить пакет — 49 ₽")
+        self.assertEqual(buy.text, "Купить за 49 ₽")
         self.assertRegex(buy.action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
         self.callback("upload:ready")
         self.assertEqual(self.store.get("u1").state, "main_menu")
@@ -2005,7 +2006,7 @@ class MaxApplicationTests(TestCase):
 
         menu = self.transport.messages[-1]
         buy = menu[2][0]
-        self.assertEqual(buy.text, "Купить пакет — 49 ₽")
+        self.assertEqual(buy.text, "Купить за 49 ₽")
         self.assertRegex(buy.action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
         self.assertNotEqual(buy.action, payments.short_payment_url(old))
         with self.database.read() as connection:
@@ -2287,7 +2288,15 @@ class MaxApplicationTests(TestCase):
         button_texts = [button.text for button in self.transport.images[-1][3]]
         self.assertNotIn("✏️ Исправить", button_texts)
         self.assertNotIn("🎲 Другой вариант", button_texts)
-        self.assertIn("💳 Купить ещё 2 обработки — 49 ₽", button_texts)
+        self.assertIn("Купить за 49 ₽", button_texts)
+        self.assertIn(
+            "⚡ 2 обработки + 1 оригинал — 49 ₽",
+            self.transport.images[-1][2],
+        )
+        self.assertIn(
+            "💎 100 обработок + 50 оригиналов — 1990 ₽",
+            self.transport.images[-1][2],
+        )
 
     def test_repeated_payment_click_sends_one_link_without_duplicate_message(self) -> None:
         self.generate_first()
@@ -2321,7 +2330,7 @@ class MaxApplicationTests(TestCase):
             message for message in self.transport.messages
             if message[1] == PAYMENT_OFFER_TEXT
             and message[2]
-            and message[2][0].text == "Оплатить 49 ₽"
+            and message[2][0].text == "Купить за 49 ₽"
             and message[2][0].action.startswith("https://ravuna.ru/p/")
         ]
         self.assertEqual(len(payment_cards), 1)
@@ -2543,13 +2552,13 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(
             [(button.text, button.action) for button in offers[0][2]],
             [
-                ("Оплатить 49 ₽", offers[0][2][0].action),
+                ("Купить за 49 ₽", offers[0][2][0].action),
                 (
                     "Проверить оплату",
                     offers[0][2][1].action,
                 ),
                 (
-                    "💎 Большой пакет — 1990 ₽",
+                    "Купить за 1990 ₽",
                     "package:offer:large",
                 ),
                 ("← Назад", "nav:back:work"),
@@ -2620,7 +2629,7 @@ class MaxApplicationTests(TestCase):
         self.assertIn("100 обработок", offer[1])
         self.assertIn("50 оригиналов", offer[1])
         self.assertIn("Автосписаний и подписки нет", offer[1])
-        self.assertEqual(offer[2][0].text, "Оплатить 1990 ₽")
+        self.assertEqual(offer[2][0].text, "Купить за 1990 ₽")
         self.assertRegex(offer[2][0].action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
         with self.database.read() as connection:
             order = connection.execute(
@@ -2813,7 +2822,7 @@ class MaxApplicationTests(TestCase):
             message for message in self.transport.messages
             if message[1] == PAYMENT_OFFER_TEXT
             and message[2]
-            and message[2][0].text == "Оплатить 49 ₽"
+            and message[2][0].text == "Купить за 49 ₽"
             and message[2][0].action.startswith("https://ravuna.ru/p/")
         ]
         self.assertEqual(len(payment_cards), 1)
@@ -2887,7 +2896,7 @@ class MaxApplicationTests(TestCase):
         paid_app.handle(event)
         self.assertEqual(self.transport.messages[-1][1], PAYMENT_OFFER_TEXT)
         pay_button = self.transport.messages[-1][2][0]
-        self.assertEqual(pay_button.text, "Оплатить 49 ₽")
+        self.assertEqual(pay_button.text, "Купить за 49 ₽")
         self.assertRegex(pay_button.action, r"^https://ravuna\.ru/p/[0-9a-f]{32}$")
         self.assertEqual(self.transport.messages[-1][2][-1].text, "← Назад")
         with self.database.read() as connection:

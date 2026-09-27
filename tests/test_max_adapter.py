@@ -133,8 +133,8 @@ class MaxAdapterTests(TestCase):
             [button.text for button in result_actions(0).buttons],
             [
                 "⬇️ Получить оригинал",
-                "💳 Купить 2 обработки — 49 ₽",
-                "💎 Большой пакет — 1990 ₽",
+                "Купить за 49 ₽",
+                "Купить за 1990 ₽",
                 "🎁 Пригласить друга — получить +2 обработки",
                 "⭐ Оценить",
                 "💬 Отзыв о Ravuna",
@@ -145,6 +145,25 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(
             [button.row for button in result_actions(0).buttons],
             [0, 1, 2, 3, 4, 4, 5, 6],
+        )
+        self.assertIn(
+            "⚡ 2 обработки + 1 оригинал — 49 ₽",
+            result_actions(0).text,
+        )
+        self.assertIn(
+            "💎 100 обработок + 50 оригиналов — 1990 ₽",
+            result_actions(0).text,
+        )
+        self.assertEqual(
+            {
+                button.text: button.action
+                for button in result_actions(0).buttons
+                if button.text.startswith("Купить за")
+            },
+            {
+                "Купить за 49 ₽": "package:offer",
+                "Купить за 1990 ₽": "package:offer:large",
+            },
         )
         self.assertEqual(
             [button.text for button in paid_actions()],
@@ -178,12 +197,23 @@ class MaxAdapterTests(TestCase):
             [
                 "⬇ Получить оригинал",
                 "🎁 Поделиться и получить бонус",
-                "💳 Купить ещё 2 обработки — 49 ₽",
-                "💎 Большой пакет — 1990 ₽",
+                "Купить за 49 ₽",
+                "Купить за 1990 ₽",
                 "История версий",
                 "Ещё",
                 "← Назад",
             ],
+        )
+        self.assertEqual(
+            {
+                button.text: button.action
+                for button in gallery_item_actions(0)
+                if button.text.startswith("Купить за")
+            },
+            {
+                "Купить за 49 ₽": "package:offer",
+                "Купить за 1990 ₽": "package:offer:large",
+            },
         )
         self.assertEqual(len(gallery_more_actions().buttons), 4)
         self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])
@@ -199,14 +229,17 @@ class MaxAdapterTests(TestCase):
         )
         actions = {button.text: button.action for button in menu.buttons}
         self.assertEqual(
-            actions["Купить пакет — 49 ₽"],
+            actions["Купить за 49 ₽"],
             "https://ravuna.ru/p/" + "a" * 32,
         )
         self.assertEqual(
-            actions["💎 Большой пакет — 1990 ₽"],
+            actions["Купить за 1990 ₽"],
             "package:buy:large",
         )
         self.assertNotIn("Проверить оплату", actions)
+        self.assertIn("Выберите вариант:", menu.text)
+        self.assertIn("⚡ 2 обработки + 1 оригинал — 49 ₽", menu.text)
+        self.assertNotIn("Большой пакет", menu.text)
         self.assertIn("100 обработок + 50 оригиналов — 1990 ₽", menu.text)
         self.assertIn(
             "баланс обновится автоматически в течение нескольких секунд",
