@@ -420,3 +420,32 @@ or `data/`, and never restart `photo-bot.service` as part of this procedure.
 
 Operator reports and support notes must not contain platform user IDs, tokens,
 passwords, prompts, photos or private file paths. Use masked invoice/order refs.
+
+## Feedback report (read-only)
+
+```bash
+scripts/ravuna feedback-report --days 7
+scripts/ravuna feedback-report --days 7 --db /private/snapshot.sqlite3 --format json
+```
+
+For a reproducible cutoff add `--at 2026-10-04T12:00:00+04:00`. The command uses
+SQLite `mode=ro`/`query_only`, a consistent read transaction and Samara time for
+two adjacent equal periods. It never initializes storage, migrates, calls an AI
+provider, sends messages or configures application logging.
+
+Every configured `MAX_OWNER_USER_IDS` entry must map unambiguously to a MAX user;
+otherwise the report stops rather than including test activity. New service
+feedback, historical comments and 1–5 ratings are combined. Legacy reactions
+remain separate; numeric ratings without a reliable feedback date are reported
+outside the period, with duplicate author/version pairs excluded.
+
+Output contains aggregates only: counts, distinct authors, ratings, source
+screens, conservative recurring themes, recommendations and what the evidence
+does not justify yet. Exact comments, customer identities and private paths
+are not printed. A theme's independent supporters are distinct internal users,
+not message volume. Unclassified text remains visible as a count.
+
+Payer context is evaluated at feedback time and requires paid_at, a processed
+Robokassa ResultURL and the corresponding package grant. Missing/incomplete
+evidence is `unknown`, not `nonpayer`; repeat payer means two distinct confirmed
+purchases. These are historical purchases, not net revenue or refund accounting.

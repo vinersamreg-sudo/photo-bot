@@ -65,7 +65,8 @@ class MigrationSafetyTests(TestCase):
                 ON continuation_pack_grants(user_id,created_at DESC);
                 DROP TABLE continuation_pack_grants_new;
                 DROP TABLE unlock_entitlements_new;
-                DELETE FROM schema_migrations WHERE version=14;
+                DROP TABLE IF EXISTS service_feedback;
+                DELETE FROM schema_migrations WHERE version>=14;
                 COMMIT;
                 """
             )
@@ -120,20 +121,22 @@ class MigrationSafetyTests(TestCase):
                 unlock_entitlement_quantity=SMALL_PACKAGE.unlock_entitlements,
             )
 
-    def test_v13_to_v14_copy_migration_preserves_paid_small_package(self) -> None:
+    def test_v14_to_v15_copy_migration_preserves_paid_small_package(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "production-copy-source.sqlite3"
             migrated = root / "production-copy-migrated.sqlite3"
             database = Database(source)
             self._seed_paid_small_package(database)
-            self._downgrade_commerce_schema_to_v13(source)
+            with database.transaction() as connection:
+                connection.execute("DROP TABLE service_feedback")
+                connection.execute("DELETE FROM schema_migrations WHERE version=15")
             source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
 
             report = verify_migration_copy(source, migrated)
 
             self.assertEqual(report["status"], "PASS")
-            self.assertEqual(report["source_schema"], 13)
+            self.assertEqual(report["source_schema"], 14)
             self.assertEqual(report["target_schema"], CURRENT_SCHEMA_VERSION)
             self.assertEqual(report["quick_check"], "ok")
             self.assertEqual(report["counts"]["paid_orders"], 1)
@@ -141,7 +144,7 @@ class MigrationSafetyTests(TestCase):
             self.assertTrue(report["small_49_grants_preserved"])
             self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), source_sha)
             with closing(sqlite3.connect(source)) as connection:
-                self.assertEqual(schema_version(connection), 13)
+                self.assertEqual(schema_version(connection), 14)
             with closing(sqlite3.connect(migrated)) as connection:
                 self.assertEqual(schema_version(connection), CURRENT_SCHEMA_VERSION)
                 self.assertEqual(
@@ -150,6 +153,22 @@ class MigrationSafetyTests(TestCase):
                     ).fetchone()[0],
                     1,
                 )
+
+    def test_legacy_v13_initialization_preserves_paid_small_package(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "legacy.sqlite3"
+            database = Database(source)
+            self._seed_paid_small_package(database)
+            with database.read() as connection:
+                before = [tuple(row) for row in connection.execute("SELECT * FROM continuation_pack_grants")]
+            self._downgrade_commerce_schema_to_v13(source)
+            Database(source)
+            with database.read() as connection:
+                self.assertEqual(schema_version(connection), CURRENT_SCHEMA_VERSION)
+                self.assertEqual(
+                    [tuple(row) for row in connection.execute("SELECT * FROM continuation_pack_grants")], before
+                )
+                self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_unsupported_newer_schema_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -14,6 +14,48 @@ from app.max_conversation import MaxConversationStore
 from app.max_transport import MaxTransportError
 
 
+FEEDBACK_BUTTON_TEXT = "💬 Поделиться мнением"
+# Explicitly opt in stable, customer-facing screens; errors, processing and
+# feedback/rating forms must never inherit a global keyboard footer.
+FEEDBACK_SCREENS = {
+    "main_menu": "main",
+    "payment_offer": "purchase", "pending_payment_offer": "purchase",
+    "demo_exhausted": "purchase", "checkout": "purchase",
+    "checkout:link": "purchase",
+    "waiting_for_source": "upload", "initial": "upload",
+    "two_sources": "upload", "second_source": "upload",
+    "waiting_for_prompt": "upload", "waiting_for_second_source": "upload",
+    "waiting_for_correction": "upload", "correction": "upload",
+    "result_ready": "result", "original_ready": "result",
+    "original_guidance": "result",
+    "works_empty": "works", "works_gallery": "works",
+    "navigation:works": "works", "navigation:work": "work",
+    "navigation:ideas": "ideas", "navigation:idea-category": "ideas",
+}
+
+
+def feedback_source_screen(screen: str) -> str:
+    if screen in {"rating", "rating_result", "navigation:rating"}:
+        return "rating"
+    if screen in {"version_history", "version_history_empty", "navigation:history"}:
+        return "history"
+    if screen == "navigation:more":
+        return "more"
+    return FEEDBACK_SCREENS.get(screen, "unknown")
+
+
+def with_feedback_button(buttons: Sequence[Button], screen: str) -> tuple[Button, ...]:
+    """One standalone feedback row, with Back always last in navigation."""
+    kept = tuple(button for button in buttons
+                 if button.action not in {"feedback:open", "result:feedback"})
+    if screen in FEEDBACK_SCREENS:
+        # row=None always starts a separate MAX keyboard row.
+        actions = tuple(button for button in kept if button.text != "← Назад")
+        back = tuple(button for button in kept if button.text == "← Назад")
+        return (*actions, Button(FEEDBACK_BUTTON_TEXT, "feedback:open"), *back)
+    return kept
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -135,6 +177,7 @@ class MaxUiShell:
         platform_user_id: str,
         *,
         chat_id: Optional[str] = None,
+        preserve_context: bool = False,
     ) -> RenderResult:
         """Retire the old bot screen before rendering below a new user message."""
 
@@ -150,10 +193,12 @@ class MaxUiShell:
             connection.execute(
                 """UPDATE active_ui_sessions
                    SET chat_id=COALESCE(?,chat_id),active_ui_message_id=NULL,
-                       active_screen='user_input',active_screen_context='{}',
+                       active_screen=?,active_screen_context=?,
                        ui_revision=?,updated_at=?
                    WHERE platform_user_id=?""",
-                (chat_id, revision, _now(), platform_user_id),
+                (chat_id, row["active_screen"] if preserve_context else "user_input",
+                 row["active_screen_context"] if preserve_context else "{}",
+                 revision, _now(), platform_user_id),
             )
 
         if previous_message_id:
@@ -216,6 +261,27 @@ class MaxUiShell:
                 ).rowcount
         return bool(updated)
 
+    def remember_screen(
+        self, platform_user_id: str, screen: str, context: dict[str, Any]
+    ) -> None:
+        """Persist navigation context in legacy UI mode, without any delivery.
+
+        Also used before entering feedback so a restart/send failure cannot lose
+        its source screen. No message text, prompts or media are stored here.
+        """
+        now = _now()
+        encoded = json.dumps(context, ensure_ascii=False, sort_keys=True)
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO active_ui_sessions(
+                       platform_user_id,active_screen,active_screen_context,created_at,updated_at
+                   ) VALUES(?,?,?,?,?) ON CONFLICT(platform_user_id) DO UPDATE SET
+                       active_screen=excluded.active_screen,
+                       active_screen_context=excluded.active_screen_context,
+                       updated_at=excluded.updated_at""",
+                (platform_user_id, screen, encoded, now, now),
+            )
+
     def render(
         self,
         platform_user_id: str,
@@ -231,6 +297,7 @@ class MaxUiShell:
         force_new_image_message: bool = False,
     ) -> RenderResult:
         now = _now()
+        buttons = with_feedback_button(buttons, screen)
         encoded_context = json.dumps(
             context or {}, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         )

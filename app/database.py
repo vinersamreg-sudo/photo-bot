@@ -10,7 +10,7 @@ from typing import Iterator
 from uuid import NAMESPACE_URL, uuid5
 
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 
 class UnsupportedSchemaVersionError(RuntimeError):
@@ -317,6 +317,24 @@ CREATE INDEX IF NOT EXISTS idx_user_feedback_created
 ON user_feedback(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_feedback_user_created
 ON user_feedback(user_id, created_at DESC);
+"""
+
+
+SERVICE_FEEDBACK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS service_feedback (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message TEXT NOT NULL CHECK(length(message) BETWEEN 1 AND 4000),
+    created_at TEXT NOT NULL,
+    source_screen TEXT NOT NULL CHECK(length(source_screen) BETWEEN 1 AND 64),
+    gallery_item_id TEXT REFERENCES gallery_items(id) ON DELETE SET NULL,
+    version_id TEXT REFERENCES gallery_versions(id) ON DELETE SET NULL,
+    event_key TEXT NOT NULL UNIQUE CHECK(length(event_key) = 64)
+);
+CREATE INDEX IF NOT EXISTS idx_service_feedback_created
+ON service_feedback(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_service_feedback_user_created
+ON service_feedback(user_id, created_at DESC);
 """
 
 
@@ -918,6 +936,7 @@ class Database:
                         f"ALTER TABLE demo_sessions ADD COLUMN {name} {declaration}"
                     )
             connection.executescript(GALLERY_SCHEMA)
+            connection.executescript(SERVICE_FEEDBACK_SCHEMA)
             version_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(gallery_versions)")
             }
@@ -1229,6 +1248,17 @@ class Database:
                     "INSERT INTO schema_migrations(version,name,applied_at) VALUES(14,?,?)",
                     (
                         "multiple_continuation_packages",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+            service_feedback_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=15"
+            ).fetchone()
+            if service_feedback_migration is None:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version,name,applied_at) VALUES(15,?,?)",
+                    (
+                        "universal_service_feedback",
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )

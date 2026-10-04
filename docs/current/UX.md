@@ -125,10 +125,29 @@ pending request; a previous or latest completed work is never used as fallback.
   “✏️ Исправить” and “📷 Другое фото” in one row, then shows the referral CTA.
   The inviter receives two bonus edits only after the invitee's first successful
   edit. “📷 Другое фото” reuses the existing one/two-source upload flow.
-- The result screen groups “⭐ Оценить” and “💬 Отзыв о Ravuna” in one row. A
-  1–5 rating and an optional text comment are stored
-  with the internal user id, selected version and UTC timestamp. Feedback input
-  never enters processing, calls an image provider or changes credits.
+- The result screen retains “⭐ Оценить” and the existing 1–5 ratings.
+- A centralized UI shell adds “💬 Поделиться мнением” as a separate
+  keyboard row on main/purchase/zero-balance, upload, ready result, works,
+  opened work and ideas/category screens. Existing actions and their grouping
+  stay unchanged. The feedback row precedes “← Назад”, which always remains
+  the last navigation row; without Back, feedback is the last row.
+  History and secondary work actions deliberately omit this CTA to keep deep
+  navigation focused; feedback is available on the opened work instead.
+  It is also absent from processing, technical errors, rating forms and the
+  feedback flow itself.
+- Feedback works without a photograph. The text-only form is:
+  “💬 Поделитесь мнением о Ravuna” / “Что вам понравилось, что можно улучшить
+  или чего вам не хватает?” / “Можно написать о проблеме, предложить идею или
+  новую возможность. Команда Ravuna читает все сообщения.”
+- Save exact user text (up to 4000 characters), internal user, UTC timestamp,
+  source screen and optional owned work/version context. No image downloads or
+  provider calls occur. Historical ratings/comments remain available.
+- After saving: “Спасибо! Команда Ravuna получила ваше сообщение 🙌”. Additional
+  text stays in feedback until Back/start, and cannot become a paid correction.
+  Pending photo/instruction state is retained while collecting feedback.
+- Feedback context survives restart and acknowledgement failure; event replay
+  cannot duplicate the record or charge an edit. Public copy uses “сервис Ravuna”
+  / “команда Ravuna”, without naming an individual operator.
 
 ## Works and versions
 

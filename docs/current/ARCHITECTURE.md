@@ -78,6 +78,8 @@ and are never resent blindly.
   is enabled; single-source corrections retain the existing context/fallback path.
 - `demo_service.py`: attempt lifecycle, watermark and delivery handoff.
 - `gallery.py`: work/version lineage and user operations.
+- `feedback.py`: photo-optional private service messages with exact Unicode text,
+  owned optional gallery context and hashed event-key idempotency.
 - `commerce.py`: credit and entitlement ledgers.
 - `payments.py`, `robokassa.py`, `payment_webhook.py`: payment boundary.
 - `operations.py`: read-only operational aggregation.
@@ -93,6 +95,15 @@ and are never resent blindly.
 - Credit ledger records edits; entitlement ledger records original rights.
 - PaymentIntent and PaymentOrder separate UX intent from provider confirmation.
 - Receipt and callback events form an auditable, idempotent payment trail.
+- `service_feedback` is independent of version ratings and the legacy
+  `user_feedback`/`version_feedback` tables. Schema 15 adds it without rewriting
+  those tables. Each message stores only its internal user, exact text (up to
+  4000 characters), UTC time, technical source screen, optional owned work/version
+  references and a SHA-256 event key. Empty or overlong messages are rejected,
+  never trimmed or truncated. No photo, prompt, provider data or private path is
+  copied into feedback. Gallery retention clears context references with
+  `ON DELETE SET NULL` while preserving the message. Same-user/exact-text replay
+  returns the existing message; conflicting key reuse is rejected.
 
 ## Concurrency and durability
 
