@@ -45,6 +45,7 @@ from app.domain import (
     StorageFailureError,
 )
 from app.gallery import GalleryService, GalleryVersion
+from app.feedback import FeedbackService, MAX_FEEDBACK_MESSAGE_LENGTH
 from app.edit_intent import parse_edit_intent
 from app.max_adapter import (
     Button,
@@ -72,7 +73,9 @@ from app.max_adapter import (
     version_history_actions,
 )
 from app.max_conversation import MaxConversationStore, MaxDialog
-from app.max_ui_shell import MaxUiShell, parse_versioned_action
+from app.max_ui_shell import (
+    MaxUiShell, feedback_source_screen, parse_versioned_action, with_feedback_button,
+)
 from app.max_transport import MaxIncomingEvent, MaxTransportError
 from app.referrals import ReferralService
 from app.telemetry import TelemetryRecorder
@@ -189,9 +192,12 @@ NAV_FEEDBACK_COMMENT = "feedback:comment"
 
 RATING_PROMPT_TEXT = "Как вам результат?"
 FEEDBACK_PROMPT_TEXT = (
-    "Есть идея, проблема или что-то можно сделать удобнее?\n\n"
-    "Напишите сообщение — мы читаем все предложения и улучшаем Ravuna."
+    "💬 Поделитесь мнением о Ravuna\n\n"
+    "Что вам понравилось, что можно улучшить или чего вам не хватает?\n\n"
+    "Можно написать о проблеме, предложить идею или новую возможность. "
+    "Команда Ravuna читает все сообщения."
 )
+FEEDBACK_SAVED_TEXT = "Спасибо! Команда Ravuna получила ваше сообщение 🙌"
 
 
 def _version_word(count: int) -> str:
@@ -245,6 +251,7 @@ class MaxApplication:
         self.store = store or MaxConversationStore(database)
         self.adapter = MaxDemoAdapter(demo_service, database, transport)
         self.gallery: GalleryService = demo_service.gallery
+        self.feedback = FeedbackService(database)
         self.telemetry = TelemetryRecorder(database)
         self.payments = payment_service or build_payment_service(settings, database)
         self.ui = MaxUiShell(database, transport, self.store)
@@ -352,6 +359,7 @@ class MaxApplication:
                 self._send_message(
                     event.user_id,
                     "Сервис временно недоступен. Попытка не списана.",
+                    screen="error",
                 )
             except MaxTransportError:
                 pass
@@ -543,11 +551,11 @@ class MaxApplication:
                 self._edit_message(user_id, status_id, text, buttons)
             except MaxTransportError:
                 LOGGER.info("MAX processing status edit failed; using one fallback message")
-                self._send_message(user_id, text, buttons)
+                self._send_message(user_id, text, buttons, screen="error")
             finally:
                 self.store.update(user_id, status_message_id=None)
             return
-        self._send_message(user_id, text, buttons)
+        self._send_message(user_id, text, buttons, screen="error")
 
     def _dispatch(self, event: MaxIncomingEvent) -> None:
         dialog = self.store.get_or_create(event.user_id, event.chat_id)
@@ -560,7 +568,10 @@ class MaxApplication:
             self.settings.max_single_screen_ui_enabled
             and event.event_type in {"message_created", "bot_started"}
         ):
-            self.ui.begin_user_input(event.user_id, chat_id=event.chat_id)
+            self.ui.begin_user_input(
+                event.user_id, chat_id=event.chat_id,
+                preserve_context=dialog.pending_action in {NAV_FEEDBACK_COMMENT, NAV_FEEDBACK},
+            )
         if is_start:
             if event.image_url:
                 self._reset_dialog_to_main(event.user_id, event.event_key)
@@ -585,11 +596,15 @@ class MaxApplication:
             return
         if event.event_type != "message_created":
             return
+        if dialog.pending_action in {NAV_FEEDBACK_COMMENT, NAV_FEEDBACK}:
+            self._receive_feedback_comment(event, dialog, event.text or "")
+            return
+        # A crash after the acknowledgement but before finish_event must never
+        # reinterpret this already-saved message as a paid image correction.
+        if dialog.user_id and self.feedback.has_event(dialog.user_id, event.event_key):
+            return
         if event.image_url:
             self._receive_source(event, dialog)
-            return
-        if text and dialog.pending_action == NAV_FEEDBACK_COMMENT:
-            self._receive_feedback_comment(event, dialog, text)
             return
         if dialog.state == "waiting_for_source":
             if dialog.pending_action == "second_source":
@@ -934,20 +949,24 @@ class MaxApplication:
 
         raise PaymentError("Payment target is invalid")
 
-    def _send_view(self, user_id: str, view: View) -> str:
-        return self._send_message(user_id, view.text, view.buttons)
+    def _send_view(self, user_id: str, view: View, *, screen: Optional[str] = None) -> str:
+        return self._send_message(
+            user_id, view.text, view.buttons, **({"screen": screen} if screen else {})
+        )
 
     def _send_message(
         self, user_id: str, text: str, buttons: Sequence[Button] = (), **kwargs
     ) -> str:
+        dialog = self.store.get(user_id)
+        screen = str(kwargs.pop("screen", self._screen_name(dialog)))
+        context = kwargs.pop("context", self._screen_context(dialog))
         if self.settings.max_single_screen_ui_enabled:
-            dialog = self.store.get(user_id)
             result = self.ui.render(
                 user_id,
                 text=text,
                 buttons=buttons,
-                screen=str(kwargs.pop("screen", self._screen_name(dialog))),
-                context=kwargs.pop("context", self._screen_context(dialog)),
+                screen=screen,
+                context=context,
                 chat_id=dialog.chat_id if dialog else None,
                 expected_revision=kwargs.pop("expected_revision", None),
                 notify=bool(kwargs.pop("notify", False)),
@@ -955,6 +974,8 @@ class MaxApplication:
             if not result.applied or not result.message_id:
                 raise MaxTransportError("MAX UI screen was superseded")
             return result.message_id
+        buttons = with_feedback_button(buttons, screen)
+        self.ui.remember_screen(user_id, screen, context)
         message_id = self.transport.send_message(user_id, text, buttons, **kwargs)
         if buttons:
             self.store.register_keyboard(user_id, message_id, text)
@@ -971,20 +992,24 @@ class MaxApplication:
         context: Optional[dict[str, object]] = None,
         expected_revision: Optional[int] = None,
     ) -> Optional[str]:
+        dialog = self.store.get(user_id)
+        screen = screen or self._screen_name(dialog)
+        context = context if context is not None else self._screen_context(dialog)
         if self.settings.max_single_screen_ui_enabled:
-            dialog = self.store.get(user_id)
             result = self.ui.render(
                 user_id,
                 text=caption,
                 buttons=buttons,
-                screen=screen or self._screen_name(dialog),
-                context=context or self._screen_context(dialog),
+                screen=screen,
+                context=context,
                 chat_id=dialog.chat_id if dialog else None,
                 image=image,
                 expected_revision=expected_revision,
                 notify=False,
             )
             return result.message_id if result.applied else None
+        buttons = with_feedback_button(buttons, screen)
+        self.ui.remember_screen(user_id, screen, context)
         message_id = self.transport.send_image(user_id, image, caption, buttons)
         if message_id and buttons:
             self.store.register_keyboard(user_id, message_id, caption)
@@ -1027,7 +1052,9 @@ class MaxApplication:
         """Send the exact selected version without silently switching lineage."""
 
         preview = self._selected_preview_path(dialog)
-        message_id = self._send_image(platform_user_id, preview, caption, ())
+        message_id = self._send_image(
+            platform_user_id, preview, caption, (), screen="selected_preview"
+        )
         if not message_id:
             raise MaxTransportError("MAX selected preview delivery failed")
         return message_id
@@ -1217,6 +1244,12 @@ class MaxApplication:
 
     def _callback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         _revision, action = parse_versioned_action(event.callback_payload or "")
+        if action == "feedback:back":
+            self._leave_feedback(event, dialog)
+            return
+        if action in {"feedback:open", "result:feedback", "result:feedback:comment"}:
+            self._show_feedback_prompt(event, dialog)
+            return
         if action in {"start:details", "legal:details"}:
             self._show_navigation_view(
                 event, dialog, legal_details_view(), NAV_SETTINGS
@@ -1363,8 +1396,6 @@ class MaxApplication:
             except ValueError:
                 return
             self._record_rating(event, dialog, rating)
-        elif action in {"result:feedback", "result:feedback:comment"}:
-            self._show_feedback_prompt(event, dialog)
         elif action == "package:buy":
             self._buy_continuation_pack(event, dialog, PRODUCT_CODE)
         elif action == "package:buy:large":
@@ -1531,7 +1562,7 @@ class MaxApplication:
         elif action == "work:main":
             self._make_current_best(event, dialog)
         elif action == "result:delete":
-            self._send_view(event.user_id, delete_confirmation_view())
+            self._send_view(event.user_id, delete_confirmation_view(), screen="delete_confirmation")
         elif action == "delete:cancel":
             if dialog.current_gallery_item_id:
                 self._show_selected_work(event, dialog)
@@ -2040,49 +2071,146 @@ class MaxApplication:
     def _show_feedback_prompt(
         self, event: MaxIncomingEvent, dialog: MaxDialog
     ) -> None:
-        if not dialog.user_id or not dialog.current_version_id:
-            raise InvalidInputError("No current version for feedback")
+        active = self.ui.current(event.user_id)
+        if active and active.screen.startswith("feedback_"):
+            context = active.context
+        else:
+            source = feedback_source_screen(
+                active.screen if active else self._screen_name(dialog)
+            )
+            context = {
+                "feedback_source_screen": source,
+                "feedback_return_action": dialog.pending_action,
+            }
+            if source in {"result", "work", "history", "more", "rating", "purchase"}:
+                context.update({
+                    "gallery_item_id": dialog.current_gallery_item_id,
+                    "version_id": dialog.current_version_id,
+                })
+        # Persist before transport: the awaiting-text state survives restarts.
+        self.ui.remember_screen(event.user_id, "feedback_prompt", context)
         self.store.update(
             event.user_id,
-            pending_prompt=None,
+            user_id=dialog.user_id or self.adapter.ensure_account(event.user_id),
             pending_action=NAV_FEEDBACK_COMMENT,
         )
-        self._send_image(
+        self._send_message(
             event.user_id,
-            self._selected_preview_path(dialog),
             FEEDBACK_PROMPT_TEXT,
-            (Button("← Назад", "nav:back:work"),),
+            (Button("← Назад", "feedback:back"),),
             screen="feedback_prompt",
-            context={
-                "gallery_item_id": dialog.current_gallery_item_id,
-                "version_id": dialog.current_version_id,
-            },
+            context=context,
         )
 
     def _receive_feedback_comment(
         self, event: MaxIncomingEvent, dialog: MaxDialog, text: str
     ) -> None:
-        if not dialog.user_id or not dialog.current_version_id:
-            raise InvalidInputError("No current version for feedback")
-        self.gallery.record_feedback_message(
-            dialog.user_id, dialog.current_version_id, text
+        active = self.ui.current(event.user_id)
+        context = dict(active.context) if active else {}
+        context.setdefault(
+            "feedback_source_screen",
+            feedback_source_screen(active.screen if active else "unknown"),
         )
-        self.store.update(
-            event.user_id,
-            pending_prompt=None,
-            pending_action=NAV_FEEDBACK,
+        buttons = (Button("← Назад", "feedback:back"),)
+        if event.image_url or event.image_urls or event.image_attachment_count:
+            self._send_message(
+                event.user_id, "Напишите мнение обычным текстовым сообщением, без фотографий.",
+                buttons, screen="feedback_prompt", context=context,
+            )
+            return
+        if not text.strip() or len(text) > MAX_FEEDBACK_MESSAGE_LENGTH:
+            self._send_message(
+                event.user_id,
+                f"Напишите сообщение от 1 до {MAX_FEEDBACK_MESSAGE_LENGTH} символов.",
+                buttons, screen="feedback_prompt", context=context,
+            )
+            return
+        if not dialog.user_id:
+            raise InvalidInputError("No feedback account")
+        self.feedback.record_message(
+            dialog.user_id, text, str(context.get("feedback_source_screen", "unknown")),
+            event_key=event.event_key,
+            gallery_item_id=context.get("gallery_item_id"),
+            version_id=context.get("version_id"),
         )
-        self._send_image(
+        self._send_message(
             event.user_id,
-            self._selected_preview_path(dialog),
-            "Спасибо! Мы получили ваше сообщение 🙏",
-            (Button("← Назад", "nav:back:work"),),
+            FEEDBACK_SAVED_TEXT,
+            buttons,
             screen="feedback_saved",
-            context={
-                "gallery_item_id": dialog.current_gallery_item_id,
-                "version_id": dialog.current_version_id,
-            },
+            context=context,
         )
+        # Retain feedback navigation until Back/start; follow-up text must not
+        # accidentally become a paid correction. Failed acknowledgements replay
+        # against the same durable record.
+        self.store.update(event.user_id, pending_action=NAV_FEEDBACK)
+
+    def _leave_feedback(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        if dialog.pending_action not in {NAV_FEEDBACK, NAV_FEEDBACK_COMMENT}:
+            return
+        active = self.ui.current(event.user_id)
+        context = active.context if active else {}
+        origin = context.get("feedback_source_screen")
+        restored = self.store.update(
+            event.user_id, pending_action=context.get("feedback_return_action")
+        )
+        if origin == "upload" and dialog.state in {
+            "waiting_for_source", "waiting_for_prompt", "waiting_for_correction"
+        }:
+            if dialog.state == "waiting_for_source":
+                text = upload_view().text
+            elif dialog.state == "waiting_for_correction":
+                text = CORRECTION_REQUEST_TEXT
+            else:
+                text = (
+                    TWO_PHOTOS_ACCEPTED_TEXT
+                    if context.get("feedback_return_action") == "two_sources"
+                    else "Фотография получена ✅ Напишите, что нужно изменить."
+                )
+            self._send_message(
+                event.user_id, text, (Button("← Назад", "nav:back:main"),),
+                screen=dialog.state,
+            )
+        elif origin == "works":
+            self._show_works(event, restored, max(dialog.gallery_cursor, 1))
+        elif origin in {"work", "result", "history", "more", "rating"} and dialog.current_gallery_item_id:
+            self._show_selected_work(event, restored)
+        elif origin == "ideas":
+            self._show_navigation_view(event, restored, ideas_catalog(), NAV_IDEAS)
+        elif origin == "purchase":
+            # Reopen an existing checkout read-only; collecting feedback must
+            # never create an order or discard a pending paid-edit instruction.
+            with self.database.read() as connection:
+                order = connection.execute(
+                    """SELECT public_token FROM payment_orders WHERE user_id=?
+                       AND status='pending' AND (
+                         (? IS NOT NULL AND pending_request_id=?) OR
+                         (? IS NOT NULL AND version_id=?) OR
+                         (? IS NULL AND ? IS NULL AND payment_purpose='account_topup')
+                       ) ORDER BY created_at DESC,id DESC LIMIT 1""",
+                    (restored.user_id, restored.pending_request_id, restored.pending_request_id,
+                     restored.current_version_id, restored.current_version_id,
+                     restored.pending_request_id, restored.current_version_id),
+                ).fetchone()
+            if order:
+                self._render_refreshed_checkout(
+                    event, self.payments.order_for_platform_user(order["public_token"], event.user_id)
+                )
+            else:
+                self._send_message(
+                    event.user_id, PURCHASE_OPTIONS_TEXT,
+                    (Button(SMALL_PURCHASE_BUTTON_TEXT, "package:buy"),
+                     Button(LARGE_PURCHASE_BUTTON_TEXT, "package:buy:large"),
+                     Button("← Назад", "nav:back:main")),
+                    screen="pending_payment_offer" if restored.pending_request_id else "payment_offer",
+                )
+        else:
+            account = restored.user_id or self.adapter.ensure_account(event.user_id)
+            view = main_menu(
+                self.demo.commerce.balance(account).available,
+                self.demo.commerce.entitlement_balance(account).available,
+            )
+            self._send_message(event.user_id, view.text, view.buttons, screen="main_menu", context={})
 
     def _generate(
         self,
@@ -2171,6 +2299,7 @@ class MaxApplication:
                     preview,
                     caption,
                     result_actions(remaining_after).buttons,
+                    screen="result_ready",
                 )
             )
             return preview_delivered
@@ -2229,17 +2358,16 @@ class MaxApplication:
                        WHERE id=?""",
                     (self.demo.clock().isoformat(), dialog.pending_request_id),
                 )
-        if self.settings.max_single_screen_ui_enabled:
-            active_result = self.ui.current(event.user_id)
-            if active_result and active_result.screen == "result_ready":
-                self.ui.update_context(
-                    event.user_id,
-                    {
-                        "gallery_item_id": version["gallery_item_id"],
-                        "version_id": version["id"],
-                    },
-                    expected_revision=active_result.revision,
-                )
+        active_result = self.ui.current(event.user_id)
+        if active_result and active_result.screen == "result_ready":
+            self.ui.update_context(
+                event.user_id,
+                {
+                    "gallery_item_id": version["gallery_item_id"],
+                    "version_id": version["id"],
+                },
+                expected_revision=active_result.revision,
+            )
         if not self.settings.max_single_screen_ui_enabled:
             try:
                 self.transport.edit_message(status_id, "✨ Готово")
@@ -2595,6 +2723,7 @@ class MaxApplication:
                 event.user_id,
                 "Не удалось определить фотографию для оплаты.",
                 (Button("← Назад", "nav:back:main"),),
+                screen="error",
             )
             return
         if dialog.current_version_id and not self.settings.max_single_screen_ui_enabled:
@@ -2684,6 +2813,7 @@ class MaxApplication:
                     event.user_id,
                     "Оплата временно недоступна.",
                     (Button("← Назад", "nav:back:work"),),
+                    screen="error",
                 )
                 return
             if not current.user_id:
@@ -2731,6 +2861,7 @@ class MaxApplication:
                             else "nav:back:work",
                         ),
                     ),
+                    screen="error",
                 )
                 return
             self.attribution.record_event(
@@ -3273,6 +3404,7 @@ class MaxApplication:
                         "nav:back:work" if history else "nav:back:works",
                     ),
                 ),
+                screen="work_not_ready",
             )
             return
         heading = "История версий" if history else title

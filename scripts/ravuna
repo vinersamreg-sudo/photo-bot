@@ -15,4 +15,9 @@ if [ "${1:-}" = "avito" ]; then
   cd "$ROOT"
   exec "$PYTHON" -m app.avito_responder.cli "$@"
 fi
+if [ "${1:-}" = "feedback-report" ]; then
+  shift
+  cd "$ROOT"
+  exec "$PYTHON" -B -m app.feedback_report "$@"
+fi
 exec "$PYTHON" -m app.content_studio.cli "$@"

@@ -363,6 +363,7 @@ class MaxApplicationTests(TestCase):
                 "📁 Мои работы",
                 "📄 Публичная оферта",
                 "🔐 Обработка персональных данных",
+                "💬 Поделиться мнением",
             ],
         )
         self.callback("upload:ready")
@@ -379,6 +380,7 @@ class MaxApplicationTests(TestCase):
                     "🔐 Обработка персональных данных",
                     "https://ravuna.ru/legal/personal-data.html",
                 ),
+                ("💬 Поделиться мнением", "feedback:open"),
                 ("← Назад", "nav:back:main"),
             ],
         )
@@ -937,6 +939,7 @@ class MaxApplicationTests(TestCase):
                     "🔐 Обработка персональных данных",
                     "https://ravuna.ru/legal/personal-data.html",
                 ),
+                ("💬 Поделиться мнением", "feedback:open"),
             ],
         )
         self.assertFalse(
@@ -965,6 +968,7 @@ class MaxApplicationTests(TestCase):
                     "🔐 Обработка персональных данных",
                     "https://ravuna.ru/legal/personal-data.html",
                 ),
+                ("💬 Поделиться мнением", "feedback:open"),
                 ("← Назад", "nav:back:main"),
             ],
         )
@@ -1131,7 +1135,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.messages[-1][1], TWO_PHOTOS_ACCEPTED_TEXT)
         self.assertEqual(
             [(button.text, button.action) for button in self.transport.messages[-1][2]],
-            [("← Назад", "nav:back:main")],
+            [("💬 Поделиться мнением", "feedback:open"), ("← Назад", "nav:back:main")],
         )
         self.assertEqual(self.provider.calls, 0)
 
@@ -1464,7 +1468,7 @@ class MaxApplicationTests(TestCase):
         )
         self.assertEqual(
             [(button.text, button.action) for button in self.transport.messages[-1][2]],
-            [("← Назад", "nav:back:main")],
+            [("💬 Поделиться мнением", "feedback:open"), ("← Назад", "nav:back:main")],
         )
 
     def test_ready_scenario_is_optional_and_runs_without_prompt_confirmation(self) -> None:
@@ -1659,14 +1663,14 @@ class MaxApplicationTests(TestCase):
                 "📷 Другое фото",
                 "🎁 Пригласить друга — получить +2 обработки",
                 "⭐ Оценить",
-                "💬 Отзыв о Ravuna",
                 "📁 Мои работы",
+                "💬 Поделиться мнением",
                 "← Назад",
             ],
         )
         self.assertEqual(
             [button.row for button in self.transport.images[-1][3]],
-            [0, 1, 1, 2, 3, 3, 4, 5],
+            [0, 1, 1, 2, 3, 4, None, 5],
         )
         self.assertEqual(self.transport.edits[-1][1], "✨ Готово")
         with self.database.read() as connection:
@@ -1797,6 +1801,7 @@ class MaxApplicationTests(TestCase):
                     "🔐 Обработка персональных данных",
                     "https://ravuna.ru/legal/personal-data.html",
                 ),
+                ("💬 Поделиться мнением", "feedback:open"),
                 ("← Назад", "nav:back:main"),
             ],
         )
@@ -2561,6 +2566,7 @@ class MaxApplicationTests(TestCase):
                     "Купить за 1990 ₽",
                     "package:offer:large",
                 ),
+                ("💬 Поделиться мнением", "feedback:open"),
                 ("← Назад", "nav:back:work"),
             ],
         )
@@ -3078,7 +3084,7 @@ class MaxApplicationTests(TestCase):
 
         self.callback("result:feedback:comment")
         self.assertIn(
-            "мы читаем все предложения", self.transport.image_edits[-1][2]
+            "Команда Ravuna читает все сообщения.", self.transport.edits[-1][1]
         )
         self.app.handle(
             self.event(
@@ -3091,22 +3097,23 @@ class MaxApplicationTests(TestCase):
             rows = connection.execute(
                 "SELECT * FROM user_feedback"
             ).fetchall()
+            comment = connection.execute("SELECT * FROM service_feedback").fetchone()
         feedback = {row["feedback_type"]: row for row in rows}
-        self.assertEqual(set(feedback), {"rating", "comment"})
+        self.assertEqual(set(feedback), {"rating"})
         self.assertEqual(feedback["rating"]["rating"], 2)
         self.assertEqual(
-            feedback["comment"]["message"],
+            comment["message"],
             "Добавьте более понятную кнопку возврата.",
         )
-        self.assertEqual(feedback["comment"]["user_id"], current.user_id)
+        self.assertEqual(comment["user_id"], current.user_id)
         self.assertEqual(
-            feedback["comment"]["version_id"], current.current_version_id
+            comment["version_id"], current.current_version_id
         )
-        self.assertIsNotNone(feedback["comment"]["created_at"])
+        self.assertIsNotNone(comment["created_at"])
         self.assertEqual(self.store.get("u1").pending_action, "navigation:feedback")
         self.assertEqual(
-            self.transport.images[-1][2],
-            "Спасибо! Мы получили ваше сообщение 🙏",
+            self.transport.messages[-1][1],
+            "Спасибо! Команда Ravuna получила ваше сообщение 🙌",
         )
         self.assertEqual(self.provider.calls, provider_calls)
 
@@ -3118,10 +3125,10 @@ class MaxApplicationTests(TestCase):
         self.callback("result:feedback")
 
         self.assertIn(
-            "Есть идея, проблема", self.transport.image_edits[-1][2]
+            "💬 Поделитесь мнением о Ravuna", self.transport.edits[-1][1]
         )
         self.assertEqual(
-            [button.text for button in self.transport.image_edits[-1][3]],
+            [button.text for button in self.transport.edits[-1][2]],
             ["← Назад"],
         )
         self.app.handle(
@@ -3130,7 +3137,7 @@ class MaxApplicationTests(TestCase):
 
         with self.database.read() as connection:
             row = connection.execute(
-                "SELECT * FROM user_feedback WHERE feedback_type='comment'"
+                "SELECT * FROM service_feedback"
             ).fetchone()
         self.assertEqual(row["message"], "Хочу больше примеров обработки.")
         self.assertEqual(self.provider.calls, provider_calls)

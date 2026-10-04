@@ -13,7 +13,7 @@ import httpx
 from PIL import Image
 
 from app.config import Settings
-from app.database import Database, ReadOnlyDatabase
+from app.database import CURRENT_SCHEMA_VERSION, Database, ReadOnlyDatabase
 from app.provider_switch_runtime import Runtime, database_snapshot, synthetic_smoke
 from app.provider_router import select_image_provider
 from tests.test_provider_switch import ENV
@@ -147,7 +147,7 @@ class ProviderHostBoundaryTests(TestCase):
             result = self.snapshot()
         self.assertTrue(result["healthy"], result)
         self.assertTrue(result["idle"])
-        self.assertEqual(result["schema"], 14)
+        self.assertEqual(result["schema"], CURRENT_SCHEMA_VERSION)
         self.assertEqual(result["provider"], "openai")
         self.assertEqual(result["model"], "gpt-image-2")
         self.assertEqual(self.database.path.read_bytes(), before)

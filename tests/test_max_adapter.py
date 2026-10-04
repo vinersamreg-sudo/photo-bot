@@ -120,14 +120,13 @@ class MaxAdapterTests(TestCase):
                 "📷 Другое фото",
                 "🎁 Пригласить друга — получить +2 обработки",
                 "⭐ Оценить",
-                "💬 Отзыв о Ravuna",
                 "📁 Мои работы",
                 "← Назад",
             ],
         )
         self.assertEqual(
             [button.row for button in result_actions(4).buttons],
-            [0, 1, 1, 2, 3, 3, 4, 5],
+            [0, 1, 1, 2, 3, 4, 5],
         )
         self.assertEqual(
             [button.text for button in result_actions(0).buttons],
@@ -137,14 +136,13 @@ class MaxAdapterTests(TestCase):
                 "Купить за 1990 ₽",
                 "🎁 Пригласить друга — получить +2 обработки",
                 "⭐ Оценить",
-                "💬 Отзыв о Ravuna",
                 "📁 Мои работы",
                 "← Назад",
             ],
         )
         self.assertEqual(
             [button.row for button in result_actions(0).buttons],
-            [0, 1, 2, 3, 4, 4, 5, 6],
+            [0, 1, 2, 3, 4, 5, 6],
         )
         self.assertIn(
             "⚡ 2 обработки + 1 оригинал — 49 ₽",
