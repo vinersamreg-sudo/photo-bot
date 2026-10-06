@@ -46,6 +46,7 @@ jobs:
             ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -euo pipefail
               IFS= read -r PASSPHRASE
               cd /opt/photo-bot
+              venv/bin/python -B -c "from app.backup import BackupManager; assert callable(getattr(BackupManager,\"prune_recovery_by_count\",None)), \"Deploy count-retention implementation before running this workflow\""
               EXPECTED_SCHEMA=$(venv/bin/python -c "import sqlite3,tempfile; from pathlib import Path; import app.database as d; t=tempfile.TemporaryDirectory(); p=Path(t.name)/\"schema.sqlite3\"; d.Database(p); c=sqlite3.connect(p); actual=int(c.execute(\"SELECT COALESCE(MAX(version),0) FROM schema_migrations\").fetchone()[0]); c.close(); declared=int(getattr(d,\"CURRENT_SCHEMA_VERSION\",actual)); assert actual==declared; print(declared); t.cleanup()")
               REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-create --passphrase-stdin)
               NAME=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"backup_name\"])")
@@ -130,4 +131,5 @@ jobs:
             cd /opt/photo-bot
             venv/bin/python -m app.main backup-mark-offsite --backup "$1" --provider github-actions >/dev/null
             venv/bin/python -m app.main recovery-mark-offsite --backup "$2" --provider github-actions >/dev/null
+            scripts/ravuna recovery-prune --keep 7 --confirmed-backup "$2" --apply
           REMOTE

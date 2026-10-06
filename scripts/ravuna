@@ -20,4 +20,9 @@ if [ "${1:-}" = "feedback-report" ]; then
   cd "$ROOT"
   exec "$PYTHON" -B -m app.feedback_report "$@"
 fi
+if [ "${1:-}" = "recovery-prune" ]; then
+  shift
+  cd "$ROOT"
+  exec "$PYTHON" -B -m app.recovery_retention "$@"
+fi
 exec "$PYTHON" -m app.content_studio.cli "$@"

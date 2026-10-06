@@ -69,7 +69,7 @@ class BackupStreamingTests(TestCase):
             self.assertEqual(source.read_bytes(), source_bytes)
             self.assertEqual(source.stat().st_mtime_ns, source_stat.st_mtime_ns)
             self.assertEqual(sorted(p.name for p in manager.backup_dir.iterdir()),
-                             sorted([bundle.name, "latest_recovery.json", "recovery_restore_status.json"]))
+                             sorted([bundle.name, bundle.name + ".proof.json", ".recovery-retention.lock", "latest_recovery.json", "recovery_restore_status.json"]))
 
     def test_safe_openssl_reason_codes_do_not_expose_raw_stderr(self):
         for status, fragment, expected in (
@@ -153,7 +153,7 @@ class BackupStreamingTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manager, _ = self.setup_manager(root)
-            bundle = manager.backup_dir / "ravuna-recovery-synthetic.tar.gz.enc"
+            bundle = manager.backup_dir / "ravuna-recovery-20260101T000000000000Z.tar.gz.enc"
             with tarfile.open(bundle, "w:gz") as archive:
                 safe = tarfile.TarInfo("private_storage/users/first.bin")
                 safe.size = 6
