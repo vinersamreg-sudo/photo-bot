@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -8,7 +9,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from app.backup import BackupError, BackupManager
-from app.recovery_retention import RetentionError, artifact, main, prune, read_json, write_stage
+from app.recovery_retention import RetentionError, artifact, import_legacy_proofs, main, prune, read_json, write_stage
 from tests.test_backup_streaming import SECRET, plain_stream
 
 
@@ -189,6 +190,186 @@ class RecoveryRetentionTests(TestCase):
             old.write_bytes(b'changed')
             report = prune(root, confirmed_backup=newest.name, keep=1, evidence=external)
             self.assertEqual(report['delete_bytes'], 0)
+
+    def test_legacy_import_converges_to_seven_without_external_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = [self.snapshot(root, i) for i in range(13)]
+            evidence = {}
+            for file in legacy:
+                receipt = root / (file.name + '.proof.json')
+                evidence[file.name] = read_json(receipt)
+                evidence[file.name]['unrelated_metadata'] = 'must-not-persist'
+                receipt.unlink()
+            original = {p.name: p.read_bytes() for p in root.iterdir()}
+            dry = import_legacy_proofs(root, evidence=evidence)
+            self.assertEqual((dry['would_import'], dry['imported'], dry['deleted']), (13, 0, 0))
+            self.assertEqual(original, {p.name: p.read_bytes() for p in root.iterdir()})
+            applied = import_legacy_proofs(root, evidence=evidence, dry_run=False)
+            self.assertEqual((applied['imported'], applied['deleted']), (13, 0))
+            for file in legacy:
+                self.assertEqual(file.read_bytes(), original[file.name])
+                receipt = root / (file.name + '.proof.json')
+                self.assertNotIn('unrelated_metadata', read_json(receipt))
+                if os.name == 'posix':
+                    self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            before_replay = {p.name: p.read_bytes() for p in root.iterdir()}
+            replay = import_legacy_proofs(root, evidence=evidence, dry_run=False)
+            self.assertEqual(replay['imported'], 0)
+            self.assertTrue(all(e['action'] == 'ALREADY_CONFIRMED' for e in replay['entries']))
+            self.assertEqual(before_replay, {p.name: p.read_bytes() for p in root.iterdir()})
+
+            # Same invocation as the scheduler: no external evidence parameter.
+            first = prune(root, confirmed_backup=legacy[-1].name, dry_run=False)
+            self.assertEqual((first['successful'], first['removed']), (13, 6))
+            self.assertTrue(all(p.exists() for p in legacy[6:]))
+            newest = self.snapshot(root, 13)
+            second = prune(root, confirmed_backup=newest.name, dry_run=False)
+            self.assertEqual((second['successful'], second['removed']), (8, 1))
+            self.assertFalse(legacy[6].exists())
+            self.assertEqual(len(list(root.glob('ravuna-recovery-*.tar.gz.enc'))), 7)
+            stable = prune(root, confirmed_backup=newest.name)
+            self.assertEqual(stable['successful'], 7)
+            self.assertTrue(all(e['action'] == 'KEEP' for e in stable['entries']))
+
+    def test_import_validates_complete_batch_and_every_gate_before_writing(self):
+        changes = (
+            lambda p: p.update(sha256='0' * 64),
+            lambda p: p.update(size_bytes=p['size_bytes'] + 1),
+            lambda p: p.update(creation_status='FAIL'),
+            lambda p: p['restore'].update(overall='FAIL'),
+            lambda p: p['offsite'].update(overall='FAIL'),
+            lambda p: p.update(restore=[]),
+            lambda p: p.pop('offsite'),
+        )
+        for number, change in enumerate(changes):
+            with self.subTest(number=number), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                files = [self.snapshot(root, i) for i in range(2)]
+                evidence = {}
+                for file in files:
+                    receipt = root / (file.name + '.proof.json')
+                    evidence[file.name] = read_json(receipt)
+                    receipt.unlink()
+                change(evidence[files[-1].name])
+                before = {p.name: p.read_bytes() for p in root.iterdir()}
+                with self.assertRaises(RetentionError):
+                    import_legacy_proofs(root, evidence=evidence, dry_run=False)
+                self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
+        with tempfile.TemporaryDirectory() as directory:
+            for evidence in ({}, {'../outside': {}}, {'ravuna-recovery-partial.tar.gz.enc': {}}):
+                with self.assertRaises(RetentionError):
+                    import_legacy_proofs(Path(directory), evidence=evidence)
+
+    def test_import_preserves_existing_failed_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = self.snapshot(root, 1)
+            receipt = root / (file.name + '.proof.json')
+            verified = read_json(receipt)
+            failed = copy.deepcopy(verified)
+            failed['restore']['overall'] = 'FAIL'
+            receipt.write_text(json.dumps(failed))
+            before = receipt.read_bytes()
+            with self.assertRaises(RetentionError):
+                import_legacy_proofs(root, evidence={file.name: verified}, dry_run=False)
+            self.assertEqual(receipt.read_bytes(), before)
+
+    def test_import_no_clobber_if_receipt_appears_at_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = self.snapshot(root, 1)
+            receipt = root / (file.name + '.proof.json')
+            evidence = {file.name: read_json(receipt)}
+            receipt.unlink()
+            original_link = os.link
+            def raced(source, destination, **kwargs):
+                Path(destination).write_bytes(b'non-cooperating-writer')
+                return original_link(source, destination, **kwargs)
+            with patch('app.recovery_retention.os.link', side_effect=raced):
+                with self.assertRaises(FileExistsError):
+                    import_legacy_proofs(root, evidence=evidence, dry_run=False)
+            self.assertEqual(receipt.read_bytes(), b'non-cooperating-writer')
+            self.assertFalse(list(root.glob('.recovery-proof-*')))
+
+    def test_import_detects_ciphertext_race_before_any_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = [self.snapshot(root, i) for i in range(2)]
+            evidence = {}
+            for file in files:
+                receipt = root / (file.name + '.proof.json')
+                evidence[file.name] = read_json(receipt)
+                receipt.unlink()
+            def raced(path):
+                current = artifact(path)
+                if path == files[-1]:
+                    files[0].write_bytes(b'changed-during-batch-validation')
+                return current
+            with patch('app.recovery_retention.artifact', side_effect=raced):
+                with self.assertRaises(RetentionError):
+                    import_legacy_proofs(root, evidence=evidence, dry_run=False)
+            self.assertFalse(list(root.glob('*.proof.json')))
+
+    def test_import_symlink_artifact_is_not_verified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = self.snapshot(root, 1)
+            receipt = root / (file.name + '.proof.json')
+            evidence = {file.name: read_json(receipt)}
+            receipt.unlink()
+            target = root / 'target.enc'
+            file.rename(target)
+            try:
+                file.symlink_to(target)
+            except OSError:
+                self.skipTest('Symlink creation unavailable')
+            with self.assertRaises(RetentionError):
+                import_legacy_proofs(root, evidence=evidence, dry_run=False)
+            self.assertFalse(receipt.exists())
+
+    def test_import_wrong_operator_owner_is_blocked_before_writes(self):
+        if os.name != 'posix':
+            self.skipTest('POSIX ownership guard')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = self.snapshot(root, 1)
+            receipt = root / (file.name + '.proof.json')
+            evidence = {file.name: read_json(receipt)}
+            receipt.unlink()
+            before = {p.name: p.read_bytes() for p in root.iterdir()}
+            with patch('app.recovery_retention.os.geteuid', return_value=root.stat().st_uid + 1):
+                with self.assertRaises(RetentionError):
+                    import_legacy_proofs(root, evidence=evidence, dry_run=False)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
+
+    def test_import_cli_is_explicit_and_read_only_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = self.snapshot(root, 1)
+            receipt = root / (file.name + '.proof.json')
+            evidence = root / 'reviewed.json'
+            evidence.write_text(json.dumps({file.name: read_json(receipt)}))
+            receipt.unlink()
+            before = {p.name: p.read_bytes() for p in root.iterdir()}
+            with patch('app.config.load_settings') as settings, patch('builtins.print'):
+                settings.return_value.backup_dir_path = root
+                self.assertEqual(main(['--import-legacy', '--evidence', str(evidence)]), 0)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
+            invalid = json.loads(evidence.read_text())
+            invalid[file.name]['sha256'] = '0' * 64
+            evidence.write_text(json.dumps(invalid))
+            before_failure = {p.name: p.read_bytes() for p in root.iterdir()}
+            with patch('app.config.load_settings') as settings, patch('builtins.print') as output:
+                settings.return_value.backup_dir_path = root
+                self.assertEqual(main(['--import-legacy', '--evidence', str(evidence), '--apply']), 1)
+            failure = json.loads(output.call_args.args[0])
+            self.assertEqual((failure['status'], failure['deleted']), ('BLOCKED', 0))
+            self.assertEqual(before_failure, {p.name: p.read_bytes() for p in root.iterdir()})
+        entrypoint = (Path(__file__).resolve().parents[1] / 'scripts/ravuna').read_text()
+        self.assertIn('recovery-import-proofs', entrypoint)
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/backup.yml').read_text()
+        self.assertNotIn('import-legacy', workflow)
 
     def test_cli_default_is_read_only_and_workflow_prunes_after_all_gates(self):
         with tempfile.TemporaryDirectory() as directory:

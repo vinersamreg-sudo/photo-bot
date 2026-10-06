@@ -206,6 +206,33 @@ missing receipts, never overrides an existing failed/unsafe receipt. Without
 verified evidence, legacy artifacts are retained fail-closed. Dry-run/import of
 evidence is not permission to apply or deploy retention.
 
+External `--evidence` on prune alone is ephemeral: it does **not** persist receipts.
+Before one-time legacy cleanup, an explicitly authorized operator must migrate
+verified evidence into local receipts (default remains read-only):
+
+```bash
+sudo -u photoapp /opt/photo-bot/scripts/ravuna recovery-import-proofs --evidence <private-reviewed-proof-json>
+# Separate authorization required for this receipt-only write:
+sudo -u photoapp /opt/photo-bot/scripts/ravuna recovery-import-proofs --evidence <private-reviewed-proof-json> --apply
+```
+
+Import hashes current ciphertext, checks size and all three successful gates for
+the entire requested batch before publication, then creates private 0600 receipts
+atomically without overwriting any existing receipt. Apply must run as the backup
+directory owner (`photoapp`), so 0600 receipts remain readable by scheduled jobs;
+the private reviewed evidence file must likewise be readable by that user.
+Unsafe/missing/mismatched
+artifacts or existing failed receipts block import. Existing valid receipts are
+left unchanged, so an interrupted import can be safely repeated before cleanup.
+Only canonical gate metadata is persisted, not arbitrary external evidence data.
+Import never deletes/recreates backups and is never invoked by the scheduler.
+
+After authorized import, prune runs **without `--evidence`**: 13 proven legacy
+snapshots become 7; the next successfully created/restored/off-site-confirmed
+snapshot joins that same pool, and count-prune removes the oldest, leaving 7
+again. Verify local-only planning before authorizing the separate cleanup. Do not
+clean up using ephemeral evidence first and leave legacy receipts absent.
+
 ## Content Studio publishing
 
 Content Studio remains globally fail-closed until
