@@ -1,133 +1,132 @@
-name: Ravuna encrypted production backup
+name: Ravuna controlled streaming recovery proof
 
+# One authorized operation on an unmerged ops branch. No schedule or deployment.
 on:
-  schedule:
-    - cron: '17 1 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: photo-bot-production
   cancel-in-progress: false
 
 jobs:
-  backup:
+  recovery:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: production
     env:
-      BACKUP_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' && secrets.BACKUP_ENCRYPTION_PASSPHRASE != '' }}
+      IMPLEMENTATION_SHA: 0135c1d639952584c2bf2c639e87fba08a434a13
     steps:
-      - name: Require backup configuration
-        if: env.BACKUP_CONFIGURED != 'true'
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require exact merged implementation and green CI
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Encrypted production backup configuration is incomplete." >&2
-          exit 1
-      - name: Configure SSH
+          set -euo pipefail
+          test "$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/main --jq .object.sha)" = "$IMPLEMENTATION_SHA"
+          gh api repos/${GITHUB_REPOSITORY}/commits/${IMPLEMENTATION_SHA}/check-runs > checks.json
+          python - <<'PY'
+          import json
+          checks=json.load(open('checks.json'))['check_runs']
+          for name in ('Canonical release gate','Site release gate'):
+              candidates=[c for c in checks if c['name']==name]
+              assert candidates and max(candidates,key=lambda c:c['id'])['conclusion']=='success',name
+          print('merged_implementation_ci=PASS')
+          PY
+          mkdir staging
+          git archive "$IMPLEMENTATION_SHA" app/backup.py | tar -x -C staging
+          sha256sum staging/app/backup.py | cut -d ' ' -f1 > staging/module.sha256
+      - name: Configure approved SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
+          set -euo pipefail
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
-      - name: Create encrypted server backups
-        id: create
+      - name: Stage isolated backup code only
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          STAGE=$(ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'umask 077; mktemp -d /var/tmp/ravuna-streaming-backup.XXXXXX')
+          case "$STAGE" in /var/tmp/ravuna-streaming-backup.*) ;; *) exit 1 ;; esac
+          printf 'STAGE=%s\n' "$STAGE" >> "$GITHUB_ENV"
+          scp -P "$SSH_PORT" staging/app/backup.py staging/module.sha256 ops/controlled_recovery_once.py "$SSH_USER@$SSH_HOST:$STAGE/"
+      - name: Exactly one recovery creation and isolated restore proof
+        id: proof
         env:
           PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
         run: |
-          BACKUP_NAMES=$(printf '%s\n' "$PASSPHRASE" | \
-            ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -euo pipefail
-              IFS= read -r PASSPHRASE
-              cd /opt/photo-bot
-              EXPECTED_SCHEMA=$(venv/bin/python -c "import sqlite3,tempfile; from pathlib import Path; import app.database as d; t=tempfile.TemporaryDirectory(); p=Path(t.name)/\"schema.sqlite3\"; d.Database(p); c=sqlite3.connect(p); actual=int(c.execute(\"SELECT COALESCE(MAX(version),0) FROM schema_migrations\").fetchone()[0]); c.close(); declared=int(getattr(d,\"CURRENT_SCHEMA_VERSION\",actual)); assert actual==declared; print(declared); t.cleanup()")
-              REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-create --passphrase-stdin)
-              NAME=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"backup_name\"])")
-              SHA=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
-              SQLITE_RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-restore-test --backup "$NAME" --passphrase-stdin)
-              SQLITE_RESTORE_OK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"restore_ok\"])")
-              SQLITE_QUICK_CHECK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"quick_check\"])")
-              SQLITE_MIGRATION=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
-              test "$SQLITE_RESTORE_OK" = True
-              test "$SQLITE_QUICK_CHECK" = ok
-              test "$SQLITE_MIGRATION" = "$EXPECTED_SCHEMA"
-              RECOVERY_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-create --passphrase-stdin)
-              RECOVERY_NAME=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"recovery_bundle_name\"])")
-              RECOVERY_SHA=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
-              RESTORE_ROOT=$(mktemp -d /var/tmp/ravuna-recovery-proof.XXXXXX)
-              cleanup_restore_root() {
-                case "$RESTORE_ROOT" in
-                  /var/tmp/ravuna-recovery-proof.*) rm -rf -- "$RESTORE_ROOT" ;;
-                  *) return 1 ;;
-                esac
-              }
-              trap cleanup_restore_root EXIT
-              RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-restore-test --backup "$RECOVERY_NAME" --restore-root "$RESTORE_ROOT" --passphrase-stdin)
-              RESTORE_OVERALL=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"overall\"])")
-              RESTORE_ARTIFACT=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"artifact_status\"])")
-              RESTORE_SQLITE=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sqlite_status\"])")
-              RESTORE_MIGRATION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
-              RESTORE_REVISION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"source_revision\"])")
-              test "$RESTORE_OVERALL" = PASS
-              test "$RESTORE_ARTIFACT" = PASS
-              test "$RESTORE_SQLITE" = PASS
-              test "$RESTORE_MIGRATION" = "$EXPECTED_SCHEMA"
-              test "$RESTORE_REVISION" = "$(cat .deploy-sha)"
-              printf "%s\t%s\t%s\t%s\n" "$NAME" "$SHA" "$RECOVERY_NAME" "$RECOVERY_SHA"')
-          IFS=$'\t' read -r BACKUP_NAME BACKUP_SHA RECOVERY_NAME RECOVERY_SHA <<< "$BACKUP_NAMES"
-          test -n "$BACKUP_NAME"
-          test "$BACKUP_SHA" != ""
-          test -n "$RECOVERY_NAME"
-          test "$RECOVERY_SHA" != ""
-          case "$BACKUP_NAME" in pixora-*.sqlite3.enc) ;; *) exit 1 ;; esac
-          case "$RECOVERY_NAME" in ravuna-recovery-*.tar.gz.enc) ;; *) exit 1 ;; esac
-          case "$BACKUP_SHA" in *[!0-9a-fA-F]*|'') exit 1 ;; esac
-          case "$RECOVERY_SHA" in *[!0-9a-fA-F]*|'') exit 1 ;; esac
-          test "${#BACKUP_SHA}" -eq 64
-          test "${#RECOVERY_SHA}" -eq 64
-          printf 'backup_name=%s\n' "$BACKUP_NAME" >> "$GITHUB_OUTPUT"
-          printf 'backup_sha=%s\n' "$BACKUP_SHA" >> "$GITHUB_OUTPUT"
-          printf 'recovery_name=%s\n' "$RECOVERY_NAME" >> "$GITHUB_OUTPUT"
-          printf 'recovery_sha=%s\n' "$RECOVERY_SHA" >> "$GITHUB_OUTPUT"
-      - name: Copy encrypted backups off the VPS
+          set -euo pipefail
+          printf '%s\n' "$PASSPHRASE" | ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "/opt/photo-bot/venv/bin/python -B '$STAGE/controlled_recovery_once.py' create '$IMPLEMENTATION_SHA' '$GITHUB_RUN_ID'" > proof.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,re
+          p=json.load(open('proof.json'))
+          assert p['overall']=='PASS'
+          assert re.fullmatch(r'ravuna-recovery-[0-9TZ]+\.tar\.gz\.enc',p['backup_name'])
+          assert re.fullmatch(r'[0-9a-f]{64}',p['sha256'])
+          print('backup_name='+p['backup_name'])
+          print('sha256='+p['sha256'])
+          PY
+          python - <<'PY'
+          import json
+          p=json.load(open('proof.json'))
+          print(json.dumps({k:p[k] for k in ('backup_name','size_bytes','overall','migration','source_revision','implementation_sha','prune_disabled','old_backups_preserved','service_unchanged','env_unchanged')}))
+          PY
+      - name: Copy and verify encrypted artifact off VPS
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-          BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
-          RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
-          BACKUP_SHA: ${{ steps.create.outputs.backup_sha }}
-          RECOVERY_SHA: ${{ steps.create.outputs.recovery_sha }}
+          NAME: ${{ steps.proof.outputs.backup_name }}
+          DIGEST: ${{ steps.proof.outputs.sha256 }}
         run: |
+          set -euo pipefail
           install -d artifact
-          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/$BACKUP_NAME" "artifact/$BACKUP_NAME"
-          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/$RECOVERY_NAME" "artifact/$RECOVERY_NAME"
-          printf '%s  %s\n' "$BACKUP_SHA" "artifact/$BACKUP_NAME" | sha256sum -c -
-          printf '%s  %s\n' "$RECOVERY_SHA" "artifact/$RECOVERY_NAME" | sha256sum -c -
-      - name: Store encrypted off-site artifact
+          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/$NAME" "artifact/$NAME"
+          printf '%s  %s\n' "$DIGEST" "artifact/$NAME" | sha256sum -c -
+      - name: Store encrypted off-site recovery artifact
+        id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: ravuna-production-backup-${{ github.run_id }}
+          name: ravuna-controlled-recovery-${{ github.run_id }}
           path: artifact/*.enc
           if-no-files-found: error
           retention-days: 14
-      - name: Confirm encrypted off-site copy
+      - name: Confirm verified off-site artifact
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-          BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
-          RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$BACKUP_NAME" "$RECOVERY_NAME" <<'REMOTE'
-            set -euo pipefail
-            cd /opt/photo-bot
-            venv/bin/python -m app.main backup-mark-offsite --backup "$1" --provider github-actions >/dev/null
-            venv/bin/python -m app.main recovery-mark-offsite --backup "$2" --provider github-actions >/dev/null
-          REMOTE
+          set -euo pipefail
+          test -n "$ARTIFACT_ID"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "/opt/photo-bot/venv/bin/python -B '$STAGE/controlled_recovery_once.py' confirm '$IMPLEMENTATION_SHA' '$GITHUB_RUN_ID' '$ARTIFACT_ID'"
+      - name: Remove isolated code staging only
+        if: always()
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          if test -n "${STAGE:-}"; then
+            case "$STAGE" in /var/tmp/ravuna-streaming-backup.*) ;; *) exit 1 ;; esac
+            ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "test -d '$STAGE' && test ! -L '$STAGE' && rm -r -- '$STAGE'"
+          fi
