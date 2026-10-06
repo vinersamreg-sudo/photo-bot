@@ -167,6 +167,72 @@ stderr, passphrases, command lines or private filenames. A killed subprocess is
 not evidence of OOM without independent host evidence. Do not rerun a production
 backup or prune existing artifacts without authorization.
 
+### Separate backup retention
+
+`pixora-*.sqlite3.enc` keeps its existing `BACKUP_RETENTION_DAYS` age-based
+policy (`prune_sqlite_by_age`). Recovery artifacts never enter that policy.
+`ravuna-recovery-*.tar.gz.enc` keeps the **7 latest successful snapshots**, not
+seven days. Creation and restore never prune recovery. The scheduled workflow
+invokes count-prune only after creation, restore `PASS`, encrypted off-site
+upload/checksum verification and off-site confirmation have all succeeded.
+The workflow fails before creation if the count-retention implementation has not
+yet been deployed; coordinate its reviewed merge/runtime release before the next
+scheduled run. Merging a workflow does not install its runtime module.
+
+Each new recovery has a private atomic `<backup-name>.proof.json` receipt binding
+creation, restore and off-site stages to the encrypted artifact SHA256/size.
+Planning verifies current ciphertext and sorts by creation timestamp/name, not
+mtime. Partial, symlink, malformed, failed, hash-mismatched or unknown artifacts
+remain untouched and do not count as successes. An unconfirmed newest snapshot
+blocks all pruning. The confirmed newest snapshot is always retained.
+
+Read-only plan (no lock/config/DB/log writes):
+
+```bash
+scripts/ravuna recovery-prune --keep 7 --confirmed-backup <confirmed-recovery-name>
+```
+
+Only a separately authorized operation adds `--apply`. Apply serializes with
+per-artifact proof writes, revalidates the whole deletion set and proofs before
+deleting anything, and checks file identity again at each unlink. SQLite backups,
+private media and existing evidence receipts are not deletion targets.
+
+Legacy artifacts have only overwritten latest-status files. They are not assumed
+successful automatically. An operator may supply `--evidence <private-json>` with
+reviewed per-artifact v1 receipts reconstructed from authoritative successful
+backup runs (creation/restore gates, checksum and confirmed off-site artifact).
+Current ciphertext must match that historical SHA256. This supplements only
+missing receipts, never overrides an existing failed/unsafe receipt. Without
+verified evidence, legacy artifacts are retained fail-closed. Dry-run/import of
+evidence is not permission to apply or deploy retention.
+
+External `--evidence` on prune alone is ephemeral: it does **not** persist receipts.
+Before one-time legacy cleanup, an explicitly authorized operator must migrate
+verified evidence into local receipts (default remains read-only):
+
+```bash
+sudo -u photoapp /opt/photo-bot/scripts/ravuna recovery-import-proofs --evidence <private-reviewed-proof-json>
+# Separate authorization required for this receipt-only write:
+sudo -u photoapp /opt/photo-bot/scripts/ravuna recovery-import-proofs --evidence <private-reviewed-proof-json> --apply
+```
+
+Import hashes current ciphertext, checks size and all three successful gates for
+the entire requested batch before publication, then creates private 0600 receipts
+atomically without overwriting any existing receipt. Apply must run as the backup
+directory owner (`photoapp`), so 0600 receipts remain readable by scheduled jobs;
+the private reviewed evidence file must likewise be readable by that user.
+Unsafe/missing/mismatched
+artifacts or existing failed receipts block import. Existing valid receipts are
+left unchanged, so an interrupted import can be safely repeated before cleanup.
+Only canonical gate metadata is persisted, not arbitrary external evidence data.
+Import never deletes/recreates backups and is never invoked by the scheduler.
+
+After authorized import, prune runs **without `--evidence`**: 13 proven legacy
+snapshots become 7; the next successfully created/restored/off-site-confirmed
+snapshot joins that same pool, and count-prune removes the oldest, leaving 7
+again. Verify local-only planning before authorizing the separate cleanup. Do not
+clean up using ephemeral evidence first and leave legacy receipts absent.
+
 ## Content Studio publishing
 
 Content Studio remains globally fail-closed until

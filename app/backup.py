@@ -26,6 +26,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
+from app.recovery_retention import (
+    RetentionError, artifact, read_json, validate, write_stage, prune as recovery_prune,
+)
+
 
 RECOVERY_BUNDLE_VERSION = 1
 RECOVERY_COMPONENTS = (
@@ -340,7 +344,7 @@ class BackupManager:
             "sha256": digest,
         }
         _write_json(self.backup_dir / "latest.json", metadata)
-        self.prune(created_at)
+        self.prune_sqlite_by_age(created_at)
         return metadata
 
     def create_recovery_bundle(self, passphrase: str) -> dict[str, Any]:
@@ -387,8 +391,15 @@ class BackupManager:
             "secrets_included": False,
         }
         _write_json(self.backup_dir / "latest_recovery.json", metadata)
-        self.prune(created_at)
+        self._recovery_stage(name, "creation", metadata)
+        self.prune_sqlite_by_age(created_at)
         return metadata
+
+    def _recovery_stage(self, name: str, stage: str, value: dict[str, Any]) -> None:
+        try:
+            write_stage(self.backup_dir, name, stage, value)
+        except (RetentionError, OSError, ValueError, TypeError):
+            raise BackupError("Recovery evidence could not be recorded safely") from None
 
     def _write_recovery_archive(
         self, stream: BinaryIO, snapshot: Path, sqlite_status: dict[str, Any],
@@ -526,6 +537,10 @@ class BackupManager:
         candidate = self.backup_dir / backup.name
         if not candidate.is_file() or not candidate.name.startswith("ravuna-recovery-"):
             raise BackupError("Encrypted recovery bundle was not found")
+        try:
+            encrypted_before = artifact(candidate)
+        except (RetentionError, OSError):
+            raise BackupError("Encrypted recovery bundle is unsafe") from None
 
         temporary_context: tempfile.TemporaryDirectory[str] | None = None
         if restore_root is None:
@@ -538,6 +553,7 @@ class BackupManager:
         artifact_status = "FAIL"
         sqlite_report_status = "NOT_CHECKED"
         missing: list[str] = []
+        restore_passed = False
         try:
             try:
                 with self._openssl_stream(candidate, passphrase=passphrase, decrypt=True) as stream:
@@ -585,6 +601,12 @@ class BackupManager:
                     "backup_name": candidate.name,
                     "tested_at": _now().isoformat(),
                 }
+                try:
+                    if artifact(candidate) != encrypted_before:
+                        raise RetentionError("changed")
+                except (RetentionError, OSError):
+                    raise BackupError("Recovery artifact changed during restore proof") from None
+                report["sha256"] = encrypted_before["sha256"]
             except BackupError as exc:
                 report = {
                     "backup_timestamp": backup_timestamp,
@@ -600,24 +622,35 @@ class BackupManager:
                     "error": str(exc),
                 }
             _write_json(self.backup_dir / "recovery_restore_status.json", report)
+            self._recovery_stage(candidate.name, "restore", report)
+            restore_passed = report.get("overall") == "PASS"
             return report
         finally:
             if temporary_context is not None:
                 temporary_context.cleanup()
-            elif artifact_status != "PASS" or sqlite_report_status != "PASS":
+            elif not restore_passed:
                 # The caller explicitly supplied an initially empty isolated
                 # restore root, checked above. Never retain failed plaintext.
                 shutil.rmtree(destination)
 
     def mark_recovery_offsite(self, backup_name: str, provider: str) -> dict[str, Any]:
-        candidate = self.backup_dir / Path(backup_name).name
-        if not candidate.is_file() or not candidate.name.startswith("ravuna-recovery-"):
-            raise BackupError("Recovery bundle to mark off-site was not found")
+        if Path(backup_name).name != backup_name or not provider:
+            raise BackupError("Recovery off-site confirmation is invalid")
+        candidate = self.backup_dir / backup_name
+        try:
+            current = artifact(candidate)
+            proof = read_json(self.backup_dir / (backup_name + ".proof.json"))
+            validate(proof, backup_name, current, offsite=False)
+        except (RetentionError, OSError, ValueError, TypeError):
+            raise BackupError("Recovery creation/restore proof is required before off-site confirmation") from None
         report = {
             "backup_name": candidate.name,
             "provider": provider,
             "copied_at": _now().isoformat(),
+            "overall": "PASS",
+            "sha256": current["sha256"],
         }
+        self._recovery_stage(candidate.name, "offsite", report)
         _write_json(self.backup_dir / "recovery_offsite_status.json", report)
         return report
 
@@ -654,12 +687,13 @@ class BackupManager:
         return report
 
     def prune(self, now: datetime | None = None) -> int:
+        """Compatibility alias: age-based retention applies ONLY to SQLite."""
+        return self.prune_sqlite_by_age(now)
+
+    def prune_sqlite_by_age(self, now: datetime | None = None) -> int:
         cutoff = (now or _now()) - timedelta(days=self.retention_days)
         removed = 0
-        candidates = (
-            *self.backup_dir.glob("pixora-*.sqlite3.enc"),
-            *self.backup_dir.glob("ravuna-recovery-*.tar.gz.enc"),
-        )
+        candidates = self.backup_dir.glob("pixora-*.sqlite3.enc")
         for candidate in candidates:
             if candidate.is_symlink():
                 continue
@@ -668,3 +702,12 @@ class BackupManager:
                 candidate.unlink()
                 removed += 1
         return removed
+
+    def prune_recovery_by_count(
+        self, keep: int = 7, *, confirmed_backup: str, dry_run: bool = True,
+    ) -> dict[str, Any]:
+        try:
+            return recovery_prune(self.backup_dir, keep=keep,
+                                  confirmed_backup=confirmed_backup, dry_run=dry_run)
+        except (RetentionError, OSError, ValueError, TypeError):
+            raise BackupError("Recovery retention blocked: evidence/artifacts are unproven or unsafe") from None
