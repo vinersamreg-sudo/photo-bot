@@ -4,6 +4,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import replace
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
@@ -32,6 +33,13 @@ class BackupMaintenanceOperationsTests(TestCase):
         source = Path(args[args.index("-in") + 1])
         target = Path(args[args.index("-out") + 1])
         shutil.copyfile(source, target)
+
+    @staticmethod
+    @contextmanager
+    def fake_openssl_stream(path: Path, *, passphrase: str, decrypt: bool = False):
+        del passphrase
+        with path.open("rb" if decrypt else "wb") as stream:
+            yield stream
 
     def test_encrypted_backup_is_created_and_restore_tested(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -73,7 +81,7 @@ class BackupMaintenanceOperationsTests(TestCase):
             (base / ".env").write_text("SECRET=must-not-be-backed-up", encoding="utf-8")
             manager = BackupManager(database.path, base / "data" / "backups", 14)
             restore_root = root / "isolated-restore"
-            with patch.object(BackupManager, "_openssl", side_effect=self.fake_openssl):
+            with patch.object(BackupManager, "_openssl_stream", side_effect=self.fake_openssl_stream):
                 created = manager.create_recovery_bundle(
                     "correct-horse-battery-staple"
                 )
@@ -111,7 +119,7 @@ class BackupMaintenanceOperationsTests(TestCase):
             (manager.backup_dir / created["recovery_bundle_name"]).write_bytes(
                 b"corrupted"
             )
-            with patch.object(BackupManager, "_openssl", side_effect=self.fake_openssl):
+            with patch.object(BackupManager, "_openssl_stream", side_effect=self.fake_openssl_stream):
                 failed = manager.restore_recovery_bundle(
                     Path(created["recovery_bundle_name"]),
                     "correct-horse-battery-staple",

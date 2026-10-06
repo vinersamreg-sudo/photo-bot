@@ -7,17 +7,24 @@ compatible across the brand migration.
 
 from __future__ import annotations
 
+import errno
+import gzip
 import hashlib
+import io
 import json
+import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tarfile
 import tempfile
+import zlib
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Iterator
 
 
 RECOVERY_BUNDLE_VERSION = 1
@@ -29,6 +36,50 @@ RECOVERY_COMPONENTS = (
 
 class BackupError(RuntimeError):
     """A safe operational backup failure without secret material."""
+
+
+def _os_reason(error: OSError) -> str:
+    return {
+        errno.ENOSPC: "no_space_left",
+        errno.EDQUOT: "disk_quota_exceeded",
+        errno.EACCES: "permission_denied",
+        errno.EPERM: "permission_denied",
+        errno.EIO: "io_error",
+        errno.ENOENT: "source_missing",
+    }.get(error.errno, "io_failure")
+
+
+def _openssl_reason(returncode: int, stderr: str | bytes) -> str:
+    # Raw stderr can contain secrets or private filenames. It is never returned.
+    text = (stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes)
+            else stderr or "")[:65536].lower()
+    if returncode < 0:
+        return "openssl_killed"
+    for fragments, reason in (
+        (("no space left on device",), "no_space_left"),
+        (("disk quota exceeded",), "disk_quota_exceeded"),
+        (("permission denied",), "permission_denied"),
+        (("input/output error", "i/o error"), "io_error"),
+        (("bad decrypt", "bad magic number"), "invalid_passphrase_or_artifact"),
+    ):
+        if any(fragment in text for fragment in fragments):
+            return reason
+    return "openssl_failed"
+
+
+class _HashingReader:
+    """Hash exactly the bytes placed in the tar member, not a second file read."""
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.size = 0
+
+    def read(self, size: int = -1) -> bytes:
+        value = self.stream.read(size)
+        self.digest.update(value)
+        self.size += len(value)
+        return value
 
 
 def _now() -> datetime:
@@ -71,15 +122,120 @@ class BackupManager:
             result = subprocess.run(
                 ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", *args,
                  "-pass", "stdin"],
-                input=passphrase + "\n",
-                text=True,
+                input=(passphrase + "\n").encode("utf-8"),
                 capture_output=True,
                 check=False,
             )
         except OSError as exc:
-            raise BackupError("OpenSSL is unavailable") from exc
+            reason = "openssl_unavailable" if exc.errno == errno.ENOENT else _os_reason(exc)
+            raise BackupError(f"OpenSSL is unavailable (reason={reason})") from None
         if result.returncode != 0:
-            raise BackupError("Backup encryption operation failed")
+            reason = _openssl_reason(result.returncode, result.stderr)
+            raise BackupError(
+                f"Backup encryption operation failed (reason={reason}; exit_code={result.returncode})"
+            )
+
+    @staticmethod
+    @contextmanager
+    def _openssl_stream(
+        path: Path, *, passphrase: str, decrypt: bool = False,
+    ) -> Iterator[BinaryIO]:
+        """Stream compressed archive bytes; keep passphrase on a separate channel."""
+
+        read_fd = write_fd = None
+        process = None
+        try:
+            options: dict[str, Any] = {}
+            if os.name == "posix":
+                read_fd, write_fd = os.pipe()
+                pass_args = ["-pass", f"fd:{read_fd}"]
+                options["pass_fds"] = (read_fd,)
+            else:
+                # Windows has no pass_fds. Child-only environment, never argv or
+                # the parent's environment; production uses the private POSIX fd.
+                options["env"] = {**os.environ, "RAVUNA_BACKUP_STREAM_PASSWORD": passphrase}
+                pass_args = ["-pass", "env:RAVUNA_BACKUP_STREAM_PASSWORD"]
+            with tempfile.TemporaryFile() as diagnostics:
+                try:
+                    process = subprocess.Popen(
+                        ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
+                         *(["-d", "-in", str(path)] if decrypt else ["-salt", "-out", str(path)]),
+                         *pass_args],
+                        stdin=subprocess.DEVNULL if decrypt else subprocess.PIPE,
+                        stdout=subprocess.PIPE if decrypt else subprocess.DEVNULL,
+                        stderr=diagnostics, **options,
+                    )
+                except OSError as exc:
+                    reason = "openssl_unavailable" if exc.errno == errno.ENOENT else _os_reason(exc)
+                    raise BackupError(f"OpenSSL is unavailable (reason={reason})") from None
+                if read_fd is not None:
+                    os.close(read_fd)
+                    read_fd = None
+                if write_fd is not None:
+                    password_fd = write_fd
+                    write_fd = None
+                    with os.fdopen(password_fd, "wb") as secret_input:
+                        secret_input.write((passphrase + "\n").encode("utf-8"))
+                stream = process.stdout if decrypt else process.stdin
+                assert stream is not None
+                try:
+                    yield stream
+                    if decrypt:
+                        # Drain gzip/tar padding so OpenSSL can validate final
+                        # cipher padding and exit; never accept an early tar EOF.
+                        while stream.read(1024 * 1024):
+                            pass
+                    stream.close()
+                except BaseException as exc:
+                    original_code = process.poll()
+                    killed_for_cleanup = False
+                    if decrypt and isinstance(exc, (tarfile.TarError, BackupError)):
+                        # A parser may reject decrypted bytes before OpenSSL
+                        # finishes padding validation. Drain, without keeping
+                        # plaintext, before collecting its true result.
+                        while stream.read(1024 * 1024):
+                            pass
+                    if original_code is None and isinstance(exc, (BrokenPipeError, tarfile.ReadError, BackupError)):
+                        try:
+                            original_code = process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    if process.poll() is None:
+                        killed_for_cleanup = True
+                        process.terminate()
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
+                    code = process.wait(timeout=30)
+                    if isinstance(exc, (BrokenPipeError, tarfile.ReadError, BackupError)) and code != 0 and not killed_for_cleanup:
+                        diagnostics.seek(0)
+                        reason = _openssl_reason(code, diagnostics.read(65536))
+                        raise BackupError(
+                            f"Backup encryption operation failed (reason={reason}; exit_code={code})"
+                        ) from None
+                    raise
+                code = process.wait()
+                if code != 0:
+                    diagnostics.seek(0)
+                    reason = _openssl_reason(code, diagnostics.read(65536))
+                    raise BackupError(
+                        f"Backup encryption operation failed (reason={reason}; exit_code={code})"
+                    )
+        finally:
+            for fd in (read_fd, write_fd):
+                if fd is not None:
+                    os.close(fd)
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            if process is not None:
+                for stream in (process.stdin, process.stdout):
+                    if stream is not None and not stream.closed:
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
 
     @staticmethod
     def _validate_sqlite(path: Path) -> dict[str, Any]:
@@ -107,7 +263,7 @@ class BackupManager:
         return digest.hexdigest()
 
     def _sqlite_snapshot(self, destination: Path) -> dict[str, Any]:
-        source = sqlite3.connect(self.database_path)
+        source = sqlite3.connect(self.database_path.resolve().as_uri() + "?mode=ro", uri=True)
         target = sqlite3.connect(destination)
         try:
             source.backup(target)
@@ -199,68 +355,26 @@ class BackupManager:
         created_at = _now()
         name = f"ravuna-recovery-{created_at.strftime('%Y%m%dT%H%M%S%fZ')}.tar.gz.enc"
         encrypted = self.backup_dir / name
-        with tempfile.TemporaryDirectory(dir=self.backup_dir) as temporary_dir:
-            temporary = Path(temporary_dir)
-            staging = temporary / "staging"
-            database_dir = staging / "database"
-            private_storage = staging / "private_storage" / "users"
-            database_dir.mkdir(parents=True)
-            private_storage.parent.mkdir(parents=True)
-            snapshot = database_dir / "photo_bot.sqlite3"
-            sqlite_status = self._sqlite_snapshot(snapshot)
-            if self.users_dir.is_dir():
-                shutil.copytree(self.users_dir, private_storage, symlinks=True)
-            else:
-                private_storage.mkdir()
-
-            file_hashes: dict[str, str] = {}
-            storage_bytes = 0
-            storage_files = 0
-            for candidate in sorted(private_storage.rglob("*")):
-                if candidate.is_symlink():
-                    raise BackupError("Private storage contains an unsupported symlink")
-                if candidate.is_file():
-                    relative = candidate.relative_to(staging).as_posix()
-                    file_hashes[relative] = self._sha256(candidate)
-                    storage_bytes += candidate.stat().st_size
-                    storage_files += 1
-            file_hashes["database/photo_bot.sqlite3"] = self._sha256(snapshot)
-            manifest = {
-                "format": "ravuna-recovery-v1",
-                "bundle_version": RECOVERY_BUNDLE_VERSION,
-                "created_at": created_at.isoformat(),
-                "source_revision": source_revision,
-                "included_components": list(RECOVERY_COMPONENTS),
-                "encrypted": True,
-                "sqlite": sqlite_status,
-                "private_storage": {
-                    "file_count": storage_files,
-                    "size_bytes": storage_bytes,
-                },
-                "sha256": file_hashes,
-                "secrets_included": False,
-                "external_dependencies": [
-                    "Git repository at the deployed revision",
-                    "approved production secret storage",
-                    "host, systemd, nginx and TLS configuration",
-                ],
-            }
-            (staging / "manifest.json").write_text(
-                json.dumps(manifest, sort_keys=True), encoding="utf-8"
-            )
-            plain_archive = temporary / "recovery.tar.gz"
-            with tarfile.open(plain_archive, "w:gz") as archive:
-                archive.add(staging / "manifest.json", arcname="manifest.json")
-                archive.add(database_dir, arcname="database")
-                archive.add(staging / "private_storage", arcname="private_storage")
-            self._openssl(
-                "-salt", "-in", str(plain_archive), "-out", str(encrypted),
-                passphrase=passphrase,
-            )
         try:
-            encrypted.chmod(0o600)
-        except OSError:
-            pass
+            with tempfile.TemporaryDirectory(dir=self.backup_dir) as temporary_dir:
+                temporary = Path(temporary_dir)
+                snapshot = temporary / "snapshot.sqlite3"
+                sqlite_status = self._sqlite_snapshot(snapshot)
+                snapshot.chmod(0o600)
+                partial = temporary / "bundle.enc"
+                # Mode is private before the first encrypted byte is written.
+                with partial.open("xb"):
+                    pass
+                partial.chmod(0o600)
+                with self._openssl_stream(partial, passphrase=passphrase) as stream:
+                    self._write_recovery_archive(
+                        stream, snapshot, sqlite_status, created_at, source_revision,
+                    )
+                # Publish only a complete encrypted artifact. Failure leaves no
+                # plaintext archive, copied media or discoverable partial bundle.
+                partial.replace(encrypted)
+        except OSError as exc:
+            raise BackupError(f"Recovery bundle creation failed (reason={_os_reason(exc)})") from None
         metadata = {
             "recovery_bundle_name": name,
             "created_at": created_at.isoformat(),
@@ -276,6 +390,72 @@ class BackupManager:
         self.prune(created_at)
         return metadata
 
+    def _write_recovery_archive(
+        self, stream: BinaryIO, snapshot: Path, sqlite_status: dict[str, Any],
+        created_at: datetime, source_revision: str,
+    ) -> None:
+        file_hashes = {"database/photo_bot.sqlite3": self._sha256(snapshot)}
+        storage_bytes = storage_files = 0
+        if self.users_dir.is_symlink():
+            raise BackupError("Private storage contains an unsupported symlink")
+        users_root = self.users_dir.resolve()
+        with tarfile.open(fileobj=stream, mode="w|gz") as archive:
+            archive.add(snapshot, arcname="database/photo_bot.sqlite3", recursive=False)
+            for name in ("private_storage", "private_storage/users"):
+                member = tarfile.TarInfo(name)
+                member.type, member.mode = tarfile.DIRTYPE, 0o700
+                archive.addfile(member)
+            for candidate in sorted(self.users_dir.rglob("*")):
+                before = candidate.lstat()
+                if stat.S_ISLNK(before.st_mode):
+                    raise BackupError("Private storage contains an unsupported symlink")
+                if not candidate.resolve().is_relative_to(users_root):
+                    raise BackupError("Private storage path is unsafe")
+                relative = "private_storage/users/" + candidate.relative_to(self.users_dir).as_posix()
+                member = tarfile.TarInfo(relative)
+                member.mode, member.mtime = 0o600, before.st_mtime
+                if stat.S_ISDIR(before.st_mode):
+                    member.type, member.mode = tarfile.DIRTYPE, 0o700
+                    archive.addfile(member)
+                    continue
+                if not stat.S_ISREG(before.st_mode):
+                    raise BackupError("Private storage contains an unsupported file type")
+                descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                with os.fdopen(descriptor, "rb") as source:
+                    opened = os.fstat(source.fileno())
+                    def identity(value: os.stat_result) -> tuple[int, ...]:
+                        # POSIX ctime tracks changes; Windows ctime is creation
+                        # time, not a content-change signal. Never drop it on VPS.
+                        common = (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+                        return common + ((value.st_ctime_ns,) if os.name == "posix" else ())
+                    if not stat.S_ISREG(opened.st_mode) or identity(before) != identity(opened):
+                        raise BackupError("Recovery bundle creation failed (reason=private_storage_changed)")
+                    reader = _HashingReader(source)
+                    member.size = opened.st_size
+                    archive.addfile(member, reader)
+                    if reader.size != opened.st_size or identity(os.fstat(source.fileno())) != identity(opened):
+                        raise BackupError("Recovery bundle creation failed (reason=private_storage_changed)")
+                    file_hashes[relative] = reader.digest.hexdigest()
+                    storage_bytes += reader.size
+                    storage_files += 1
+            manifest = {
+                "format": "ravuna-recovery-v1", "bundle_version": RECOVERY_BUNDLE_VERSION,
+                "created_at": created_at.isoformat(), "source_revision": source_revision,
+                "included_components": list(RECOVERY_COMPONENTS), "encrypted": True,
+                "sqlite": sqlite_status,
+                "private_storage": {"file_count": storage_files, "size_bytes": storage_bytes},
+                "sha256": file_hashes, "secrets_included": False,
+                "external_dependencies": ["Git repository at the deployed revision",
+                                          "approved production secret storage",
+                                          "host, systemd, nginx and TLS configuration"],
+            }
+            # Hashes describe the bytes actually archived. Manifest may be last:
+            # v1 restore does not depend on archive-member ordering.
+            contents = json.dumps(manifest, sort_keys=True).encode("utf-8")
+            member = tarfile.TarInfo("manifest.json")
+            member.mode, member.size = 0o600, len(contents)
+            archive.addfile(member, io.BytesIO(contents))
+
     def _safe_restore_root(self, restore_root: Path) -> Path:
         candidate = restore_root.resolve()
         home = Path.home().resolve()
@@ -286,8 +466,32 @@ class BackupManager:
             raise BackupError("Restore root must be separate from the application root")
         if candidate.exists() and any(candidate.iterdir()):
             raise BackupError("Restore root must be absent or empty")
-        candidate.mkdir(parents=True, exist_ok=True)
+        candidate.mkdir(parents=True, exist_ok=True, mode=0o700)
+        candidate.chmod(0o700)
         return candidate
+
+    @staticmethod
+    def _extract_recovery_stream(stream: BinaryIO, destination: Path) -> None:
+        try:
+            # tarfile's r|gz decompressor does not validate gzip CRC/trailer.
+            # Keep the original archive-integrity guarantee while streaming.
+            with gzip.GzipFile(fileobj=stream, mode="rb") as expanded:
+                with tarfile.open(fileobj=expanded, mode="r|") as archive:
+                    for member in archive:
+                        member_path = Path(member.name)
+                        if (
+                            member_path.is_absolute() or ".." in member_path.parts
+                            or member.issym() or member.islnk()
+                            or not (member.isfile() or member.isdir())
+                        ):
+                            raise BackupError("Recovery archive contains an unsafe member")
+                        archive.extract(member, destination, filter="data")
+                while expanded.read(1024 * 1024):
+                    pass  # Require gzip trailer/CRC validation, not just tar EOF.
+        except (tarfile.TarError, OSError, EOFError, zlib.error) as exc:
+            if isinstance(exc, OSError) and not isinstance(exc, gzip.BadGzipFile):
+                raise BackupError(f"Recovery archive extraction failed (reason={_os_reason(exc)})") from None
+            raise BackupError("Recovery archive integrity check failed") from None
 
     @staticmethod
     def _extract_archive(archive_path: Path, destination: Path) -> None:
@@ -336,13 +540,8 @@ class BackupManager:
         missing: list[str] = []
         try:
             try:
-                with tempfile.TemporaryDirectory() as temporary_dir:
-                    plain_archive = Path(temporary_dir) / "recovery.tar.gz"
-                    self._openssl(
-                        "-d", "-in", str(candidate), "-out", str(plain_archive),
-                        passphrase=passphrase,
-                    )
-                    self._extract_archive(plain_archive, destination)
+                with self._openssl_stream(candidate, passphrase=passphrase, decrypt=True) as stream:
+                    self._extract_recovery_stream(stream, destination)
 
                 manifest_path = destination / "manifest.json"
                 for relative in ("manifest.json", *RECOVERY_COMPONENTS):
@@ -405,6 +604,10 @@ class BackupManager:
         finally:
             if temporary_context is not None:
                 temporary_context.cleanup()
+            elif artifact_status != "PASS" or sqlite_report_status != "PASS":
+                # The caller explicitly supplied an initially empty isolated
+                # restore root, checked above. Never retain failed plaintext.
+                shutil.rmtree(destination)
 
     def mark_recovery_offsite(self, backup_name: str, provider: str) -> dict[str, Any]:
         candidate = self.backup_dir / Path(backup_name).name

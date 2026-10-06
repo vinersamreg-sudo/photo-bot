@@ -110,8 +110,10 @@ Operational reports and payment reconciliation open the existing SQLite file in
 ## Backup and recovery proof
 
 The scheduled backup creates the legacy encrypted SQLite artifact and a separate
-encrypted recovery bundle containing the application SQLite/private storage plus
-the Content Studio SQLite and its rights-cleared media storage. The GitHub runner
+encrypted recovery bundle containing the application SQLite and private storage
+declared in its manifest (v1: database and `users`). Do not assume components not
+listed in the manifest, including the independent Content Studio storage, are
+covered. The GitHub runner
 copies and stores only encrypted artifacts and verifies their SHA-256 values; it
 never decrypts production data or runs cleanup. Cleanup is a separate,
 explicitly authorized maintenance operation.
@@ -144,6 +146,26 @@ validates `quick_check`, migration, manifest, encrypted artifact, source revisio
 and expected components, then removes the isolated
 `/var/tmp/ravuna-recovery-proof.*` restore root. The GitHub runner sees and stores
 encrypted artifacts only.
+
+Recovery creation streams gzip/tar directly into AES-256-CBC/PBKDF2 OpenSSL;
+only a consistent SQLite snapshot is staged, not a copy of private media or a
+plaintext tar.gz. Hashes describe the exact archived bytes, and concurrent source
+changes/symlinks fail closed. Output is private (0600), becomes discoverable only
+after the stream completes successfully, and failed temporary output is removed.
+Restore streams decryption into an isolated 0700 directory, validates every member,
+manifest/hash and SQLite as before, and removes failed plaintext extraction.
+Successful explicit restore roots remain available for the trusted-host proof;
+the workflow still removes that root and requires the full restore gate.
+
+Budget free space for **both** the encrypted artifact and the extracted restore
+proof plus the SQLite snapshot and a safety margin. Streaming removes the former
+creation peak of `media copy + plaintext gzip archive + encrypted archive`; it
+does not eliminate the retained encrypted-backup or restore-proof capacity.
+Failures expose allowlisted reason codes (`no_space_left`, `permission_denied`,
+`io_error`, `openssl_killed`, etc.) and a numeric OpenSSL exit code, never raw
+stderr, passphrases, command lines or private filenames. A killed subprocess is
+not evidence of OOM without independent host evidence. Do not rerun a production
+backup or prune existing artifacts without authorization.
 
 ## Content Studio publishing
 
