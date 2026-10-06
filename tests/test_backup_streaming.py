@@ -264,7 +264,7 @@ class BackupStreamingTests(TestCase):
                 ordered = sorted(original.getmembers(), key=lambda member: member.name != "manifest.json")
                 for member in ordered:
                     archive.addfile(member, original.extractfile(member) if member.isfile() else None)
-            legacy = manager.backup_dir / "ravuna-recovery-legacy.tar.gz.enc"
+            legacy = manager.backup_dir / "ravuna-recovery-20260101T000000000000Z.tar.gz.enc"
             manager._openssl("-salt", "-in", str(legacy_plain), "-out", str(legacy), passphrase=SECRET)
             report = manager.restore_recovery_bundle(Path(legacy.name), SECRET, restore_root=root / "legacy")
             self.assertEqual(report["overall"], "PASS")
