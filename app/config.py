@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from dotenv import load_dotenv
 
 from app.commerce import RECEIPT_ITEM_NAME
+from app.payment_methods import parse_payment_methods
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -90,6 +91,7 @@ class Settings:
     robokassa_password2: str = ""
     robokassa_password3: str = ""
     robokassa_hash_algorithm: str = "sha256"
+    robokassa_payment_methods: tuple[str, ...] = ()
     robokassa_sandbox_duplicate_probe: bool = False
     robokassa_sandbox_order_baseline: int = 0
     robokassa_payment_url: str = "https://auth.robokassa.ru/Merchant/Index.aspx"
@@ -599,6 +601,7 @@ def load_settings(
         robokassa_password2=values.get("ROBOKASSA_PASSWORD2", "").strip(),
         robokassa_password3=values.get("ROBOKASSA_PASSWORD3", "").strip(),
         robokassa_hash_algorithm=robokassa_hash_algorithm,
+        robokassa_payment_methods=parse_payment_methods(values.get("ROBOKASSA_PAYMENT_METHODS", "")),
         robokassa_sandbox_duplicate_probe=sandbox_duplicate_probe,
         robokassa_sandbox_order_baseline=sandbox_order_baseline,
         robokassa_payment_url=(

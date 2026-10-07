@@ -51,7 +51,8 @@ explains that provider confirmation has not arrived, and an expired checkout
 offers the existing owner-verified refresh action. This check never calls grant
 or delivery logic; ResultURL remains the only authoritative confirmation.
 
-SuccessURL/FailURL browser handlers only read order state and redirect to MAX.
+SuccessURL/FailURL browser handlers only read order state, append bounded journey
+diagnostics and redirect to MAX.
 They never confirm a payment, change order state, grant credits or consume an
 entitlement. Confirmed `original_download` resumes the exact version and
 delivers its original; confirmed `processing_request` restores the exact saved
@@ -109,10 +110,83 @@ contract. Never print canonical strings containing real passwords.
 - Paid but original delivery failed: preserve entitlement and allow retry.
 - Refund execution stays disabled unless explicitly approved.
 
+### Payment journey diagnostics and recovery
+
+Journey events use the existing private `payment_audit` table, with
+`actor_type=journey`, UTC `created_at`, the existing order foreign key and a
+bounded JSON `reason` (`telemetry_version=1`). No schema migration is required.
+Events are `checkout_created`, `payment_link_opened`, `payment_link_reopened`,
+`success_url_return`, `fail_url_return`, `max_payfail_return`,
+`payment_status_checked`, and `checkout_created_after_failure`. The latter links
+only an unpaid previous order for the same owner, product and exact target.
+Existing accepted `payment_events/result_url`, webhook validation and package
+grant records remain the authoritative payment evidence.
+
+MAX event keys are hashed; replay does not duplicate the observation. Browser
+returns are first-only per route/invoice because SuccessURL auto-refreshes while
+waiting for confirmation. Link hits are counted separately from distinct
+invoices: they may include browser previews and do not prove a provider attempt
+or a visit to the bank. Journey writes are best effort and never confirm,
+cancel, expire, grant or consume a purchase themselves. A diagnostic-write
+failure must not block the existing checkout/return flow.
+
+An active failed checkout in MAX offers “💳 Попробовать оплатить ещё раз” using
+the same short URL/invoice, “✅ Проверить оплату”, then Back. Expired checkout
+uses the existing owner-verified refresh flow, preserving product and target.
+A late FailURL after a valid ResultURL resumes the confirmed exact context,
+not a new purchase. Normal pending-status lookup still changes no payment or
+ledger state; only its bounded click audit is added.
+
+Do not store arbitrary `PaymentMethod`, PAN, bank details, email, request query,
+signature or URLs. The current classic signature does not authenticate the
+optional PaymentMethod field. Official verified method metadata requires a
+separately supported source (for example verified ResultUrl2); this change does
+not enable a new provider callback or alter merchant settings. Until then the
+report labels PaymentMethod `NOT MEASURABLE`.
+
+`scripts/ravuna payment-report --days 7 [--db SNAPSHOT] [--at ISO8601]
+[--format human|json]` is invoice-cohort reporting: orders created in the rolling
+Samara `[from,to)` window, outcomes known before cutoff. It deduplicates accepted
+callbacks/grants, excludes proven configured MAX owners fail-closed, shows
+recovery on the same or a new invoice, and counts no browser return as payment.
+Stages are optional observations, not a mandatory linear conversion funnel.
+Historical missing link/return observations cannot establish abandonment;
+telemetry coverage is reported explicitly. It never calls Robokassa and opens
+SQLite with `mode=ro`, `query_only=ON` in one consistent read transaction.
+
 Aggregate reconciliation exposes `expired_checkout_events` and
 `refreshed_checkout_events`; these metrics contain no user identifiers.
 
 ## Production flags
+
+### Optional checkout method restriction
+
+`ROBOKASSA_PAYMENT_METHODS=` (default) preserves the existing unrestricted form.
+The intended opt-in configuration is `BankCard,SBP,SberPay`; each configured
+alias becomes a separate repeated `PaymentMethods` POST field, not a combined
+comma-separated provider value. The same setting applies to both 49 ₽ and
+1990 ₽ orders, including reopening a reusable invoice. Configured order is
+preserved in transport; Robokassa may arrange the visible methods differently.
+This follows the official [payment interface](https://docs.robokassa.ru/ru/pay-interface)
+contract (`PaymentMethods` uses aliases from GetCurrencies).
+
+Only the reviewed case-sensitive aliases `BankCard`, `SBP`, `SberPay` are accepted.
+Unknown aliases, duplicates and empty elements within a nonempty list fail
+startup with a fixed safe error. This avoids silently ignoring an operator's
+restriction or sending an invalid form. Whitespace around aliases is ignored.
+An entirely blank setting deliberately means no restriction.
+
+`PaymentMethods` is not included in the classic signature; the existing signed
+fields, Receipt, return URLs and ResultURL-only grant contract are unchanged.
+Merchant GetCurrencies availability is not proof of checkout rendering or bank
+deep-link behavior. Restriction does not itself fix bank app redirects, and no
+conversion improvement or visual ordering is guaranteed without controlled
+post-review verification. No merchant settings are changed by this feature.
+
+Restriction rollback is one configuration change: `ROBOKASSA_PAYMENT_METHODS=`
+and the normal approved runtime configuration reload/restart procedure. It
+does not revert orders or grants. Ordinary deploy still preserves `.env` and
+does not activate this opt-in setting automatically.
 
 The current commercial baseline is documented only in
 [PRODUCTION.md](PRODUCTION.md). `.env.example` remains fail-closed.

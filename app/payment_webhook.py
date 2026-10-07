@@ -105,6 +105,8 @@ class PaymentWebhookServer:
 
             def _payment_form(self, token: str) -> None:
                 form = owner.service.payment_redirect_form(token)
+                order = owner.service.order_by_public_token(token)
+                owner.service.record_journey(order, "payment_link_opened")
                 nonce = secrets.token_urlsafe(18)
                 fields = "".join(
                     '<input type="hidden" name="{}" value="{}">'.format(
@@ -190,8 +192,10 @@ class PaymentWebhookServer:
                     self._page(404, "Ссылка недоступна", "Срок действия ссылки истёк или она неверна.")
                     return True
                 if kind == "fail":
+                    owner.service.record_journey(order, "fail_url_return")
                     self._empty(303, location=self._max_url(token, failed=True))
                     return True
+                owner.service.record_journey(order, "success_url_return")
                 if order.status.value in {
                     "paid", "delivery_pending", "delivered", "partially_refunded"
                 }:

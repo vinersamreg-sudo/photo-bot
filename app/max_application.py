@@ -696,10 +696,20 @@ class MaxApplication:
             self._refresh_checkout(event, token)
             return
         if failed:
+            self.payments.record_journey(order, "max_payfail_return", event_key=event.event_key)
+        # A stale browser failure return after a valid ResultURL must not hide
+        # an already confirmed purchase or disrupt exact pending-request resume.
+        if failed and order.status in {
+            PaymentStatus.PAID, PaymentStatus.DELIVERY_PENDING,
+            PaymentStatus.DELIVERED, PaymentStatus.PARTIALLY_REFUNDED,
+        }:
+            self.notify_continuation_pack_paid(order.id)
+            return
+        if failed:
             repeat = None
             if self.payments.is_reusable_order(order):
                 repeat = Button(
-                    "Повторить оплату", self.payments.short_payment_url(order)
+                    "💳 Попробовать оплатить ещё раз", self.payments.short_payment_url(order)
                 )
             elif order.status in {PaymentStatus.PENDING, PaymentStatus.EXPIRED}:
                 repeat = Button(
@@ -707,9 +717,12 @@ class MaxApplication:
                 )
             self._send_message(
                 event.user_id,
-                "Оплата отменена или не завершена. Фотография и запрос сохранены.",
+                "Оплата не завершена\n\n"
+                "Если приложение банка не открылось или оплата прервалась, "
+                "попробуйте ещё раз или выберите другой способ оплаты.",
                 ((repeat,) if repeat is not None else ())
-                + (Button("← Назад", "nav:back:main"),),
+                + (Button("✅ Проверить оплату", f"payment:status:{token}"),
+                   Button("← Назад", "nav:back:main")),
                 screen="payment_return_failed",
             )
             return
@@ -782,6 +795,8 @@ class MaxApplication:
                 screen="payment_status_invalid",
             )
             return
+
+        self.payments.record_journey(order, "payment_status_checked", event_key=event.event_key)
 
         if order.status in {
             PaymentStatus.PAID,
