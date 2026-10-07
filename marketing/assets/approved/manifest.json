@@ -311,6 +311,306 @@
       "customer_data": false,
       "approved_by": "project_owner_fallback_generation_20260906",
       "purpose": "Ravuna Content Studio replenishment"
+    },
+    {
+      "file": "ravuna-october-background-potter.png",
+      "sha256": "8c45831e849acaf8f038d6b31e3cd8dbbfa69fe44a3e22018186eec01d535aaf",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-clothes-raincoat.png",
+      "sha256": "60b81ac5ac91e0e0e1717a38063a9d15c231c3f25bc2768ee0315d40a52dc582",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-remove-picnic.png",
+      "sha256": "d55905d8027f69eb8c5a6de0e495c5f91bda73d0939ec4f68dd3b7294bbd6c8b",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-restore-station.png",
+      "sha256": "30e1058123fff251cd360fba0a1c8e0e20c7c1e59e7ed04ad9da45b18c83677d",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-quality-fern.png",
+      "sha256": "fee0507ad6b17028eea1e4080978f45a2c231502272d0ba1c65167b4e2224d22",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-portrait-gardener.png",
+      "sha256": "d56c9a38ecbc641d3f633e9ca8302402474e22a32da959b1c9f74ecbdb6241d5",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-product-teapot.png",
+      "sha256": "5261b8addc8e2aa51c616b45ad1ca7ccae019a7402247d51e47748134b9087cf",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-interior-reading.png",
+      "sha256": "16bd2483ad1d04d4cfc394ea2a695fe3858d8dfc1972cccf6e5aff6968f7a135",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-car-motorbike.png",
+      "sha256": "ce6ed1f27069c37280f25bf532dc6caae2c249172b5048e08a73a7952fe787e9",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-business-florist.png",
+      "sha256": "212de3d0e8adc50df33856019fd295654ebb89e6c23c60ad20248945d7b4d35b",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-background-hiking.png",
+      "sha256": "aa89bdd02fc7686c34de0e51a9c599cb94dbeb8a64c256dc881238d5c800cc1d",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-clothes-ceremony.png",
+      "sha256": "a7728d67106f30731036de69119589eeaed8c0b415ad8b134f804595d27f8652",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-remove-beach-chair.png",
+      "sha256": "3244dfce702df23871fca3e9fc21100ddf03d9219d23e69db4184be6ee910639",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-restore-cafe.png",
+      "sha256": "b8a5b1f6526ebbbb351d2a3d0626d929935f8ce56dd142c32064781c6b4f0670",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-quality-sailing.png",
+      "sha256": "1119c2659c858ba3fb8a448636e654c56fdca5b9705aa9a32e54a2f006409eb5",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-portrait-cook.png",
+      "sha256": "a47dd03a07dd650575f874a24baa455899a4f29c61996e20aeccdbfe817c2f79",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-product-boots.png",
+      "sha256": "a59a581b1ecc2a5e94ae78186bf863a9b4382ee7e104bcf7162f32486bbfbc2d",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-interior-balcony.png",
+      "sha256": "2b343ae950f5309f7fa723c1a3ee08cc7d3bf37b1d68a272f942162ff542b6ce",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-car-van.png",
+      "sha256": "475bbbb1e2ba9c58bd79abb08bba397a400d6ecc667ba413ad07f54235a40dd6",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-business-architect.png",
+      "sha256": "0f9500b83d899afaf21e7acf00653e9a1586d148a15bd10aa081846eded1ce89",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-background-violin.png",
+      "sha256": "7c1b46f0ff2139ec3f193269c0c01801b0eaccccbb9f54d39abb81fb96da4c8f",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-clothes-knitwear.png",
+      "sha256": "433fe3a54363829e2a37e0f40f4d9a629dfe3076035b757989fcf5c8b3fe4fa0",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-remove-garden-hose.png",
+      "sha256": "a7aa4d927431610c0f8199644bf053f45c12d5e52d749057f63a96d47dbec646",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-restore-cyclist.png",
+      "sha256": "b6812d4d1ed37afcc0f2bfab1dbb138dbd9d3b649a918faad420e4698d0c445d",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-quality-shells.png",
+      "sha256": "7a9cecf9763f59237a7a757b2d760356628b4e0dd73826abbe93bc1c314ac9c8",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-portrait-runner.png",
+      "sha256": "108ceef465f48dc2d87053a0ba7ac09cc5ef4f252456e6891f1dc4b60a8da3d5",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-product-lamp.png",
+      "sha256": "b102a7e25fcab36faf5ccd20255979c4a1faba63149dee048e1531f9af26c76c",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-interior-entryway.png",
+      "sha256": "ffbe62746caeb79df4be8e4386979809748675210b44f2f2b168512c66b38f3b",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-car-bicycle.png",
+      "sha256": "33810b7e6dd06492cdd2a7fbd0d9e9cf224d09e8ce2d5551f545801b8fc6e45e",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
+    },
+    {
+      "file": "ravuna-october-business-woodworker.png",
+      "sha256": "a41bf570821e466e3eaff3b17d606ba49fe8f2b21dfbf5ccb1e5262ec9a3795a",
+      "source": "OpenAI Image API gpt-image-2 medium",
+      "subject": "entirely synthetic fictional adults/scene",
+      "commercial_use": true,
+      "customer_data": false,
+      "approved_by": "project_owner_replenishment_authorization_20261007",
+      "purpose": "Ravuna Content Studio October replenishment"
     }
   ]
 }

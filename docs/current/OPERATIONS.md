@@ -317,6 +317,20 @@ it cannot restart or write the product service. Each destination remains
 independently fail-closed until its permission audit and platform flag pass.
 Failed posts remain auditable and are not silently marked published.
 
+Every full-auto cycle reports `queue_health` (`HEALTHY`, `DEGRADED`, or
+`DISABLED`) with contiguous future-slot coverage per enabled platform. A distant
+scheduled row does not hide holes in the configured horizon, and disabled VK or
+Telegram queues do not count toward MAX coverage. Preview coverage is labelled
+`basis=preview`; applied coverage is checked from durable slot owners after send.
+`content auto-run --apply` exits nonzero when coverage remains below
+`minimum_queue_days`, including `candidate_pool_exhausted`. Thus the publisher
+oneshot fails visibly instead of reporting successful empty cycles; the timer
+continues its normal cadence without restarting the product bot. An exhausted
+library must be replenished with newly approved, rights-cleared assets; never
+relax novelty or recycle published assets to turn the health check green.
+Replenishment creates only future normal slots, not a backfill row for an already
+missed slot today. Existing scheduled due rows remain subject to normal gates.
+
 MAX publishes one image post daily at 19:00 Samara. VK schedules one vertical
 H.264 1080x1920 video daily at 20:00 and a wall before/after post on Monday,
 Wednesday and Friday at 18:30. Polling every 15 minutes does not increase these

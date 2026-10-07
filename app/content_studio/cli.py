@@ -143,8 +143,11 @@ def main(argv: list[str] | None = None) -> int:
     _print(result, args.format)
     if args.content_command == "publish-due" and result.get("failed"):
         return 1
-    if args.content_command == "auto-run" and result.get("publication", {}).get("failed"):
-        return 1
+    if args.content_command == "auto-run":
+        if result.get("publication", {}).get("failed"):
+            return 1
+        if args.apply and result.get("queue_health", {}).get("status") == "DEGRADED":
+            return 1
     return 0
 
 
