@@ -214,6 +214,20 @@ confirmed it and offers the same checkout; an expired link offers the existing
 owner-verified refresh flow. The button never grants, delivers or treats a
 browser return as payment confirmation.
 
+On a failed browser/MAX payment return with a reusable checkout, show:
+
+```text
+Оплата не завершена
+
+Если приложение банка не открылось или оплата прервалась, попробуйте ещё раз или выберите другой способ оплаты.
+```
+
+Rows: “💳 Попробовать оплатить ещё раз” (same invoice),
+“✅ Проверить оплату”, “← Назад”. An expired checkout instead offers the existing
+“Обновить ссылку на оплату” owner-verified flow. Do not claim a bank decline or
+lack of funds from a failure return. A late failure return for a confirmed
+purchase resumes its existing context rather than inviting another payment.
+
 The zero-balance screen uses “Купить пакет — 49 ₽” and the mobile-safe
 “💎 Большой пакет — 1990 ₽” button labels. Its text keeps the full large-package
 composition visible: “100 обработок + 50 оригиналов — 1990 ₽”.

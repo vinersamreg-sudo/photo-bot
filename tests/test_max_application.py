@@ -148,6 +148,60 @@ class FakeMaxTransport:
 
 
 class MaxApplicationTests(TestCase):
+    def test_payfail_recovery_reuses_checkout_without_grant_and_deduplicates_replay(self) -> None:
+        self.generate_first()
+        paid_app, payments = self.paid_application()
+        account_id = self.store.get("u1").user_id
+        order = payments.create_order(account_id, None, "failed-checkout", account_purchase=True)
+        event = replace(self.event("bot_started"), start_payload=f"payfail_{order.public_token}")
+        balance = self.demo.commerce.balance(account_id).available
+        provider_count = self.provider.calls
+        paid_app.handle(event)
+        response = self.transport.messages[-1]
+        self.assertEqual(response[1], "Оплата не завершена\n\nЕсли приложение банка не открылось или оплата прервалась, попробуйте ещё раз или выберите другой способ оплаты.")
+        self.assertEqual([button.text for button in response[2]], ["💳 Попробовать оплатить ещё раз", "✅ Проверить оплату", "← Назад"])
+        self.assertEqual(response[2][0].action, payments.short_payment_url(order))
+        check = self.event("message_callback", action=response[2][1].action)
+        paid_app.handle(check)
+        paid_app.handle(check)
+        paid_app.handle(event)
+        self.assertEqual(self.demo.commerce.balance(account_id).available, balance)
+        self.assertEqual(self.provider.calls, provider_count)
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM continuation_pack_grants").fetchone()[0], 0)
+            self.assertEqual(dict(connection.execute("SELECT event_type,COUNT(*) FROM payment_audit WHERE actor_type='journey' GROUP BY event_type")),
+                {"checkout_created": 1, "max_payfail_return": 1, "payment_status_checked": 1})
+
+    def test_payfail_from_wrong_owner_cannot_read_order_or_record_journey(self) -> None:
+        self.generate_first()
+        paid_app, payments = self.paid_application()
+        order = payments.create_order(self.store.get("u1").user_id, None, "wrong-owner-fail", account_purchase=True)
+        event = replace(self.event("bot_started"), user_id="intruder", chat_id="intruder-chat", start_payload=f"payfail_{order.public_token}")
+        paid_app._show_payment_return(event, self.store.get("u1"), event.start_payload)
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM payment_audit WHERE event_type='max_payfail_return'").fetchone()[0], 0)
+
+    def test_late_payfail_after_resulturl_preserves_confirmed_purchase_and_exact_original(self) -> None:
+        self.generate_first()
+        paid_app, payments = self.paid_application()
+        selected = self.store.get("u1").current_version_id
+        paid_app.handle(self.event("message_callback", action="result:unlock"))
+        with self.database.read() as connection:
+            row = connection.execute("SELECT * FROM payment_orders").fetchone()
+            original = Path(connection.execute("SELECT original_path FROM gallery_versions WHERE id=?", (selected,)).fetchone()[0])
+        signature = hashlib.sha256(f"49.00:{row['provider_invoice_id']}:two:Shp_order={row['public_token']}".encode()).hexdigest()
+        self.assertTrue(payments.process_webhook({"OutSum": "49.00", "InvId": str(row["provider_invoice_id"]),
+            "Shp_order": row["public_token"], "SignatureValue": signature}, method="POST", path="/result").accepted)
+        paid_app.handle(replace(self.event("bot_started"), start_payload=f"payfail_{row['public_token']}"))
+        self.assertEqual(self.transport.files[-1][1], original)
+        self.assertNotIn("Оплата не завершена", self.transport.messages[-1][1])
+        files = len(self.transport.files)
+        paid_app.handle(replace(self.event("bot_started"), start_payload=f"payfail_{row['public_token']}"))
+        self.assertEqual(len(self.transport.files), files)
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM continuation_pack_grants").fetchone()[0], 1)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

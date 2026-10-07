@@ -3,7 +3,9 @@ import json
 import sqlite3
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -57,6 +59,104 @@ class Clock:
 
 
 class PaymentTests(TestCase):
+    def test_configured_methods_html_form_and_result_grants_remain_idempotent(self) -> None:
+        class HiddenFields(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.fields = []
+
+            def handle_starttag(self, tag, attrs):
+                values = dict(attrs)
+                if tag == "input" and values.get("type") == "hidden":
+                    self.fields.append((values["name"], values["value"]))
+
+        settings = replace(self.settings, robokassa_payment_methods=("BankCard", "SBP", "SberPay"))
+        service = build_payment_service(settings, self.database, clock=self.clock)
+        self.addCleanup(service.provider.close)
+        server = PaymentWebhookServer(service, "127.0.0.1", 0, "/payments/robokassa/result")
+        server.start()
+        self.addCleanup(server.stop)
+        expected_edits = expected_originals = 0
+        for package in (SMALL_PACKAGE, LARGE_PACKAGE):
+            with self.subTest(package=package.code):
+                order = service.create_order(self.user_id, None, "methods-" + package.code,
+                    account_purchase=True, product_code=package.code)
+                response = httpx.get(f"http://127.0.0.1:{server.bound_port}/p/{order.public_token}")
+                self.assertEqual(response.status_code, 200)
+                parser = HiddenFields()
+                parser.feed(response.text)
+                form = service.payment_redirect_form(order.public_token)
+                self.assertEqual(tuple(parser.fields), form.fields)
+                self.assertEqual([value for key, value in parser.fields if key == "PaymentMethods"],
+                    ["BankCard", "SBP", "SberPay"])
+                self.assertEqual(self.demo.commerce.balance(self.user_id).available, expected_edits)
+                for index in range(2):
+                    result = service.process_webhook(self.signed_callback(order), method="POST",
+                        path="/payments/robokassa/result")
+                    self.assertTrue(result.accepted)
+                    self.assertEqual(result.duplicate, bool(index))
+                expected_edits += order.generation_credit_quantity
+                expected_originals += order.unlock_entitlement_quantity
+                self.assertEqual(self.demo.commerce.balance(self.user_id).available, expected_edits)
+                self.assertEqual(self.demo.commerce.entitlement_balance(self.user_id).available, expected_originals)
+                with self.database.read() as connection:
+                    self.assertEqual(connection.execute(
+                        "SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id=?", (order.id,)
+                    ).fetchone()[0], 1)
+
+    def test_payment_journey_browser_hits_reuse_invoice_and_never_grant(self) -> None:
+        order = self.service.create_order(self.user_id, None, "journey", account_purchase=True)
+        server = PaymentWebhookServer(self.service, "127.0.0.1", 0, "/payments/robokassa/result")
+        server.start()
+        self.addCleanup(server.stop)
+        base = f"http://127.0.0.1:{server.bound_port}"
+        for _ in range(2):
+            self.assertEqual(httpx.get(f"{base}/p/{order.public_token}").status_code, 200)
+            self.assertEqual(httpx.get(f"{base}/payment/success/{order.public_token}").status_code, 200)
+        self.assertEqual(httpx.get(f"{base}/payment/fail/{order.public_token}?EMail=private@example.test&PAN=4111111111111111").status_code, 303)
+        with self.database.read() as connection:
+            counts = dict(connection.execute("SELECT event_type,COUNT(*) FROM payment_audit WHERE actor_type='journey' GROUP BY event_type"))
+            self.assertEqual(counts, {"checkout_created": 1, "payment_link_opened": 1, "payment_link_reopened": 1,
+                "success_url_return": 1, "fail_url_return": 1})
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM continuation_pack_grants").fetchone()[0], 0)
+            reasons = " ".join(row[0] for row in connection.execute("SELECT reason FROM payment_audit WHERE actor_type='journey'"))
+        for private in (order.public_token, "private@example.test", "4111111111111111", "password-one", "SignatureValue"):
+            self.assertNotIn(private, reasons)
+
+    def test_payment_journey_concurrent_first_return_and_max_replay_are_deduplicated(self) -> None:
+        order = self.service.create_order(self.user_id, None, "journey-race", account_purchase=True)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda _: self.service.record_journey(order, "fail_url_return"), range(8)))
+            list(pool.map(lambda _: self.service.record_journey(order, "max_payfail_return", event_key="same-secret-event"), range(8)))
+        with self.database.read() as connection:
+            self.assertEqual(dict(connection.execute("SELECT event_type,COUNT(*) FROM payment_audit WHERE actor_type='journey' GROUP BY event_type")),
+                {"checkout_created": 1, "fail_url_return": 1, "max_payfail_return": 1})
+            self.assertNotIn("same-secret-event", str([tuple(row) for row in connection.execute("SELECT reason FROM payment_audit")]))
+
+    def test_payment_journey_failure_does_not_block_or_change_checkout(self) -> None:
+        order = self.service.create_order(self.user_id, None, "journey-failure", account_purchase=True)
+        with patch.object(self.database, "transaction", side_effect=sqlite3.OperationalError("private secret")):
+            with self.assertLogs("app.payment_telemetry", level="WARNING") as logs:
+                self.service.record_journey(order, "payment_link_opened")
+        self.assertNotIn("private secret", str(logs.output))
+        self.assertTrue(self.service.is_reusable_order(self.service.order_by_public_token(order.public_token)))
+
+    def test_refresh_after_failure_keeps_target_package_and_links_replacement_once(self) -> None:
+        old = self.service.create_order(self.user_id, None, "journey-expired", account_purchase=True, product_code=LARGE_PACKAGE.code)
+        self.service.record_journey(old, "fail_url_return")
+        self.clock.advance(minutes=31)
+        new = self.service.refresh_order_for_platform_user(old.public_token, "owner")
+        replay = self.service.refresh_order_for_platform_user(old.public_token, "owner")
+        self.assertEqual(new.id, replay.id)
+        self.assertNotEqual(new.id, old.id)
+        self.assertEqual((new.amount_minor, new.generation_credit_quantity, new.unlock_entitlement_quantity), (199000, 100, 50))
+        with self.database.read() as connection:
+            rows = connection.execute("SELECT reason FROM payment_audit WHERE event_type='checkout_created_after_failure'").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(json.loads(rows[0][0])["previous_order_id"], old.id)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM continuation_pack_grants").fetchone()[0], 0)
+
     def test_public_and_fiscal_product_name_are_the_same_single_item(self) -> None:
         self.assertEqual(USER_PRODUCT_NAME, "Пакет доступа Ravuna")
         self.assertEqual(RECEIPT_ITEM_NAME, USER_PRODUCT_NAME)

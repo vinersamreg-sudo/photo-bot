@@ -20,6 +20,11 @@ if [ "${1:-}" = "feedback-report" ]; then
   cd "$ROOT"
   exec "$PYTHON" -B -m app.feedback_report "$@"
 fi
+if [ "${1:-}" = "payment-report" ]; then
+  shift
+  cd "$ROOT"
+  exec "$PYTHON" -B -m app.payment_report "$@"
+fi
 if [ "${1:-}" = "recovery-prune" ]; then
   shift
   cd "$ROOT"

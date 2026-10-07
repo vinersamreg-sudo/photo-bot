@@ -14,6 +14,8 @@ from urllib.parse import quote_plus, urlencode
 
 import httpx
 
+from app.payment_methods import validate_payment_methods
+
 
 ROBOKASSA_TIMEZONE = timezone(timedelta(hours=3))
 
@@ -117,12 +119,14 @@ class RobokassaProvider:
         refund_status_url: str = "https://services.robokassa.ru/RefundService/Refund/GetState",
         success_url: str = "",
         fail_url: str = "",
+        payment_methods: tuple[str, ...] = (),
         client: httpx.Client | None = None,
     ) -> None:
         if hash_algorithm != "sha256":
             raise ValueError("Robokassa hash algorithm must be sha256")
         if mode not in {"sandbox", "production"}:
             raise ValueError("Unsupported Robokassa mode")
+        self.payment_methods = validate_payment_methods(payment_methods)
         self.merchant_login = merchant_login
         self.password1 = password1
         self.password2 = password2
@@ -223,7 +227,9 @@ class RobokassaProvider:
             })
         return RobokassaPaymentForm(
             action_url=self.payment_url,
-            fields=tuple(params.items()),
+            fields=tuple(params.items()) + tuple(
+                ("PaymentMethods", method) for method in self.payment_methods
+            ),
             signature_base_redacted=redacted_base,
         )
 

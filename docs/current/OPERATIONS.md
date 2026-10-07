@@ -46,6 +46,22 @@ venv/bin/python -m app.main maintenance-cleanup
 `maintenance-cleanup` and provider/storage cleanup commands are dry-run unless an
 explicit execute/apply flag is supplied.
 
+## Payment journey report (read-only)
+
+```bash
+scripts/ravuna payment-report --days 7
+scripts/ravuna payment-report --days 7 --db /path/to/private/snapshot --format json
+```
+
+The report opens existing SQLite read-only/query-only; it does not initialize or
+migrate it, invoke a provider, change a payment or send a customer message.
+MAX_OWNER_USER_IDS must map unambiguously to existing owners or the report stops
+fail-closed. Output is aggregate-only: no identities, invoice IDs, tokens, URLs
+or payment payloads. `--at` fixes an ISO-8601 cutoff for reproducible reports.
+Counts are invoice-cohort observations, not provider-attempt history. See
+[Payments](PAYMENTS.md#payment-journey-diagnostics-and-recovery) for definitions,
+partial historical coverage and payment-method limitations.
+
 ## Retention cleanup
 
 `ravuna-retention-cleanup.service` is an independent, locked oneshot. Its timer

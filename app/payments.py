@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -26,6 +27,7 @@ from app.commerce import (
 )
 from app.database import Database
 from app.domain import InvalidInputError, PaymentRequiredError
+from app.payment_telemetry import record as record_payment_journey
 from app.robokassa import (
     RobokassaError,
     RobokassaPaymentForm,
@@ -541,6 +543,31 @@ class PaymentService:
     def short_payment_url(self, order: PaymentOrder) -> str:
         return f"{self._public_origin()}/p/{order.public_token}"
 
+    def record_journey(self, order: PaymentOrder, event_type: str, *, event_key: str | None = None) -> None:
+        record_payment_journey(self.database, order.id, event_type, at=self.clock(), event_key=event_key)
+
+    def _record_replacement_after_failure(self, order: PaymentOrder) -> None:
+        # Read/diagnostic write only, after checkout creation has committed.
+        try:
+            with self.database.read() as connection:
+                previous = connection.execute("""
+                    SELECT p.id FROM payment_orders p JOIN payment_orders n ON n.id=?
+                    WHERE p.id<>n.id AND p.user_id=n.user_id AND p.product_code=n.product_code
+                      AND p.payment_purpose=n.payment_purpose
+                      AND COALESCE(p.version_id,'')=COALESCE(n.version_id,'')
+                      AND p.pending_request_id IS n.pending_request_id
+                      AND p.created_at<n.created_at AND p.paid_at IS NULL
+                      AND EXISTS(SELECT 1 FROM payment_audit a WHERE a.order_id=p.id
+                        AND a.event_type IN ('fail_url_return','max_payfail_return'))
+                    ORDER BY p.created_at DESC,p.id DESC LIMIT 1
+                """, (order.id,)).fetchone()
+            if previous:
+                record_payment_journey(self.database, order.id, "checkout_created_after_failure",
+                    at=self.clock(), related_order_id=str(previous["id"]))
+        except (OSError, sqlite3.Error):
+            # Metadata is not part of the payment state or grant transaction.
+            pass
+
     def _provider_payment_url(self, order: PaymentOrder) -> str:
         return self._provider_payment_form(order).as_url()
 
@@ -682,6 +709,7 @@ class PaymentService:
             else "original_download"
         )
         expires_at = now + timedelta(minutes=self.settings.payment_order_ttl_minutes)
+        created_new = False
         with self.database.transaction() as connection:
             if account_purchase:
                 user = connection.execute(
@@ -792,6 +820,7 @@ class PaymentService:
                     )
                     invoice_id = _next_provider_invoice_id(connection, now)
                     order_id = uuid4().hex
+                    created_new = True
                     public_token = uuid4().hex
                     connection.execute(
                         """INSERT INTO payment_orders(
@@ -890,6 +919,9 @@ class PaymentService:
                     _iso(now), _iso(self.clock()),
                 ),
             )
+        if created_new:
+            self.record_journey(order, "checkout_created")
+            self._record_replacement_after_failure(order)
         return PaymentOrder(**{**order.__dict__, "payment_url": payment_url})
 
     def process_webhook(
@@ -1639,6 +1671,7 @@ def build_payment_service(
             password2=settings.robokassa_password2,
             password3=settings.robokassa_password3,
             hash_algorithm=settings.robokassa_hash_algorithm,
+            payment_methods=settings.robokassa_payment_methods,
             mode=settings.robokassa_mode,
             payment_url=settings.robokassa_payment_url,
             refund_url=settings.robokassa_refund_url,
