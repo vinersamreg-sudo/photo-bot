@@ -76,6 +76,10 @@ class FullAutoGrowthEngine:
         return {
             "mode": "full_auto",
             "apply": apply,
+            "queue_health": (
+                self.queue_health(now=moment, skipped=queue["skipped"])
+                if apply else queue["health"]
+            ),
             "permissions": permissions,
             "queue": queue,
             "publication": publication,
@@ -119,6 +123,7 @@ class FullAutoGrowthEngine:
         if apply:
             self.service.novelty.ensure_published_history()
         created: list[str] = []
+        preview_slots: set[tuple[str, str]] = set()
         skipped: list[dict[str, str]] = []
         plan_entries: list[ContentPlanEntry] = []
         queue_platforms = self._queue_platforms()
@@ -151,6 +156,11 @@ class FullAutoGrowthEngine:
                     datetime.strptime(clock, "%H:%M").time(),
                     tzinfo=self.timezone,
                 ).astimezone(timezone.utc).isoformat()
+                # Replenishment resumes at a future normal slot, never creates
+                # catch-up work for a slot already missed today. Existing due
+                # rows are still handled by publish_due under the normal gates.
+                if datetime.fromisoformat(scheduled) <= moment:
+                    continue
                 rotated = selected[offset % len(selected) :] + selected[: offset % len(selected)]
                 available = [
                     item for item in rotated if item.sha256 not in reservations[platform]
@@ -235,6 +245,7 @@ class FullAutoGrowthEngine:
                     continue
                 if post_id:
                     created.append(post_id)
+                    preview_slots.add((platform, scheduled))
                     reservations[platform].add(asset.sha256)
                     recent_categories[platform].append(asset.category.value)
                     plan_entries.append(
@@ -262,6 +273,82 @@ class FullAutoGrowthEngine:
             "queue_through": horizon.isoformat(),
             "days_queued": self._days_queued(today),
             "exploration_rate": self.settings.exploration_rate,
+            "health": self.queue_health(
+                now=moment,
+                skipped=skipped,
+                preview_slots=preview_slots if not apply else None,
+            ),
+        }
+
+    def queue_health(
+        self,
+        *,
+        now: datetime,
+        skipped: list[dict[str, str]],
+        preview_slots: set[tuple[str, str]] | None = None,
+    ) -> dict[str, object]:
+        """Check contiguous future slots, not the furthest row or disabled queues.
+
+        Dry-run may count its validated proposed slots, but does not persist them.
+        Apply checks durable slot owners again after publication completes.
+        """
+        moment = now.astimezone(self.timezone)
+        required_days = self.settings.minimum_queue_days
+        platforms = self._queue_platforms()
+        coverage: dict[str, int] = {}
+        missing: list[dict[str, str]] = []
+        for platform in platforms:
+            if platform not in {"max", "vk"}:
+                coverage[platform] = 0
+                missing.append({"platform": platform, "reason": "unsupported_schedule"})
+                continue
+            daily_clock = (
+                self.settings.max_daily_publish_time if platform == "max"
+                else self.settings.vk_video_publish_time
+            )
+            today_daily = datetime.combine(
+                moment.date(), datetime.strptime(daily_clock, "%H:%M").time(),
+                tzinfo=self.timezone,
+            )
+            start = moment.date() + timedelta(days=int(today_daily <= moment))
+            contiguous = True
+            covered = 0
+            for offset in range(required_days):
+                day = start + timedelta(days=offset)
+                clocks = [daily_clock]
+                if platform == "vk" and day.weekday() in {0, 2, 4}:
+                    clocks.append(self.settings.vk_wall_publish_time)
+                day_ready = True
+                for clock in clocks:
+                    slot = datetime.combine(
+                        day, datetime.strptime(clock, "%H:%M").time(),
+                        tzinfo=self.timezone,
+                    ).astimezone(timezone.utc).isoformat()
+                    if datetime.fromisoformat(slot) <= moment:
+                        continue
+                    if not (
+                        (platform, slot) in (preview_slots or set())
+                        or self.repository.scheduled_slot_is_owned(platform, slot)
+                    ):
+                        day_ready = False
+                        missing.append({"platform": platform, "scheduled_time": slot})
+                contiguous = contiguous and day_ready
+                covered += int(contiguous)
+            coverage[platform] = covered
+        reasons = sorted({item["error"] for item in skipped})
+        degraded = bool(missing)
+        return {
+            "status": "DEGRADED" if degraded else "HEALTHY" if platforms else "DISABLED",
+            "reason": (
+                "candidate_pool_exhausted" if degraded and "candidate_pool_exhausted" in reasons
+                else "queue_below_minimum" if degraded else None
+            ),
+            "minimum_queue_days": required_days,
+            "days_queued": min(coverage.values(), default=0),
+            "platform_days": coverage,
+            "missing_slots": missing,
+            "refill_errors": reasons,
+            "basis": "preview" if preview_slots is not None else "persisted",
         }
 
     @staticmethod

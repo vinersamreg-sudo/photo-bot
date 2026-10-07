@@ -698,6 +698,21 @@ class ContentStudioRepository:
                 (post_id, claim_token),
             )
 
+    def scheduled_slot_is_owned(self, platform: str, scheduled_time: str) -> bool:
+        """Read-only health proof: the scheduled row must own its durable slot."""
+        connection = self.connect()
+        try:
+            return connection.execute(
+                """SELECT 1 FROM content_publication_slots s
+                   JOIN demo_posts p ON p.id=s.post_id
+                   WHERE s.platform=? AND s.scheduled_time=?
+                     AND p.platform=s.platform AND p.scheduled_time=s.scheduled_time
+                     AND p.publish_status='scheduled' LIMIT 1""",
+                (platform, scheduled_time),
+            ).fetchone() is not None
+        finally:
+            connection.close()
+
     def reserved_asset_checksums(self, platform: str) -> set[str]:
         connection = self.connect()
         try:
