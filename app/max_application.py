@@ -70,7 +70,6 @@ from app.max_adapter import (
     scenario_catalog,
     settings_view,
     upload_view,
-    version_history_actions,
 )
 from app.max_conversation import MaxConversationStore, MaxDialog
 from app.max_ui_shell import (
@@ -260,6 +259,7 @@ class MaxApplication:
         commerce = getattr(demo_service, "commerce", None) or CommerceService(database)
         self.referrals = ReferralService(database, commerce)
         self._checkout_lock = threading.RLock()
+        self._gallery_navigation_lock = threading.RLock()
 
     def _track(self, event_type: str, **values: object) -> None:
         try:
@@ -322,6 +322,18 @@ class MaxApplication:
         return len(rows)
 
     def handle(self, event: MaxIncomingEvent) -> bool:
+        _revision, action = parse_versioned_action(event.callback_payload or "")
+        if event.event_type == "message_callback" and (
+            action.startswith(("works:", "versions:", "work:"))
+            or action in {"studio:works", "nav:back:works", "nav:back:work"}
+        ):
+            # Serialize validation + replacement: two taps on the same revision
+            # cannot both POST a new gallery screen before either adopts it.
+            with self._gallery_navigation_lock:
+                return self._handle_event(event)
+        return self._handle_event(event)
+
+    def _handle_event(self, event: MaxIncomingEvent) -> bool:
         """Handle one deduplicated event. Returns false for a known duplicate."""
 
         if not self.store.begin_event(event.event_key, event.event_type):
@@ -1006,6 +1018,7 @@ class MaxApplication:
         screen: Optional[str] = None,
         context: Optional[dict[str, object]] = None,
         expected_revision: Optional[int] = None,
+        force_new_image_message: bool = False,
     ) -> Optional[str]:
         dialog = self.store.get(user_id)
         screen = screen or self._screen_name(dialog)
@@ -1021,6 +1034,7 @@ class MaxApplication:
                 image=image,
                 expected_revision=expected_revision,
                 notify=False,
+                force_new_image_message=force_new_image_message,
             )
             return result.message_id if result.applied else None
         buttons = with_feedback_button(buttons, screen)
@@ -1551,29 +1565,17 @@ class MaxApplication:
             if not dialog.current_gallery_item_id:
                 raise InvalidInputError("No gallery work selected")
             self._open_work(event, dialog, dialog.current_gallery_item_id)
-        elif action == "work:history":
-            self._show_version_history(
-                event,
-                dialog,
-                max(dialog.gallery_cursor, 1)
-                if dialog.pending_action == NAV_HISTORY
-                else 1,
-            )
-        elif action.startswith("versions:page:"):
-            try:
-                page = int(action.rsplit(":", 1)[1])
-            except ValueError:
-                return
-            self._show_version_history(
-                event, dialog, page
-            )
-        elif action.startswith("versions:open:"):
-            self._open_version(event, dialog, action.rsplit(":", 1)[1])
+        elif (
+            action == "work:history"
+            or action.startswith(("versions:page:", "versions:open:"))
+            or action in {"work:previous", "work:next"}
+        ):
+            # Legacy keyboards never select a supplied version or expose history.
+            # Resolve only the current owned work (or the user's own works list).
+            self._show_selected_work(event, dialog)
         elif action == "work:more":
             self._mark_navigation(event, dialog, NAV_MORE)
             self._send_view(event.user_id, gallery_more_actions())
-        elif action in {"work:previous", "work:next"}:
-            self._navigate_version(event, dialog, -1 if action.endswith("previous") else 1)
         elif action == "work:main":
             self._make_current_best(event, dialog)
         elif action == "result:delete":
@@ -3197,6 +3199,16 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
+        if self.settings.max_single_screen_ui_enabled:
+            self._show_works_page(event, dialog, page)
+            # Adopt logical navigation only after the new screen was delivered.
+            # On failure the previous work/correction screen stays usable too.
+            self.store.transition(
+                event.user_id, "gallery", event_key=event.event_key, force=True,
+                pending_prompt=None, pending_action=NAV_WORKS,
+                status_message_id=None,
+            )
+            return
         self.store.transition(
             event.user_id,
             "gallery",
@@ -3207,9 +3219,6 @@ class MaxApplication:
             gallery_cursor=max(page, 1),
             status_message_id=None,
         )
-        if self.settings.max_single_screen_ui_enabled:
-            self._show_works_page(event, dialog, page)
-            return
         if not dialog.user_id:
             self._send_message(
                 event.user_id,
@@ -3283,7 +3292,6 @@ class MaxApplication:
             )
             return
         gallery_page = self.work_gallery.works(dialog.user_id, page)
-        self.store.update(event.user_id, gallery_cursor=gallery_page.page)
         if not gallery_page.entries:
             self._send_message(
                 event.user_id,
@@ -3298,25 +3306,28 @@ class MaxApplication:
             gallery_page,
             (current.revision if current else 0) + 1,
         )
-        buttons = self._gallery_page_buttons(gallery_page, "works")
-        self._send_image(
+        buttons = self._gallery_page_buttons(gallery_page)
+        message_id = self._send_image(
             event.user_id,
             sheet,
             f"📂 Мои работы\n\nСтраница {gallery_page.page} из {gallery_page.pages}",
             buttons,
             screen="works_gallery",
             context={"page": gallery_page.page},
+            force_new_image_message=True,
         )
+        if not message_id:
+            raise MaxTransportError("MAX gallery page delivery failed")
+        self.store.update(event.user_id, gallery_cursor=gallery_page.page)
 
     @staticmethod
     def _gallery_page_buttons(
-        page: GalleryPage, kind: str
+        page: GalleryPage,
     ) -> tuple[Button, ...]:
-        item_prefix = "works:open" if kind == "works" else "versions:open"
         buttons = tuple(
             Button(
                 f"Открыть {index}",
-                f"{item_prefix}:{entry.id}",
+                f"works:open:{entry.id}",
                 (index - 1) // 3,
             )
             for index, entry in enumerate(page.entries, 1)
@@ -3325,17 +3336,17 @@ class MaxApplication:
         previous_page = max(1, page.page - 1)
         next_page = min(page.pages, page.page + 1)
         navigation = (
-            Button("◀", f"{kind}:page:{previous_page}", navigation_row),
+            Button("◀", f"works:page:{previous_page}", navigation_row),
             Button(
                 f"{page.page}/{page.pages}",
-                f"{kind}:page:{page.page}",
+                f"works:page:{page.page}",
                 navigation_row,
             ),
-            Button("▶", f"{kind}:page:{next_page}", navigation_row),
+            Button("▶", f"works:page:{next_page}", navigation_row),
         )
         back = Button(
             "← Назад",
-            "nav:back:main" if kind == "works" else "nav:back:work",
+            "nav:back:main",
             3,
         )
         return buttons + navigation + (back,)
@@ -3353,6 +3364,7 @@ class MaxApplication:
             best = None
         if not best and versions:
             best = versions[-1]
+        self._send_work(event.user_id, item.title, item.favorite, versions, best)
         self.store.transition(
             event.user_id, "gallery", event_key=event.event_key, force=True,
             current_gallery_item_id=item.id,
@@ -3361,7 +3373,6 @@ class MaxApplication:
             pending_action=NAV_WORK,
             status_message_id=None,
         )
-        self._send_work(event.user_id, item.title, item.favorite, versions, best)
 
     def _show_selected_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog
@@ -3383,6 +3394,9 @@ class MaxApplication:
             ),
             best or (versions[-1] if versions else None),
         )
+        self._send_work(
+            event.user_id, item.title, item.favorite, versions, selected
+        )
         self.store.transition(
             event.user_id,
             "gallery",
@@ -3394,9 +3408,6 @@ class MaxApplication:
             pending_action=NAV_WORK,
             status_message_id=None,
         )
-        self._send_work(
-            event.user_id, item.title, item.favorite, versions, selected
-        )
 
     def _send_work(
         self,
@@ -3405,9 +3416,6 @@ class MaxApplication:
         favorite: bool,
         versions: list[GalleryVersion],
         current: Optional[GalleryVersion],
-        *,
-        history: bool = False,
-        version_detail: bool = False,
     ) -> None:
         if current is None or current.preview_path is None:
             self._send_message(
@@ -3416,13 +3424,12 @@ class MaxApplication:
                 (
                     Button(
                         "← Назад",
-                        "nav:back:work" if history else "nav:back:works",
+                        "nav:back:works",
                     ),
                 ),
                 screen="work_not_ready",
             )
             return
-        heading = "История версий" if history else title
         with self.database.read() as connection:
             metadata = connection.execute(
                 "SELECT created_at,status FROM gallery_versions WHERE id=?",
@@ -3434,7 +3441,7 @@ class MaxApplication:
             created = ""
         status = "Готово" if metadata and metadata["status"] == "succeeded" else "В работе"
         caption = (
-            f"{heading}{' ⭐' if favorite or current.favorite else ''}\n"
+            f"{title}{' ⭐' if favorite or current.favorite else ''}\n"
             f"Версия {current.version_number} из {len(versions)}"
             f"{f' · {created}' if created else ''} · {status}"
         )
@@ -3444,23 +3451,18 @@ class MaxApplication:
             if dialog and dialog.user_id
             else 0
         )
-        if remaining <= 0 and not history and not version_detail:
+        if remaining <= 0:
             caption += "\n\n" + PURCHASE_OPTIONS_TEXT
-        if version_detail:
-            buttons = (
-                Button("← Предыдущая", "work:previous"),
-                Button("Следующая →", "work:next"),
-                Button("Сделать основной", "work:main"),
-                Button("← Назад", "work:history"),
-            )
-        else:
-            buttons = (
-                version_history_actions()
-                if history
-                else gallery_item_actions(remaining)
-            )
+        buttons = gallery_item_actions(remaining)
         if not self._send_image(
-            platform_user_id, current.preview_path, caption, buttons
+            platform_user_id, current.preview_path, caption, buttons,
+            screen=NAV_WORK,
+            context={
+                "gallery_item_id": current.gallery_item_id,
+                "version_id": current.id,
+                "cursor": dialog.gallery_cursor if dialog else 1,
+            },
+            force_new_image_message=True,
         ):
             raise MaxTransportError("MAX gallery preview delivery failed")
 
@@ -3481,120 +3483,6 @@ class MaxApplication:
             ready.append(version)
         return ready
 
-    def _show_version_history(
-        self, event: MaxIncomingEvent, dialog: MaxDialog, page: int = 1
-    ) -> None:
-        if not dialog.user_id or not dialog.current_gallery_item_id:
-            raise InvalidInputError("No gallery work selected")
-        item, best = self.gallery.open_item(dialog.user_id, dialog.current_gallery_item_id)
-        versions = self._ready_gallery_versions(
-            self.gallery.list_versions(dialog.user_id, item.id)
-        )
-        current = next(
-            (version for version in versions if version.id == dialog.current_version_id),
-            best or (versions[-1] if versions else None),
-        )
-        self.store.transition(
-            event.user_id,
-            "gallery",
-            event_key=event.event_key,
-            force=True,
-            pending_prompt=None,
-            pending_action=NAV_HISTORY,
-            gallery_cursor=max(page, 1),
-            status_message_id=None,
-        )
-        if self.settings.max_single_screen_ui_enabled:
-            gallery_page = self.work_gallery.versions(
-                dialog.user_id, dialog.current_gallery_item_id, page
-            )
-            self.store.update(event.user_id, gallery_cursor=gallery_page.page)
-            if not gallery_page.entries:
-                self._send_message(
-                    event.user_id,
-                    "У этой работы пока нет готовых версий.",
-                    (Button("← Назад", "nav:back:work"),),
-                    screen="version_history_empty",
-                )
-                return
-            active = self.ui.current(event.user_id)
-            sheet = self.work_gallery.contact_sheet(
-                "versions:"
-                f"{dialog.user_id}:{event.chat_id or event.user_id}:"
-                f"{dialog.current_gallery_item_id}",
-                gallery_page,
-                (active.revision if active else 0) + 1,
-            )
-            self._send_image(
-                event.user_id,
-                sheet,
-                f"История версий\n\nСтраница {gallery_page.page} из {gallery_page.pages}",
-                self._gallery_page_buttons(gallery_page, "versions"),
-                screen="version_history",
-                context={
-                    "gallery_item_id": dialog.current_gallery_item_id,
-                    "page": gallery_page.page,
-                },
-            )
-            return
-        self._send_work(
-            event.user_id, item.title, item.favorite, versions, current, history=True
-        )
-
-    def _open_version(
-        self, event: MaxIncomingEvent, dialog: MaxDialog, version_id: str
-    ) -> None:
-        if not dialog.user_id or not dialog.current_gallery_item_id:
-            raise InvalidInputError("No gallery work selected")
-        item, _best = self.gallery.open_item(
-            dialog.user_id, dialog.current_gallery_item_id
-        )
-        versions = self._ready_gallery_versions(
-            self.gallery.list_versions(dialog.user_id, item.id)
-        )
-        selected = next((version for version in versions if version.id == version_id), None)
-        if selected is None:
-            raise InvalidInputError("Gallery version is not available")
-        self.store.update(
-            event.user_id,
-            current_version_id=selected.id,
-            pending_action=NAV_HISTORY,
-        )
-        self._send_work(
-            event.user_id,
-            item.title,
-            item.favorite,
-            versions,
-            selected,
-            history=True,
-            version_detail=True,
-        )
-
-    def _navigate_version(
-        self, event: MaxIncomingEvent, dialog: MaxDialog, direction: int
-    ) -> None:
-        if not dialog.user_id or not dialog.current_gallery_item_id:
-            raise InvalidInputError("No gallery work selected")
-        item, _best = self.gallery.open_item(dialog.user_id, dialog.current_gallery_item_id)
-        versions = self._ready_gallery_versions(
-            self.gallery.list_versions(dialog.user_id, item.id)
-        )
-        if not versions:
-            raise InvalidInputError("Work has no versions")
-        current_index = next(
-            (index for index, version in enumerate(versions) if version.id == dialog.current_version_id),
-            len(versions) - 1,
-        )
-        selected = versions[(current_index + direction) % len(versions)]
-        self.store.update(
-            event.user_id,
-            current_version_id=selected.id,
-            pending_action=NAV_HISTORY,
-        )
-        self._send_work(
-            event.user_id, item.title, item.favorite, versions, selected, history=True
-        )
-
     def _make_current_best(
         self, event: MaxIncomingEvent, dialog: MaxDialog
     ) -> None:
@@ -3608,10 +3496,7 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        if dialog.pending_action == NAV_HISTORY:
-            self._show_version_history(event, dialog)
-        else:
-            self._show_selected_work(event, dialog)
+        self._show_selected_work(event, dialog)
 
     def _delete_current(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_gallery_item_id:

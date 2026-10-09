@@ -233,4 +233,4 @@ class FeedbackFlowTests(TestCase):
         for action in ("studio:works", f"works:open:{item}", "work:history",
                        "nav:back:work", "work:more", "catalog:ideas", "ideas:backgrounds"):
             self.c.callback(action)
-            check_footer(expected=action not in {"work:history", "work:more"})
+            check_footer(expected=action != "work:more")

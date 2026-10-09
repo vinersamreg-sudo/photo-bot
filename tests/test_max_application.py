@@ -35,7 +35,6 @@ from app.max_adapter import Button, result_actions
 from app.max_application import (
     CORRECTION_REQUEST_TEXT,
     MaxApplication,
-    NAV_HISTORY,
     NAV_WORK,
     NAV_WORKS,
     OWNER_ONLY_TEXT,
@@ -79,6 +78,7 @@ class FakeMaxTransport:
         self.deletes = []
         self.callbacks = []
         self.image_delivery = True
+        self.delivered_image_ids = set()
         self.file_delivery = True
         self.fail_next_message = False
         self.fail_next_edit = False
@@ -135,6 +135,7 @@ class FakeMaxTransport:
         if not self.image_delivery:
             return None
         message_id = f"image-{len(self.images)}"
+        self.delivered_image_ids.add(message_id)
         self.timeline.append(("send_image", message_id))
         return message_id
 
@@ -572,9 +573,7 @@ class MaxApplicationTests(TestCase):
     def visible_ui_message_ids(self) -> set[str]:
         deleted = set(self.transport.deletes)
         sent = {message[4] for message in self.transport.messages}
-        images = {
-            f"image-{index}" for index in range(1, len(self.transport.images) + 1)
-        }
+        images = self.transport.delivered_image_ids
         return (sent | images) - deleted
 
     def test_single_screen_callback_edits_current_message_without_provider_call(self) -> None:
@@ -763,7 +762,10 @@ class MaxApplicationTests(TestCase):
                 1,
             )
         self.callback("nav:back:work")
-        self.assertEqual(self.app.ui.current("u1").message_id, active_message)
+        returned_message = self.app.ui.current("u1").message_id
+        self.assertNotEqual(returned_message, active_message)
+        self.assertIn(active_message, self.transport.deletes)
+        self.assertEqual(self.visible_ui_message_ids(), {returned_message})
         self.assertEqual(self.provider.calls, provider_calls)
         self.assertEqual(
             self.demo.commerce.balance(self.store.get("u1").user_id).available,
@@ -829,7 +831,7 @@ class MaxApplicationTests(TestCase):
                 1,
             )
 
-    def test_single_screen_gallery_number_opens_correct_work_in_place(self) -> None:
+    def test_single_screen_gallery_number_opens_correct_work_with_fresh_media(self) -> None:
         self.enable_single_screen()
         self.generate_first()
         result_message = self.app.ui.current("u1").message_id
@@ -839,9 +841,9 @@ class MaxApplicationTests(TestCase):
         self.callback("studio:works")
 
         works_message = self.app.ui.current("u1").message_id
-        sheet = self.transport.image_edits[-1]
-        self.assertEqual(works_message, result_message)
-        self.assertEqual(self.transport.deletes, deletes_before)
+        sheet = self.transport.images[-1]
+        self.assertNotEqual(works_message, result_message)
+        self.assertEqual(self.transport.deletes, deletes_before + [result_message])
         number_button = next(
             button for button in sheet[3] if button.text == "Открыть 1"
         )
@@ -852,13 +854,15 @@ class MaxApplicationTests(TestCase):
         dialog = self.store.get("u1")
         self.assertEqual(dialog.current_gallery_item_id, expected_item)
         self.assertEqual(dialog.pending_action, NAV_WORK)
-        self.assertEqual(self.app.ui.current("u1").message_id, works_message)
+        opened_message = self.app.ui.current("u1").message_id
+        self.assertNotEqual(opened_message, works_message)
         self.assertEqual(len(self.transport.messages), message_count)
 
         self.callback("nav:back:works")
-        self.assertEqual(self.app.ui.current("u1").message_id, works_message)
+        returned_message = self.app.ui.current("u1").message_id
+        self.assertNotEqual(returned_message, opened_message)
         self.assertEqual(len(self.transport.messages), message_count)
-        self.assertEqual(self.visible_ui_message_ids(), {works_message})
+        self.assertEqual(self.visible_ui_message_ids(), {returned_message})
 
     def test_single_screen_correction_creates_new_progress_after_user_text(self) -> None:
         self.enable_single_screen()
@@ -895,9 +899,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.images[-1][2], result_actions(0).text)
         self.assertEqual(self.visible_ui_message_ids(), {active.message_id})
 
-    def test_single_screen_gallery_page_switch_changes_sheet_and_mapping(self) -> None:
-        self.enable_single_screen()
-        self.generate_first()
+    def seed_ready_works(self, count: int) -> None:
         dialog = self.store.get("u1")
         now = self.clock().isoformat()
         with self.database.read() as connection:
@@ -906,7 +908,7 @@ class MaxApplicationTests(TestCase):
                 (dialog.user_id,),
             ).fetchone()[0]
         with self.database.transaction() as connection:
-            for index in range(1, 20):
+            for index in range(1, count):
                 preview = self.base / f"gallery-page-preview-{index}.jpg"
                 Image.new("RGB", (80, 60), (index * 9 % 255, 70, 140)).save(preview)
                 work_id = f"gallery-page-work-{index:02d}"
@@ -935,6 +937,11 @@ class MaxApplicationTests(TestCase):
                     ),
                 )
 
+    def test_single_screen_gallery_page_switch_changes_sheet_and_mapping(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        self.seed_ready_works(20)
+
         self.callback("studio:works")
         first_send = self.transport.images[-1]
         first_sheet = first_send[1].read_bytes()
@@ -944,7 +951,7 @@ class MaxApplicationTests(TestCase):
             if button.text.startswith("Открыть ")
         }
         self.callback("works:page:2")
-        second_edit = self.transport.image_edits[-1]
+        second_edit = self.transport.images[-1]
         second_ids = {
             parse_versioned_action(button.action)[1].rsplit(":", 1)[1]
             for button in second_edit[3]
@@ -963,14 +970,142 @@ class MaxApplicationTests(TestCase):
         self.callback(open_second)
         self.assertEqual(self.store.get("u1").current_gallery_item_id, expected)
         self.callback("nav:back:works")
-        self.assertIn("Страница 2 из 4", self.transport.image_edits[-1][2])
+        self.assertIn("Страница 2 из 4", self.transport.images[-1][2])
         self.callback("works:page:4")
         last_buttons = [
             button.text
-            for button in self.transport.image_edits[-1][3]
+            for button in self.transport.images[-1][3]
             if button.text.startswith("Открыть ")
         ]
         self.assertEqual(last_buttons, ["Открыть 1", "Открыть 2"])
+
+    def test_gallery_cycles_1_2_3_1_match_tiles_buttons_and_reject_old_callbacks(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        self.seed_ready_works(15)
+        user_id = self.store.get("u1").user_id
+        balance = self.demo.commerce.balance(user_id)
+        originals = self.demo.commerce.entitlement_balance(user_id)
+        calls = self.provider.calls
+        self.callback("studio:works")
+        for page_number in (2, 3, 1):
+            before = self.app.ui.current("u1")
+            old_event = self.event("message_callback", action=f"ui:{before.revision}:works:page:{page_number}")
+            self.app.handle(old_event)
+            active = self.app.ui.current("u1")
+            sent = self.transport.images[-1]
+            page = self.app.work_gallery.works(user_id, page_number)
+            buttons = [b for b in sent[3] if b.text.startswith("Открыть ")]
+            self.assertEqual(len(buttons), len(page.entries))
+            self.assertEqual([parse_versioned_action(b.action)[1] for b in buttons],
+                             [f"works:open:{entry.id}" for entry in page.entries])
+            expected_sheet = self.app.work_gallery.contact_sheet(
+                f"works:{user_id}:c1", page, active.revision)
+            self.assertEqual(sent[1].read_bytes(), expected_sheet.read_bytes())
+            self.assertIn(f"Страница {page_number} из 3", sent[2])
+            self.assertNotEqual(active.message_id, before.message_id)
+            self.assertIn(before.message_id, self.transport.deletes)
+            self.assertLess(
+                self.transport.timeline.index(("send_image", active.message_id)),
+                self.transport.timeline.index(("delete_message", before.message_id)),
+            )
+            self.assertEqual(self.visible_ui_message_ids(), {active.message_id})
+            count = len(self.transport.images)
+            # Exact event replay and a distinct second tap from the old screen.
+            self.assertFalse(self.app.handle(old_event))
+            self.app.handle(replace(self.event("message_callback", action=old_event.callback_payload),
+                                    message_id=before.message_id))
+            self.assertEqual(len(self.transport.images), count)
+            self.assertEqual(self.app.ui.current("u1"), active)
+        self.assertEqual(self.transport.image_edits, [])
+        self.assertEqual(self.provider.calls, calls)
+        self.assertEqual(self.demo.commerce.balance(user_id), balance)
+        self.assertEqual(self.demo.commerce.entitlement_balance(user_id), originals)
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM gallery_items").fetchone()[0], 15)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM gallery_versions").fetchone()[0], 15)
+
+    def test_gallery_send_failure_keeps_old_page_retryable(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        self.seed_ready_works(15)
+        self.callback("studio:works")
+        before = self.app.ui.current("u1")
+        deletes = list(self.transport.deletes)
+        event = self.event("message_callback", action=f"ui:{before.revision}:works:page:2")
+        self.transport.image_delivery = False
+        with self.assertRaises(MaxTransportError):
+            self.app.handle(event)
+        self.assertEqual(self.app.ui.current("u1"), before)
+        self.assertEqual(self.store.get("u1").gallery_cursor, 1)
+        self.assertEqual(self.transport.deletes, deletes)
+        self.transport.image_delivery = True
+        self.app.handle(event)
+        self.assertEqual(self.store.get("u1").gallery_cursor, 2)
+        self.assertIn(before.message_id, self.transport.deletes)
+        self.assertEqual(self.visible_ui_message_ids(), {self.app.ui.current("u1").message_id})
+
+    def test_gallery_entry_and_work_open_failure_preserve_logical_navigation(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        before_ui = self.app.ui.current("u1")
+        before = self.store.get("u1")
+        self.transport.image_delivery = False
+        entry = self.event("message_callback", action="studio:works")
+        with self.assertRaises(MaxTransportError):
+            self.app.handle(entry)
+        self.assertEqual(self.app.ui.current("u1"), before_ui)
+        self.assertEqual(self.store.get("u1"), before)
+        self.transport.image_delivery = True
+        self.app.handle(entry)
+        before_ui = self.app.ui.current("u1")
+        before = self.store.get("u1")
+        self.transport.image_delivery = False
+        opening = self.event("message_callback", action=f"works:open:{before.current_gallery_item_id}")
+        with self.assertRaises(MaxTransportError):
+            self.app.handle(opening)
+        self.assertEqual(self.app.ui.current("u1"), before_ui)
+        self.assertEqual(self.store.get("u1"), before)
+        self.transport.image_delivery = True
+        self.app.handle(opening)
+        self.assertEqual(self.store.get("u1").pending_action, NAV_WORK)
+        self.callback("nav:back:works")
+        self.assertEqual(self.store.get("u1").pending_action, NAV_WORKS)
+
+    def test_concurrent_gallery_taps_replace_only_once(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        self.seed_ready_works(15)
+        self.callback("studio:works")
+        before = self.app.ui.current("u1")
+        count = len(self.transport.images)
+        payload = f"ui:{before.revision}:works:page:2"
+        events = [self.event("message_callback", action=payload) for _ in range(2)]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            list(executor.map(self.app.handle, events))
+        self.assertEqual(len(self.transport.images), count + 1)
+        self.assertEqual(self.visible_ui_message_ids(), {self.app.ui.current("u1").message_id})
+
+    def test_legacy_history_actions_never_expose_or_select_other_versions(self) -> None:
+        self.enable_single_screen()
+        self.generate_first()
+        before = self.store.get("u1")
+        calls = self.provider.calls
+        for action in ("work:history", "versions:page:3", "versions:open:foreign-version",
+                       "work:previous", "work:next"):
+            self.callback(action)
+            current = self.store.get("u1")
+            self.assertEqual(current.current_version_id, before.current_version_id)
+            self.assertEqual(current.current_gallery_item_id, before.current_gallery_item_id)
+            self.assertEqual(current.pending_action, NAV_WORK)
+            self.assertNotIn("История версий", self.transport.images[-1][2])
+            self.assertFalse(any("versions:" in b.action or "work:history" in b.action
+                                 for b in self.transport.images[-1][3]))
+        self.assertEqual(self.provider.calls, calls)
+        self.app.handle(self.event("message_created", text="/start"))
+        self.callback("versions:open:foreign-version")
+        self.assertEqual(self.store.get("u1").pending_action, NAV_WORKS)
+        self.assertIsNone(self.store.get("u1").current_version_id)
 
     def test_start_direct_upload_details_and_implicit_consent(self) -> None:
         self.app.handle(self.event("message_created", text="/start"))
@@ -1967,7 +2102,7 @@ class MaxApplicationTests(TestCase):
         self.assertNotIn(user_event.message_id, self.transport.deletes)
         self.assertEqual(self.visible_ui_message_ids(), {active.message_id})
 
-    def test_ten_callback_navigation_actions_keep_one_ui_message(self) -> None:
+    def test_ten_callback_navigation_actions_keep_one_active_ui_message(self) -> None:
         self.enable_single_screen()
         self.generate_first()
         active_message = self.app.ui.current("u1").message_id
@@ -1977,15 +2112,18 @@ class MaxApplicationTests(TestCase):
         provider_calls = self.provider.calls
 
         for _ in range(5):
+            old = self.app.ui.current("u1").message_id
             self.callback("result:share")
             self.callback("nav:back:work")
+            self.assertIn(old, self.transport.deletes)
+            self.assertEqual(self.visible_ui_message_ids(), {self.app.ui.current("u1").message_id})
 
-        self.assertEqual(self.app.ui.current("u1").message_id, active_message)
+        self.assertNotEqual(self.app.ui.current("u1").message_id, active_message)
         self.assertEqual(len(self.transport.messages), message_count)
-        self.assertEqual(len(self.transport.images), image_count)
-        self.assertEqual(self.transport.deletes, deletes_before)
+        self.assertEqual(len(self.transport.images), image_count + 5)
+        self.assertEqual(len(self.transport.deletes), len(deletes_before) + 5)
         self.assertEqual(self.provider.calls, provider_calls)
-        self.assertEqual(self.visible_ui_message_ids(), {active_message})
+        self.assertEqual(self.visible_ui_message_ids(), {self.app.ui.current("u1").message_id})
 
     def test_repeat_from_result_replaces_previous_result_message(self) -> None:
         self.enable_single_screen()
@@ -3222,7 +3360,7 @@ class MaxApplicationTests(TestCase):
         history = self.store.get("u1")
         self.assertEqual(history.state, "gallery")
         self.assertIsNone(history.pending_prompt)
-        self.assertEqual(history.pending_action, NAV_HISTORY)
+        self.assertEqual(history.pending_action, NAV_WORK)
 
     def test_back_navigation_returns_history_to_work_and_work_to_list(self) -> None:
         self.generate_first()
@@ -3233,7 +3371,7 @@ class MaxApplicationTests(TestCase):
         self.callback("studio:works")
         self.callback(f"works:open:{item_id}")
         self.callback("work:history")
-        self.assertEqual(self.store.get("u1").pending_action, NAV_HISTORY)
+        self.assertEqual(self.store.get("u1").pending_action, NAV_WORK)
 
         self.callback("nav:back:work")
         work = self.store.get("u1")
@@ -3312,7 +3450,7 @@ class MaxApplicationTests(TestCase):
         self.callback(f"works:open:{dialog.current_gallery_item_id}")
         self.callback("work:history")
         self.callback("work:previous")
-        self.assertEqual(self.store.get("u1").current_version_id, second)
+        self.assertEqual(self.store.get("u1").current_version_id, third)
         self.callback("work:main")
         self.assertTrue(self.transport.images)
 

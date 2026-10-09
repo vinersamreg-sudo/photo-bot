@@ -28,7 +28,6 @@ from app.max_adapter import (
     settings_view,
     studio_menu_contract,
     upload_view,
-    version_history_actions,
 )
 from app.scenarios import SCENARIO_CATEGORIES
 
@@ -189,7 +188,7 @@ class MaxAdapterTests(TestCase):
                 "← Назад",
             ],
         )
-        self.assertEqual(len(gallery_item_actions()), 7)
+        self.assertEqual(len(gallery_item_actions()), 6)
         self.assertEqual(
             [button.text for button in gallery_item_actions(0)],
             [
@@ -197,7 +196,6 @@ class MaxAdapterTests(TestCase):
                 "🎁 Поделиться и получить бонус",
                 "Купить за 49 ₽",
                 "Купить за 1990 ₽",
-                "История версий",
                 "Ещё",
                 "← Назад",
             ],
@@ -216,7 +214,8 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(len(gallery_more_actions().buttons), 4)
         self.assertNotIn("👍 Получилось", [button.text for button in gallery_item_actions()])
         self.assertNotIn("👎 Не то", [button.text for button in gallery_item_actions()])
-        self.assertEqual(len(version_history_actions()), 4)
+        for remaining in (0, 1):
+            self.assertNotIn("work:history", [b.action for b in gallery_item_actions(remaining)])
 
     def test_zero_balance_main_menu_offers_both_one_time_packages(self) -> None:
         menu = main_menu(
@@ -275,7 +274,6 @@ class MaxAdapterTests(TestCase):
             retry_delivery_actions(),
             gallery_item_actions(1),
             gallery_item_actions(0),
-            version_history_actions(),
         )
         for buttons in button_groups:
             self.assertTrue(buttons)
