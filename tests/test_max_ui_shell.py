@@ -20,6 +20,7 @@ class FakeUiTransport:
         self.deletes = []
         self.fail_edit = False
         self.fail_image_send = False
+        self.fail_delete = False
 
     def send_message(self, user_id, text, buttons=(), **kwargs):
         message_id = f"bot-{len(self.sends) + len(self.image_sends) + 1}"
@@ -50,6 +51,8 @@ class FakeUiTransport:
         )
 
     def delete_message(self, message_id):
+        if self.fail_delete:
+            raise MaxTransportError("delete failed")
         self.deletes.append(message_id)
 
 
@@ -136,6 +139,36 @@ class MaxUiShellTests(TestCase):
         self.assertEqual(len(self.transport.image_edits), 0)
         self.assertEqual(self.transport.deletes, [])
         self.assertEqual(self.shell.current("u1").message_id, processing.message_id)
+        self.assertEqual(self.shell.current("u1").revision, processing.revision)
+        self.assertEqual(self.shell.current("u1").screen, "processing")
+
+    def test_gallery_delete_failure_disables_old_keyboard_after_adoption(self) -> None:
+        old = self.shell.render("u1", text="1/3", screen="works_gallery", image=self.image,
+                                buttons=(Button("Далее", "works:page:2"),))
+        self.transport.fail_delete = True
+        new = self.shell.render("u1", text="2/3", screen="works_gallery", image=self.image,
+                                force_new_image_message=True)
+        self.assertNotEqual(old.message_id, new.message_id)
+        self.assertEqual(self.shell.current("u1").message_id, new.message_id)
+        self.assertEqual(self.transport.edits[-1][:3], (old.message_id, "Экран обновлён.", ()))
+        self.assertFalse(self.shell.callback_is_current("u1", old.message_id, old.revision))
+        self.assertNotIn(old.message_id, [m[0] for m in self.store.active_keyboards("u1")])
+
+    def test_failed_gallery_send_does_not_restore_over_superseding_ui(self) -> None:
+        old = self.shell.render("u1", text="1/3", screen="works_gallery", image=self.image)
+        original_send = self.transport.send_image
+
+        def fail_after_navigation(*args, **kwargs):
+            self.shell.render("u1", text="Главное меню", screen="main")
+            raise MaxTransportError("send failed")
+
+        self.transport.send_image = fail_after_navigation
+        with self.assertRaises(MaxTransportError):
+            self.shell.render("u1", text="2/3", screen="works_gallery", image=self.image,
+                              force_new_image_message=True)
+        self.transport.send_image = original_send
+        self.assertEqual(self.shell.current("u1").screen, "main")
+        self.assertGreater(self.shell.current("u1").revision, old.revision)
 
     def test_failed_edit_sends_once_then_deletes_only_old_bot_message(self) -> None:
         first = self.shell.render("u1", text="Первый", screen="main")

@@ -370,7 +370,6 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
                 LARGE_PURCHASE_BUTTON_TEXT,
                 "package:offer:large",
             ),
-            Button("История версий", "work:history"),
             Button("Ещё", "work:more"),
             Button("← Назад", "nav:back:works"),
         )
@@ -379,7 +378,6 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
         Button("🎁 Поделиться и получить бонус", "result:share"),
         Button("✏️ Исправить", "result:correct"),
         Button("🎲 Другой вариант", "result:repeat"),
-        Button("История версий", "work:history"),
         Button("Ещё", "work:more"),
         Button("← Назад", "nav:back:works"),
     )
@@ -394,15 +392,6 @@ def gallery_more_actions() -> View:
             Button("🗑 В корзину", "result:delete"),
             Button("← Назад", "nav:back:work"),
         ),
-    )
-
-
-def version_history_actions() -> tuple[Button, ...]:
-    return (
-        Button("← Предыдущая", "work:previous"),
-        Button("Следующая →", "work:next"),
-        Button("Сделать основной", "work:main"),
-        Button("← Назад", "nav:back:work"),
     )
 
 

@@ -15,7 +15,7 @@ The primary MAX flow is intentionally compact:
    explicitly; a failed second-image download never falls back to one-image
    generation.
 3. Ravuna produces one watermarked preview with direct actions.
-4. User corrects/repeats, opens works/history, or requests the original.
+4. User corrects/repeats, opens works, or requests the original.
 5. If no original entitlement exists, Ravuna shows one compact 49 ₽ package
    screen and creates/reuses its exact target-scoped PaymentIntent.
 6. “Оплатить 49 ₽” opens Ravuna's opaque short URL and then Robokassa directly;
@@ -51,7 +51,8 @@ pending request; a previous or latest completed work is never used as fallback.
   and a short service notification may be sent.
 - Callback-only navigation from a result, including correction, another photo,
   works, rating, feedback, referral and legal screens, continues in-place on the
-  active UI message. If MAX cannot change the message type safely, Ravuna sends
+  active UI message, except gallery pages/opened works which always replace it
+  with a fresh image message for MAX iOS. If MAX cannot change the message type safely, Ravuna sends
   one replacement and deletes the previous bot UI message.
 - A finished preview is posted as a native image message for fullscreen/download;
   only after that POST succeeds does Ravuna delete the processing screen and adopt
@@ -131,7 +132,7 @@ pending request; a previous or latest completed work is never used as fallback.
   opened work and ideas/category screens. Existing actions and their grouping
   stay unchanged. The feedback row precedes “← Назад”, which always remains
   the last navigation row; without Back, feedback is the last row.
-  History and secondary work actions deliberately omit this CTA to keep deep
+  Secondary work actions deliberately omit this CTA to keep deep
   navigation focused; feedback is available on the opened work instead.
   It is also absent from processing, technical errors, rating forms and the
   feedback flow itself.
@@ -160,11 +161,19 @@ pending request; a previous or latest completed work is never used as fallback.
   matching buttons are labelled “Открыть N”. A true clickable tile gallery would
   require a separate MAX mini-app and is not simulated by the bot image.
 - Page identity includes user/chat, page, ordered item/version ids, preview
-  revision and layout. Every page switch uploads and explicitly replaces the
-  image attachment; 20 ready works produce four pages (6 + 6 + 6 + 2).
-- Version history applies the same readiness filter, dynamic layout and
-  attachment replacement. Opening a version preserves the selected preview and
-  Back returns to the same history/work context.
+  revision and layout. Every gallery page and opened work sends a fresh native
+  image message to avoid stale attachment caching on MAX iOS, adopts it and only
+  then deletes the previous bot UI message; 20 ready works produce four pages
+  (6 + 6 + 6 + 2). A failed image POST keeps the old UI revision/keyboard usable
+  for retry. A failed delete attempts to clear the old keyboard; message/revision
+  guards reject any remaining stale callbacks. Gallery navigation is serialized
+  so simultaneous taps cannot create two active screens.
+- MAX no longer offers a version-history screen or navigation. Opening a work
+  exposes the selected ready version's existing correction, repeat and original
+  actions directly. Versions, lineage, current-best selection and balances are
+  retained. Legacy history/previous/next/version callbacks return only to the
+  user's currently owned work (or their works list); supplied legacy version IDs
+  never select another work/version.
 
 ## Payment state
 

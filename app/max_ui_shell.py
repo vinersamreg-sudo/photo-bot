@@ -356,13 +356,28 @@ class MaxUiShell:
             previous_message_id and image is not None and force_new_image_message
         )
         if replace_with_new_image:
-            message_id = self._send(
-                platform_user_id,
-                text,
-                rendered_buttons,
-                image=image,
-                notify=notify,
-            )
+            try:
+                message_id = self._send(
+                    platform_user_id,
+                    text,
+                    rendered_buttons,
+                    image=image,
+                    notify=notify,
+                )
+            except MaxTransportError:
+                # A failed POST did not replace the screen: keep its revision
+                # and keyboard usable for retry, without overwriting newer UI.
+                with self.database.transaction() as connection:
+                    connection.execute(
+                        """UPDATE active_ui_sessions SET active_screen=?,
+                               active_screen_context=?,ui_revision=?,updated_at=?
+                           WHERE platform_user_id=? AND ui_revision=?
+                             AND active_ui_message_id=?""",
+                        (row["active_screen"], row["active_screen_context"],
+                         current_revision, _now(), platform_user_id, revision,
+                         previous_message_id),
+                    )
+                raise
         elif previous_message_id:
             try:
                 if image is None:
@@ -426,7 +441,11 @@ class MaxUiShell:
             try:
                 self.transport.delete_message(previous_message_id)
             except MaxTransportError:
-                pass
+                # Keep at most one actionable screen even if DELETE fails.
+                try:
+                    self.transport.edit_message(previous_message_id, "Экран обновлён.", ())
+                except MaxTransportError:
+                    pass  # Revision/message guards still reject this keyboard.
             self.keyboards.clear_keyboard(platform_user_id, previous_message_id)
         if rendered_buttons and message_id:
             self.keyboards.register_keyboard(platform_user_id, message_id, text)
