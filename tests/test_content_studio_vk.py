@@ -304,6 +304,14 @@ class VkRewardTests(unittest.TestCase):
                 datetime.fromtimestamp(900, timezone.utc), datetime.fromtimestamp(1100, timezone.utc))
         self.assertEqual(output["vk-post-test"], dict(verified_subscriptions=1, bonus_granted=1, bonus_consumed=0))
 
+    def test_identity_key_rotation_fails_closed_instead_of_resetting_vk_uniqueness(self):
+        self.assertEqual(self.complete(self.authorize()), "GRANTED")
+        self.bridge.settings = replace(self.settings, handoff_key="y" * 32)
+        with self.assertRaises(VkRewardError):
+            self.authorize()
+        with self.database.read() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM commerce_admin_audit WHERE reason='vk_subscription_verified'").fetchone()[0], 1)
+
     def test_vk_id_exchange_checks_state_identity_and_uses_post_body(self):
         requests = []
         def handler(r):

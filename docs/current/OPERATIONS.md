@@ -422,7 +422,8 @@ Before separate integration/activation approval, review:
 - Reason is `vk_subscription_verified`, +1 edit only, initial two free credits and
   originals/referral/payment semantics unchanged. No automatic subtraction after
   unsubscribe; no duplicate reward upon re-subscribe. Preserve handoff key and
-  identity receipts across restarts/key changes; do not rotate blindly.
+  identity receipts across restarts; a private key fingerprint rejects key changes
+  or unbound legacy receipts. Key rotation requires an explicit verified migration.
 - The existing ledger adapter is not instantiated by the publisher, whose main
   DB access remains read-only. A future authenticated integration needs separate
   review; do not give the Content Studio publisher write access to main SQLite.

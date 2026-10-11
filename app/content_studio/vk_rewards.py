@@ -129,9 +129,21 @@ class VkSubscriptionRewards:
                 group_id TEXT NOT NULL, grant_key TEXT UNIQUE NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('verified','granted')),
                 verified_at REAL NOT NULL, granted_at REAL, receipt_json TEXT);
+            CREATE TABLE IF NOT EXISTS vk_reward_identity_key (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1), fingerprint TEXT NOT NULL);
         """)
         try:
             conn.execute("BEGIN IMMEDIATE")
+            # A changed HMAC key must not make an already rewarded VK identity
+            # appear new. Rotation requires an explicit verified migration.
+            fingerprint = hashlib.sha256(self.settings.handoff_key.encode()).hexdigest()
+            previous = conn.execute("SELECT fingerprint FROM vk_reward_identity_key WHERE singleton=1").fetchone()
+            if previous and not hmac.compare_digest(previous[0], fingerprint):
+                raise VkRewardError("VK reward identity key changed; operator migration required")
+            if not previous:
+                if conn.execute("SELECT 1 FROM vk_subscription_rewards LIMIT 1").fetchone():
+                    raise VkRewardError("Unbound VK reward identity receipts; operator review required")
+                conn.execute("INSERT INTO vk_reward_identity_key VALUES(1,?)", (fingerprint,))
             yield conn
             conn.commit()
         except Exception:
