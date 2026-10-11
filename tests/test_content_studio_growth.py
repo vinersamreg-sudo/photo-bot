@@ -221,8 +221,8 @@ class ContentStudioGrowthTests(unittest.TestCase):
         posts = service.repository.queue(limit=100)
         self.assertTrue(all(post["publish_status"] == "scheduled" for post in posts))
         self.assertEqual(sum(post["platform"] == "max" for post in posts), 7)
-        self.assertEqual(sum(post["id"].startswith("vk-clip-") for post in posts), 5)
-        self.assertEqual(sum(post["id"].startswith("vk-post-") for post in posts), 2)
+        self.assertEqual(sum(post["id"].startswith("vk-video-") for post in posts), 2)
+        self.assertEqual(sum(post["id"].startswith("vk-post-") for post in posts), 5)
         self.assertTrue(all(str(post["source_code"]).startswith("src_") for post in posts))
 
     def test_blocked_category_selects_alternative_for_same_slot(self) -> None:
@@ -321,12 +321,12 @@ class ContentStudioGrowthTests(unittest.TestCase):
                 },
             )
         )
-        now = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 8, 21, 8, 0, tzinfo=timezone.utc)
         ideas = engine._idea_pool(now.date(), engine.optimization())
         asset = engine._select_assets(
             now.date(), 8, engine.optimization(), ideas=ideas
-        )[0]
-        post_id = f"vk-clip-{now.date().isoformat()}-{asset.id}"
+        )[1]
+        post_id = f"vk-video-{now.date().isoformat()}-{asset.id}"
         _, output = engine.service.storage.output_path(
             "videos", post_id, "vertical.mp4"
         )

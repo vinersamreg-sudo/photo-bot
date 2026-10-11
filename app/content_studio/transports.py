@@ -19,6 +19,21 @@ from .publisher import PlatformPublisher, PublisherAdapter
 class ContentPublishingError(RuntimeError):
     """A privacy-safe publishing failure; remote response bodies are never exposed."""
 
+    def __init__(self, message: str, *, stage: str = "unknown", http_status: int | None = None,
+                 api_code: int | None = None, confirmed_rejection: bool = False):
+        super().__init__(message)
+        self.stage = stage
+        self.http_status = http_status
+        self.api_code = api_code
+        self.confirmed_rejection = confirmed_rejection
+
+    def diagnostic(self) -> str:
+        return f"{type(self).__name__}:stage={self.stage}:http={self.http_status}:code={self.api_code}"
+
+
+class ContentPublicationUncertainError(ContentPublishingError):
+    """A potentially accepted POST must be reconciled, never blindly re-sent."""
+
 
 _SECRET_TEXT = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
@@ -287,6 +302,7 @@ class TelegramChannelTransport(_RetrySafeTransport):
 
 class VkCommunityTransport(_RetrySafeTransport):
     _UPLOAD_HOST_SUFFIXES = (".vk.com", ".vk.ru", ".userapi.com", ".vkvideo.ru")
+    _DEFINITE_REJECTIONS = frozenset({5, 6, 7, 9, 14, 15, 27, 28, 100, 214})
 
     def __init__(
         self,
@@ -298,6 +314,7 @@ class VkCommunityTransport(_RetrySafeTransport):
         api_version: str = "5.199",
         api_client: httpx.Client | None = None,
         upload_client: httpx.Client | None = None,
+        delivery_repository=None,
     ) -> None:
         if not access_token or not group_id.isdigit() or int(group_id) <= 0:
             raise ContentPublishingError("VK Content Studio is not configured")
@@ -309,6 +326,7 @@ class VkCommunityTransport(_RetrySafeTransport):
         self.group_id = group_id
         self.api_version = api_version
         self.media_root = media_root.resolve()
+        self.delivery_repository = delivery_repository
         self.api_client = api_client or httpx.Client(
             base_url="https://api.vk.com/method/",
             timeout=30,
@@ -317,53 +335,110 @@ class VkCommunityTransport(_RetrySafeTransport):
         self.upload_client = upload_client or httpx.Client(timeout=120)
 
     def audit_permissions(self) -> dict[str, object]:
+        mask = self._call("account.getAppPermissions", {})
+        scopes = isinstance(mask, int) and not isinstance(mask, bool) and mask & 8212 == 8212
         value = self._call(
             "groups.getById",
             {
                 "group_ids": self.group_id,
-                "fields": "can_post,can_upload_video,can_upload_clip",
+                "fields": "can_post,can_upload_video",
             },
         )
         groups = value.get("groups", []) if isinstance(value, dict) else value
         group = groups[0] if isinstance(groups, list) and groups else {}
-        can_post = bool(group.get("can_post")) if isinstance(group, dict) else False
-        can_video = bool(group.get("can_upload_video")) if isinstance(group, dict) else False
+        matched = isinstance(group, dict) and str(group.get("id")) == self.group_id
+        can_post = matched and group.get("can_post") == 1
+        can_video = matched and group.get("can_upload_video") == 1
         return {
             "group_id": self.group_id,
             "authenticated": True,
             "can_post": can_post,
             "can_upload_video": can_video,
-            "ready": can_post and can_video,
+            "scopes_wall_photos_video": scopes,
+            "clips": "NOT PROVEN: ordinary video only",
+            "ready": scopes and can_post and can_video,
         }
 
     def publish(self, payload: dict[str, Any]) -> str:
         text, media = _validated_payload(
             payload, platform="vk", max_text=4096, media_root=self.media_root
         )
+        repo = self.delivery_repository
+        if repo is None:
+            raise ContentPublishingError("VK publication requires a durable delivery repository")
+        post_id = str(payload["post_id"])
+        state = repo.vk_delivery(post_id)
+        if state and state["destination"] != self.group_id:
+            raise ContentPublishingError("VK delivery destination changed")
+        if state and state["state"] == "confirmed":
+            return str(state["external_id"])
         permissions = self.audit_permissions()
         if permissions["ready"] is not True:
             raise ContentPublishingError("VK community permissions are insufficient")
         source = str(payload.get("source_code") or "")
         existing = self._find_existing(source)
         if existing:
+            if state:
+                existing = self._with_video_id(existing, state["attachment"])
+                repo.confirm_vk_send(post_id, existing)
             return existing
-        if media.suffix.lower() == ".mp4":
-            return self._publish_video(payload, text, media)
-        return self._publish_photo(payload, text, media)
+        if state and state["state"] == "sending":
+            raise ContentPublicationUncertainError("VK send outcome needs reconciliation", stage="wall.post")
+        if not state:
+            attachment = (
+                self._publish_video(payload, text, media) if media.suffix.lower() == ".mp4"
+                else self._publish_photo(payload, text, media)
+            )
+            repo.prepare_vk_delivery(post_id, self.group_id, attachment)
+            state = repo.vk_delivery(post_id)
+        if not repo.begin_vk_send(post_id):
+            raise ContentPublicationUncertainError("VK send is already claimed", stage="wall.post")
+        try:
+            external = self._with_video_id(
+                f"wall:{self._wall_post(payload, text, state['attachment'])}", state["attachment"]
+            )
+        except ContentPublishingError as error:
+            # Only known authentication/permission/validation/rate rejections
+            # prove no send. Internal/unknown API errors may be ambiguous too.
+            if error.confirmed_rejection:
+                repo.reset_vk_send(post_id)
+            raise
+        repo.confirm_vk_send(post_id, external)
+        return external
 
-    def metrics(self, external_id: str) -> dict[str, int]:
+    @staticmethod
+    def _with_video_id(external: str, attachment: str) -> str:
+        return external + f";video:{attachment.rsplit('_', 1)[1]}" if attachment.startswith("video") else external
+
+    def metrics(self, external_id: str) -> dict[str, int | str]:
         post_id = _external_part(external_id, "wall") or external_id
         value = self._call("wall.getById", {"posts": f"-{self.group_id}_{post_id}"})
         items = value.get("items", []) if isinstance(value, dict) else value
         post = items[0] if isinstance(items, list) and items else {}
-        views = (post.get("views") or {}).get("count", 0) if isinstance(post, dict) else 0
-        likes = (post.get("likes") or {}).get("count", 0) if isinstance(post, dict) else 0
-        comments = (post.get("comments") or {}).get("count", 0) if isinstance(post, dict) else 0
-        return {
-            "views": int(views or 0),
-            "reactions": int(likes or 0),
-            "comments": int(comments or 0),
-        }
+        result: dict[str, int | str] = {"clicks": "NOT MEASURABLE", "impressions": "NOT MEASURABLE"}
+        for name, key in (("views", "views"), ("reactions", "likes"), ("comments", "comments")):
+            count = (post.get(key) or {}).get("count") if isinstance(post, dict) else None
+            result[name] = count if isinstance(count, int) and count >= 0 else "NOT MEASURABLE"
+        video_id = _external_part(external_id, "video")
+        result["video_views"] = "NOT MEASURABLE"
+        if video_id:
+            try:
+                videos = self._call("video.get", {"videos": f"-{self.group_id}_{video_id}"})
+                items = videos.get("items", []) if isinstance(videos, dict) else []
+                count = items[0].get("views") if items else None
+                if isinstance(count, int) and count >= 0:
+                    result["video_views"] = count
+            except ContentPublishingError:
+                pass
+        try:
+            reach = self._call("stats.getPostReach", {"owner_id": f"-{self.group_id}", "post_ids": post_id})
+            if isinstance(reach, list) and reach and isinstance(reach[0].get("reach_total"), int):
+                result["reach"] = reach[0]["reach_total"]
+            else:
+                result["reach"] = "NOT MEASURABLE"
+        except ContentPublishingError:
+            result["reach"] = "NOT MEASURABLE"
+        return result
 
     def _publish_photo(self, payload: dict[str, Any], text: str, media: Path) -> str:
         upload = self._call("photos.getWallUploadServer", {"group_id": self.group_id})
@@ -382,8 +457,9 @@ class VkCommunityTransport(_RetrySafeTransport):
         photo = saved[0] if isinstance(saved, list) and saved else None
         if not isinstance(photo, dict) or "owner_id" not in photo or "id" not in photo:
             raise ContentPublishingError("VK did not confirm the saved wall photo")
-        post_id = self._wall_post(payload, text, f"photo{photo['owner_id']}_{photo['id']}")
-        return f"wall:{post_id}"
+        if str(photo["owner_id"]) != f"-{self.group_id}" or not str(photo["id"]).isdigit():
+            raise ContentPublishingError("VK saved photo has an unexpected owner")
+        return f"photo{photo['owner_id']}_{photo['id']}"
 
     def _publish_video(self, payload: dict[str, Any], text: str, media: Path) -> str:
         saved = self._call(
@@ -401,10 +477,9 @@ class VkCommunityTransport(_RetrySafeTransport):
         uploaded = self._upload(upload_url, "video_file", media)
         owner_id = uploaded.get("owner_id") or saved.get("owner_id")
         video_id = uploaded.get("video_id") or saved.get("video_id")
-        if owner_id is None or video_id is None:
+        if str(owner_id) != f"-{self.group_id}" or not str(video_id).isdigit():
             raise ContentPublishingError("VK did not confirm the uploaded video")
-        post_id = self._wall_post(payload, text, f"video{owner_id}_{video_id}")
-        return f"wall:{post_id};video:{video_id}"
+        return f"video{owner_id}_{video_id}"
 
     def _wall_post(self, payload: dict[str, Any], text: str, attachment: str) -> str:
         posted = self._call(
@@ -418,7 +493,7 @@ class VkCommunityTransport(_RetrySafeTransport):
             },
         )
         post_id = posted.get("post_id") if isinstance(posted, dict) else None
-        if post_id is None:
+        if not str(post_id).isdigit() or int(post_id) <= 0:
             raise ContentPublishingError("VK did not confirm the community post")
         return str(post_id)
 
@@ -428,7 +503,9 @@ class VkCommunityTransport(_RetrySafeTransport):
         value = self._call("wall.get", {"owner_id": f"-{self.group_id}", "count": "100"})
         items = value.get("items", []) if isinstance(value, dict) else []
         for post in items:
-            if isinstance(post, dict) and source in str(post.get("text") or "") and post.get("id"):
+            if (isinstance(post, dict) and post.get("from_id") == -int(self.group_id)
+                    and re.search(r"start=" + re.escape(source) + r"(?:[&\s]|$)", str(post.get("text") or ""))
+                    and str(post.get("id", "")).isdigit()):
                 return f"wall:{post['id']}"
         return None
 
@@ -439,15 +516,15 @@ class VkCommunityTransport(_RetrySafeTransport):
                     str(upload_url), files={field: (media.name, stream, _media_type(media))}
                 )
         except httpx.TimeoutException as error:
-            raise ContentPublishingError("VK media upload timed out") from error
+            raise ContentPublishingError("VK media upload timed out", stage="media.upload") from None
         except (OSError, httpx.HTTPError) as error:
-            raise ContentPublishingError("VK media upload failed") from error
+            raise ContentPublishingError("VK media upload failed", stage="media.upload") from None
         if response.status_code >= 400:
-            raise ContentPublishingError(f"VK media upload returned HTTP {response.status_code}")
+            raise ContentPublishingError(f"VK media upload returned HTTP {response.status_code}", stage="media.upload", http_status=response.status_code)
         try:
             value = response.json()
         except ValueError as error:
-            raise ContentPublishingError("VK media upload returned invalid JSON") from error
+            raise ContentPublishingError("VK media upload returned invalid JSON", stage="media.upload") from None
         if not isinstance(value, dict):
             raise ContentPublishingError("VK media upload response is invalid")
         return value
@@ -457,17 +534,23 @@ class VkCommunityTransport(_RetrySafeTransport):
         try:
             response = self.api_client.post(method, data=fields)
         except httpx.TimeoutException as error:
-            raise ContentPublishingError("VK API request timed out") from error
+            raise ContentPublishingError("VK API request timed out", stage=method) from None
         except httpx.HTTPError as error:
-            raise ContentPublishingError("VK API request failed") from error
+            raise ContentPublishingError("VK API request failed", stage=method) from None
         if response.status_code >= 400:
-            raise ContentPublishingError(f"VK API returned HTTP {response.status_code}")
+            raise ContentPublishingError(f"VK API returned HTTP {response.status_code}", stage=method, http_status=response.status_code)
         try:
             value = response.json()
         except ValueError as error:
-            raise ContentPublishingError("VK API returned invalid JSON") from error
+            raise ContentPublishingError("VK API returned invalid JSON", stage=method, http_status=response.status_code) from None
         if not isinstance(value, dict) or "response" not in value:
-            raise ContentPublishingError("VK API rejected the request")
+            error = value.get("error") if isinstance(value, dict) else None
+            code = error.get("error_code") if isinstance(error, dict) else None
+            if not isinstance(code, int) or isinstance(code, bool):
+                code = None
+            raise ContentPublishingError("VK API rejected the request", stage=method,
+                                         http_status=response.status_code, api_code=code,
+                                         confirmed_rejection=code in self._DEFINITE_REJECTIONS)
         return value["response"]
 
     @classmethod
@@ -476,13 +559,13 @@ class VkCommunityTransport(_RetrySafeTransport):
             raise ContentPublishingError("VK did not return a media upload URL")
         parsed = urlparse(value)
         host = (parsed.hostname or "").lower()
-        if parsed.scheme != "https" or not any(
+        if parsed.username or parsed.password or parsed.port not in (None, 443) or parsed.scheme != "https" or not any(
             host == suffix[1:] or host.endswith(suffix) for suffix in cls._UPLOAD_HOST_SUFFIXES
         ):
             raise ContentPublishingError("VK returned an untrusted media upload URL")
 
 
-def build_publishers(settings: ContentStudioSettings) -> dict[str, PublisherAdapter]:
+def build_publishers(settings: ContentStudioSettings, repository=None) -> dict[str, PublisherAdapter]:
     """Build fail-closed adapters without sharing credentials between platforms."""
 
     publishers: dict[str, PublisherAdapter] = {}
@@ -524,13 +607,15 @@ def build_publishers(settings: ContentStudioSettings) -> dict[str, PublisherAdap
 
     vk_transport = None
     if settings.vk_publishing_enabled:
-        vk_transport = VkCommunityTransport(
-            settings.vk_access_token,
-            settings.vk_group_id,
-            settings.storage_dir,
-            token_type=settings.vk_token_type,
-            api_version=settings.vk_api_version,
-        )
+        try:
+            vk_transport = VkCommunityTransport(
+                settings.vk_access_token, settings.vk_group_id, settings.storage_dir,
+                token_type=settings.vk_token_type, api_version=settings.vk_api_version,
+                delivery_repository=repository,
+            )
+        except ContentPublishingError:
+            # A missing/revoked VK configuration cannot stop the MAX scheduler.
+            vk_transport = None
     publishers["vk"] = PlatformPublisher(
         platform="vk",
         publishing_enabled=settings.publishing_enabled and settings.vk_publishing_enabled,

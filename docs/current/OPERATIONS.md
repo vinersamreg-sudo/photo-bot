@@ -331,13 +331,111 @@ relax novelty or recycle published assets to turn the health check green.
 Replenishment creates only future normal slots, not a backfill row for an already
 missed slot today. Existing scheduled due rows remain subject to normal gates.
 
-MAX publishes one image post daily at 19:00 Samara. VK schedules one vertical
-H.264 1080x1920 video daily at 20:00 and a wall before/after post on Monday,
-Wednesday and Friday at 18:30. Polling every 15 minutes does not increase these
+MAX publishes one image post daily at 19:00 Samara. VK schedules one wall
+before/after photo daily at 18:30 and one vertical H.264 1080x1920 video at 20:00
+on Monday, Wednesday and Friday (`CONTENT_STUDIO_VK_VIDEO_WEEKDAYS=0,2,4`).
+Polling every 15 minutes does not increase these
 limits. The official VK wall/video methods require a user token, so
 `CONTENT_STUDIO_VK_TOKEN_TYPE` must remain `user`; unsupported token types fail
 closed. Video generation uses only the separate local FFmpeg runtime and never
 invokes the production image provider or an AI video API.
+
+### Prepared VK growth channel (default OFF)
+
+Reuse the existing community, destination configured as
+`CONTENT_STUDIO_VK_GROUP_ID=240763768`; do not create a replacement community.
+Keep `CONTENT_STUDIO_VK_PUBLISHING_ENABLED=false` until an explicitly approved
+controlled live test. Content Studio owns its separate queues/database; the main
+bot, payment configuration and provider are not changed by this integration.
+Copy is VK-specific, includes a concrete task, the offer
+`Обработайте 2 фотографии бесплатно` and a unique existing MAX campaign deep link.
+Rights/checksum/quality/category/novelty gates remain mandatory. An exhausted
+library is DEGRADED, not permission to reuse published assets or call image APIs.
+At 10 VK units/week, a finite 61-card library is roughly six weeks of unique VK
+content at most, not unlimited autonomous content generation; quality/novelty
+rejections can reduce that buffer. MAX has its own consumption history.
+
+Publication permission audit uses `account.getAppPermissions` (photos, video,
+wall) and community `can_post`/`can_upload_video`; destination must match. A
+community token is not substituted for a user token for user-only methods.
+`stats.getPostReach` and `video.get` are optional read-only measurements:
+permission/availability failure means `NOT MEASURABLE`, not zero. Official
+schemas: [photos](https://github.com/VKCOM/vk-api-schema/blob/master/photos/methods.json),
+[video](https://github.com/VKCOM/vk-api-schema/blob/master/video/methods.json),
+[wall](https://github.com/VKCOM/vk-api-schema/blob/master/wall/methods.json),
+[stats](https://github.com/VKCOM/vk-api-schema/blob/master/stats/methods.json).
+Schemas establish the supported contract, not that our credential/app has access.
+
+Content Studio schema6 adds only its own `content_vk_deliveries` outbox and
+`content_platform_metrics`. Main Ravuna schema/balances are unchanged. Uploaded
+attachment identity is durable before the wall POST. Only a known structured
+authentication/permission/validation/rate rejection allows retry; internal or
+unknown API errors, timeout/5xx/malformed responses remain `sending` and are
+reconciled against an exact campaign match posted by this community. No match in
+the bounded 100-post history is NOT proof of absence: preserve the uncertain
+send for operator investigation, never repost blindly. A confirmed external ID
+survives restart. VK-only expired slot claims (15 minutes) can resume safely
+through the durable outbox; live claims and MAX claims are not reclaimed.
+An invalid VK configuration or publication failure does not abort MAX publication.
+Privacy-safe failure records retain action/HTTP/API code, never response bodies,
+access tokens or upload URLs. Keep publisher SQLite private (0600), data 0700.
+
+Vertical videos are 13 seconds, DO→AFTER, with a bounded readable task overlay
+and free CTA. They are ordinary uploaded community videos attached to wall posts.
+No public Clip publishing contract or app entitlement has been verified; no
+hidden `shortVideo.*` methods, cookie/browser automation or false Clip claim.
+Ask VK for official Clip API eligibility before adding that capability.
+
+Weekly `content dashboard --days 7` includes a separate VK section. A standalone
+strictly read-only form avoids even Content Studio initialization:
+
+```bash
+scripts/ravuna content vk-report --days 7 --format json
+```
+
+Both SQLite connections use `mode=ro` + `query_only`; ResultURL signature/HTTP200,
+processed event, paid order and linked grant are required and invoices deduplicated.
+First-touch campaign cohorts use successful generation records and confirmed
+first/repeat purchases, not analytics purchase counters. Owner/test exclusion uses
+the canonical proven `MAX_OWNER_USER_IDS` mapping; missing/ambiguous identity
+closes commercial metrics as `NOT MEASURABLE`. Configure that verified filter in
+the isolated Content Studio environment before relying on revenue numbers.
+Engagement is the latest cumulative snapshot, not weekly increments. Direct MAX
+link clicks/impressions are unavailable without separate approved instrumentation.
+Gross confirmed revenue is not net profit. Bonus use requires a proven lot receipt;
+no inference from referral rewards or generic balance consumption.
+
+The prepared `vk_rewards.py` bridge is **not registered in photo-bot**, its button,
+HTTP server, nginx or production service. This respects the current no-main-bot
+change scope; setting its flag alone cannot activate a customer-facing bonus.
+Before separate integration/activation approval, review:
+
+- VK ID application/redirect approval and HTTPS endpoint; Authorization Code +
+  PKCE/state/device binding per the [official VK ID SDK](https://github.com/VKCOM/vkid-web-sdk/blob/master/src/auth/auth.ts).
+- An authenticated MAX backend issues the signed 120-second handoff; never expose
+  the issuer publicly or accept a user ID/profile URL supplied by the browser.
+- The bridge stores short-lived PKCE verifier in private 0600 SQLite, erases it on
+  callback claim, does not persist tokens/profile fields; VK identity is HMAC-bound.
+- Official `groups.isMember` verifies this community. Nonmember/error means no
+  grant. Unique MAX account and VK subject prevent re-enrollment rewards; a
+  verified outbox plus stable existing ledger idempotency key recover a crash.
+- Reason is `vk_subscription_verified`, +1 edit only, initial two free credits and
+  originals/referral/payment semantics unchanged. No automatic subtraction after
+  unsubscribe; no duplicate reward upon re-subscribe. Preserve handoff key and
+  identity receipts across restarts/key changes; do not rotate blindly.
+- The existing ledger adapter is not instantiated by the publisher, whose main
+  DB access remains read-only. A future authenticated integration needs separate
+  review; do not give the Content Studio publisher write access to main SQLite.
+- Confirm VK's incentive policy and personal-data consent/retention terms before
+  enabling. Policy pages/app eligibility were not accessible for definitive
+  validation; code readiness does not assert legal/platform approval.
+
+Owner connection steps: obtain official minimum-scope user authorization
+(`photos`, `video`, `wall`; optional stats), store only in isolated private env/
+approved secret mechanism, run read-only permission audit, verify FFmpeg/ffprobe
+and font on the isolated runtime, dry-run queue, then request bounded photo/video
+live-test GO. VK ID/membership/handoff credentials are separate from publication
+credentials. No real posts or rewards are authorized by preparation/PR creation.
 
 ## Daily checks
 
