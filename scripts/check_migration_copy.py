@@ -57,6 +57,16 @@ def _commerce_snapshot(connection: sqlite3.Connection) -> dict[str, dict[str, ob
     paid_placeholders = ",".join("?" for _ in PAID_STATUSES)
     queries: dict[str, tuple[str, tuple[object, ...]]] = {
         "users": ("SELECT * FROM users ORDER BY id", ()),
+        "credit_accounts": ("SELECT * FROM user_credit_accounts ORDER BY user_id", ()),
+        "credit_reservations": ("SELECT * FROM generation_credit_reservations ORDER BY id", ()),
+        "gallery_items": ("SELECT * FROM gallery_items ORDER BY id", ()),
+        "gallery_versions": ("SELECT * FROM gallery_versions ORDER BY id", ()),
+        "referral_codes": ("SELECT * FROM referral_codes ORDER BY user_id", ()),
+        # Compare the unchanged legacy columns, not newly added V2 metadata.
+        "referral_relationships": ("""SELECT id,referral_code,inviter_user_id,invitee_platform_user_id,
+            invitee_user_id,status,started_at,rewarded_at,created_at,updated_at
+            FROM referral_relationships ORDER BY id""", ()),
+        "legacy_referral_rewards": ("SELECT * FROM bonus_credit_transactions ORDER BY id", ()),
         "paid_orders": (
             f"SELECT * FROM payment_orders WHERE status IN ({paid_placeholders}) ORDER BY id",
             PAID_STATUSES,

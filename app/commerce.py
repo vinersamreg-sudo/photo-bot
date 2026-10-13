@@ -315,7 +315,11 @@ class CommerceService:
         delta: int,
         reason: str,
         idempotency_key: str,
+        referral_promotion: bool = False,
     ) -> CreditBalance:
+        if referral_promotion and (delta != 4 or reason != "referral_v2_inviter"
+                                   or not idempotency_key.startswith("referral-v2:")):
+            raise InvalidInputError("Invalid referral promotion contract")
         if delta == 0 or not reason.strip() or not idempotency_key:
             raise InvalidInputError("Non-zero delta, reason and idempotency key are required")
         existing = connection.execute(
@@ -332,7 +336,7 @@ class CommerceService:
         account = self.ensure_initial_grant(connection, user_id)
         if delta < 0 and account.available < -delta:
             raise InvalidInputError("Adjustment would make generation balance negative")
-        if delta > 0 and account.available + account.reserved + delta > MAX_ACCOUNT_BALANCE:
+        if delta > 0 and not referral_promotion and account.available + account.reserved + delta > MAX_ACCOUNT_BALANCE:
             raise InvalidInputError("Generation balance safety limit exceeded")
         now = _iso(self.clock())
         if delta > 0:

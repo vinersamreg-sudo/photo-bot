@@ -203,7 +203,7 @@ class FeedbackTests(TestCase):
     def test_fresh_schema_contains_only_minimal_feedback_fields_and_foreign_keys(self) -> None:
         with self.database.read() as connection:
             self.assertEqual(schema_version(connection), CURRENT_SCHEMA_VERSION)
-            self.assertEqual(CURRENT_SCHEMA_VERSION, 15)
+            self.assertEqual(CURRENT_SCHEMA_VERSION, 16)
             fields = {row[1] for row in connection.execute("PRAGMA table_info(service_feedback)")}
             foreign_keys = {
                 row[3]: (row[2], row[4], row[6])
@@ -238,7 +238,7 @@ class FeedbackTests(TestCase):
                    ) VALUES(?,'owner','negative','synthetic-reason',?,?)""", (version_id, now, now),
             )
             connection.execute("DROP TABLE service_feedback")
-            connection.execute("DELETE FROM schema_migrations WHERE version=15")
+            connection.execute("DELETE FROM schema_migrations WHERE version>=15")
         tables = ("users", "gallery_items", "gallery_versions", "user_feedback", "version_feedback")
         with self.database.read() as connection:
             self.assertEqual(schema_version(connection), 14)
@@ -254,7 +254,7 @@ class FeedbackTests(TestCase):
         for _ in range(2):
             Database(self.database.path)
             with self.database.read() as connection:
-                self.assertEqual(schema_version(connection), 15)
+                self.assertEqual(schema_version(connection), CURRENT_SCHEMA_VERSION)
                 for table in tables:
                     self.assertEqual(
                         [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")], before[table]

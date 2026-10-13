@@ -59,6 +59,22 @@ PURCHASE_OPTIONS_TEXT = (
     "⚡ 2 обработки + 1 оригинал — 49 ₽\n\n"
     "💎 100 обработок + 50 оригиналов — 1990 ₽"
 )
+REFERRAL_V2_BUTTON = "🎁 Пригласить друга — получить 4 обработки и 2 оригинала"
+
+
+def referral_button_text(v2: bool, grants_enabled: bool = True) -> str:
+    if not grants_enabled:
+        return "🎁 Пригласить друга"
+    return REFERRAL_V2_BUTTON if v2 else "🎁 Пригласить друга — получить +2 обработки"
+
+
+def _main_referral(view, v2, grants_enabled):
+    if not v2:
+        return view
+    block = ("🎁 Пригласите друга: ему — 2 бесплатные обработки и 1 оригинал.\n"
+             "Вам — 4 обработки и 2 оригинала после его первой успешной обработки.") if grants_enabled else "🎁 Начисление новых реферальных бонусов временно приостановлено."
+    return View(view.text + "\n\n" + block,
+                view.buttons + (Button(referral_button_text(True, grants_enabled), "referral:open"),))
 
 
 @dataclass(frozen=True)
@@ -120,6 +136,7 @@ def main_menu(
     originals: int,
     payment_url: str | None = None,
     payment_status_action: str | None = None,
+    *, referral_v2_enabled: bool = False, referral_promos_enabled: bool = True,
 ) -> View:
     balance_text = (
         "Ваш баланс:\n"
@@ -155,9 +172,9 @@ def main_menu(
                 "https://ravuna.ru/legal/personal-data.html",
             ),
         )
-        return View(text, buttons)
+        return _main_referral(View(text, buttons), referral_v2_enabled, referral_promos_enabled)
     text = WELCOME_TEXT + "\n\n" + balance_text
-    return View(
+    return _main_referral(View(
         text,
         (
             Button("📁 Мои работы", "studio:works"),
@@ -170,7 +187,7 @@ def main_menu(
                 "https://ravuna.ru/legal/personal-data.html",
             ),
         ),
-    )
+    ), referral_v2_enabled, referral_promos_enabled)
 
 
 def legal_view() -> View:
@@ -278,12 +295,18 @@ def studio_menu_contract() -> View:
     )
 
 
-def result_actions(remaining: int) -> View:
+def result_actions(remaining: int, *, referral_v2_enabled: bool = False, referral_promos_enabled: bool = True) -> View:
     text = (
         "Готово ✨\n"
         "Хотите ещё 2 обработки бесплатно?\n"
         "Пригласите друга — бонус начислится после его первой обработки."
     )
+    if referral_v2_enabled:
+        text = ("Готово ✨\n🎁 Пригласите друга: после его первой успешной обработки "
+                "получите 4 обработки и 2 оригинала.") if referral_promos_enabled else "Готово ✨\nНовые реферальные бонусы временно приостановлены."
+    if not referral_promos_enabled:
+        text = "Готово ✨\nНовые реферальные бонусы временно приостановлены."
+    invitation_label = referral_button_text(referral_v2_enabled, referral_promos_enabled)
     if remaining <= 0:
         text += "\n\n" + PURCHASE_OPTIONS_TEXT
         return View(
@@ -297,7 +320,7 @@ def result_actions(remaining: int) -> View:
                     2,
                 ),
                 Button(
-                    "🎁 Пригласить друга — получить +2 обработки",
+                    invitation_label,
                     "result:share",
                     3,
                 ),
@@ -313,7 +336,7 @@ def result_actions(remaining: int) -> View:
             Button("✏️ Исправить", "result:correct", 1),
             Button("📷 Другое фото", "new:source", 1),
             Button(
-                "🎁 Пригласить друга — получить +2 обработки",
+                invitation_label,
                 "result:share",
                 2,
             ),
@@ -360,11 +383,12 @@ def delete_confirmation_view() -> View:
     )
 
 
-def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
+def gallery_item_actions(remaining: int = 1, *, referral_v2_enabled: bool = False, referral_promos_enabled: bool = True) -> tuple[Button, ...]:
+    invitation_label = referral_button_text(True, referral_promos_enabled) if referral_v2_enabled else "🎁 Поделиться и получить бонус"
     if remaining <= 0:
         return (
             Button("⬇ Получить оригинал", "result:unlock"),
-            Button("🎁 Поделиться и получить бонус", "result:share"),
+            Button(invitation_label, "result:share"),
             Button(SMALL_PURCHASE_BUTTON_TEXT, "package:offer"),
             Button(
                 LARGE_PURCHASE_BUTTON_TEXT,
@@ -375,7 +399,7 @@ def gallery_item_actions(remaining: int = 1) -> tuple[Button, ...]:
         )
     return (
         Button("⬇ Получить оригинал", "result:unlock"),
-        Button("🎁 Поделиться и получить бонус", "result:share"),
+        Button(invitation_label, "result:share"),
         Button("✏️ Исправить", "result:correct"),
         Button("🎲 Другой вариант", "result:repeat"),
         Button("Ещё", "work:more"),

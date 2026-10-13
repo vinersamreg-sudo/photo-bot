@@ -124,8 +124,9 @@ pending request; a previous or latest completed work is never used as fallback.
   the processing message deleted. Subsequent callback navigation continues
   edit-in-place. The result card leads with the original action, groups
   “✏️ Исправить” and “📷 Другое фото” in one row, then shows the referral CTA.
-  The inviter receives two bonus edits only after the invitee's first successful
-  edit. “📷 Другое фото” reuses the existing one/two-source upload flow.
+  Referral copy follows the enabled program version; V2 rewards +4 edits/+2
+  originals after a new invitee's first delivered edit. With V2 OFF, existing V1
+  remains +2 edits only. “📷 Другое фото” reuses the existing source upload flow.
 - The result screen retains “⭐ Оценить” and the existing 1–5 ratings.
 - A centralized UI shell adds “💬 Поделиться мнением” as a separate
   keyboard row on main/purchase/zero-balance, upload, ready result, works,
@@ -265,21 +266,52 @@ never reuse a `pending` order whose `expires_at` has passed.
 
 - Each user receives one random opaque 10–20 character referral code. Share
   links use the configured `MAX_BOT_URL` and a `ref_<code>` start payload.
-- The share screen keeps the watermarked preview and provides two MAX
+- V1 (default while `REFERRAL_V2_ENABLED=false`) keeps the watermarked preview and provides two MAX
   `clipboard` buttons: one copies the complete Unicode invitation and one copies
   only the referral URL. It does not use the unstable `:share` browser flow,
   expose original media or invite the owner to open their own referral link.
 - The first valid referrer is retained only for a previously unused account.
   Self-referrals, existing users and duplicate/concurrent rewards are rejected.
-- After the invitee's first successfully delivered preview, the inviter receives
-  exactly two bonus edits. The additive bonus ledger does not alter paid grants
-  and does not create an original entitlement.
+- A relationship snapshots program version at its first valid registration.
+  Historical V1 relationships/rewards remain +2 edits / 0 originals; never upgrade
+  a historical grant or switch a pending V1 relationship to V2 retroactively.
+- Under V2, an ordinary new account still receives exactly 2 edits / 0 originals.
+  A new authenticated MAX account using a valid opaque referral code receives
+  2 edits TOTAL plus 1 original in the same registration transaction. Each first
+  delivered edit gives its inviter +4 edits / +2 originals atomically. There is
+  no invitation count or promotion balance ceiling (100 qualified friends means
+  +400 edits / +200 originals, independent of the inviter's existing balance).
+- V2 adds an informational block and separate
+  `🎁 Пригласить друга — получить 4 обработки и 2 оригинала` button on the main
+  menu including zero balance, result and opened-work actions. It does not add
+  promotional blocks to photo intake, processing or every purchase screen.
+- V2's text-only screen works without any uploaded/selected photo:
+  `🎁 Подарите другу готовую фотографию!` / `Ваш друг получит 2 бесплатные обработки
+  и 1 оригинал без водяного знака.` / `После первой успешной обработки друга вы
+  получите 4 обработки и 2 оригинала.` / `Приглашайте сколько угодно друзей!`
+  It shows the personal existing MAX referral URL, clipboard invitation explaining
+  both parties' rewards, optional URL-only clipboard, actual balances and Back.
+  Back returns to the owned work if one was selected, otherwise main menu. The
+  service does not automatically forward invitations or send messages as the user.
+- `REFERRAL_PROMO_GRANTS_ENABLED=false` pauses NEW V1/V2 registrations/rewards,
+  not existing balances, original rights, payments or generation. V2 UI explicitly
+  says new bonuses are paused instead of promising unavailable rewards. Turning
+  V2 OFF also prevents V2 inviter grants; already issued V2 originals remain usable.
+- Original delivery uses the same confirmed-send reservation/commit contract:
+  failed delivery releases the right, successful redelivery of an unlocked
+  version consumes no additional right and never creates an unnecessary checkout.
 - Allowlisted start sources are MAX channel, site, VK, OK, partner and campaign
   payloads. First-touch attribution is immutable; analytics stores event/source
   metadata but no prompts or images.
 - The private operator command `python -m app.main growth-status --days 30
   --format human` reports starts, first edits, payments, conversion, shares and
   referral rewards without personal data.
+- Its weekly output includes the owner-excluded referral ledger section. The
+  standalone `scripts/ravuna referral-report --days 7 --format human|json` reads
+  only `mode=ro/query_only` SQLite and does not initialize/migrate the database.
+  Actual sending of an invitation is NOT MEASURABLE. D+1/7/14 uses server-received
+  authenticated event activity on fully aged Samara calendar days. Legacy
+  registration timestamps/consumption without provenance remain NOT MEASURABLE.
 
 ## Buttons and stale state
 

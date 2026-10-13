@@ -878,6 +878,12 @@ def run_growth_status(
     if days < 1 or days > 366:
         raise ValueError("Growth report period must be between 1 and 366 days")
     report = AttributionService(Database(settings.database_path)).report(days)
+    from app.referral_report import build_report as build_referral_report
+    from app.feedback_report import ReportUnavailable
+    try:
+        report["referrals"] = build_referral_report(settings.database_path, days=days, owner_platform_ids=settings.max_owner_user_ids)
+    except ReportUnavailable:
+        report["referrals"] = {"status": "NOT MEASURABLE", "reason": "Verified owner/test exclusion or compatible snapshot unavailable"}
     _print_operator(report, output_format)
     return 0
 

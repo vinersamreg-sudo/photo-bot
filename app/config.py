@@ -117,6 +117,8 @@ class Settings:
     max_poll_observe_only: bool = True
     max_public_access_enabled: bool = False
     max_single_screen_ui_enabled: bool = True
+    referral_v2_enabled: bool = False
+    referral_promo_grants_enabled: bool = True
     max_owner_user_ids: tuple[str, ...] = ()
     max_pilot_user_ids: tuple[str, ...] = ()
     pilot_user_limit: int = 0
@@ -647,6 +649,8 @@ def load_settings(
         max_single_screen_ui_enabled=_boolean(
             values, "MAX_SINGLE_SCREEN_UI_ENABLED", True
         ),
+        referral_v2_enabled=_boolean(values, "REFERRAL_V2_ENABLED", False),
+        referral_promo_grants_enabled=_boolean(values, "REFERRAL_PROMO_GRANTS_ENABLED", True),
         max_owner_user_ids=owner_user_ids,
         max_pilot_user_ids=pilot_user_ids,
         pilot_user_limit=pilot_user_limit,
