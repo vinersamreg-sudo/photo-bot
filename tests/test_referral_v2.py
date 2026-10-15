@@ -1,6 +1,8 @@
 import hashlib
 import json
 import sqlite3
+import subprocess
+import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -10,7 +12,8 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
-from app.commerce import CommerceService, SMALL_PACKAGE, LARGE_PACKAGE, MAX_ACCOUNT_BALANCE
+from app.commerce import CommerceService, SMALL_PACKAGE, LARGE_PACKAGE, MAX_ACCOUNT_BALANCE, MAX_SQLITE_INTEGER
+from app.domain import InvalidInputError
 from app.database import Database, schema_version
 from app.feedback_report import ReportUnavailable
 from app.max_adapter import REFERRAL_V2_BUTTON, main_menu, result_actions, gallery_item_actions
@@ -146,6 +149,116 @@ class ReferralV2Tests(TestCase):
         self.success(user)
         self.referrals.reward_first_success(user)
         self.assertEqual(self.commerce.balance("inviter").available, MAX_ACCOUNT_BALANCE + 4)
+        _, next_user = self.register("second-at-ceiling")
+        self.success(next_user)
+        self.referrals.reward_first_success(next_user)
+        self.assertEqual(self.commerce.balance("inviter").available, MAX_ACCOUNT_BALANCE + 8)
+        with self.db.transaction() as c:
+            with self.assertRaises(InvalidInputError):
+                self.commerce.adjust_generation_credits(c, user_id="inviter", delta=1,
+                    reason="ordinary admin still bounded", idempotency_key="bounded-admin")
+
+    def test_ceiling_extension_requires_exact_earned_relationship_not_a_boolean_or_prefix(self):
+        relation, user = self.register()
+        for relationship, target in (("missing", "inviter"), (relation, "owner"), (relation, "inviter")):
+            with self.subTest(relationship=relationship, target=target):
+                with self.assertRaises(InvalidInputError), self.db.transaction() as c:
+                    self.commerce.adjust_generation_credits(c, user_id=target, delta=4,
+                        reason="referral_v2_inviter", idempotency_key=f"referral-v2:{relationship}:inviter:edits",
+                        referral_relationship_id=relationship)
+        self.assertEqual(self.commerce.balance("inviter").available, 2)
+        self.success(user)
+        with self.assertRaises(InvalidInputError), self.db.transaction() as c:
+            self.commerce.adjust_generation_credits(c, user_id="inviter", delta=8,
+                reason="referral_v2_inviter", idempotency_key=f"referral-v2:{relation}:inviter:edits",
+                referral_relationship_id=relation)
+        self.referrals.reward_first_success(user)
+        self.assertEqual(self.commerce.balance("inviter").available, 6)
+
+    def test_integer_overflow_leaves_both_bonuses_pending_and_recoverable(self):
+        relation, user = self.register()
+        self.success(user)
+        with self.db.transaction() as c:
+            # Synthetic, balanced lifetime counters near SQLite's representable limit.
+            c.execute("UPDATE user_credit_accounts SET total_generation_credits_adjusted=?,total_generation_credits_consumed=? WHERE user_id='inviter'",
+                      (MAX_SQLITE_INTEGER - 4, MAX_SQLITE_INTEGER - 4))
+        with self.assertRaisesRegex(InvalidInputError, "integer capacity"):
+            self.referrals.reward_first_success(user)
+        self.assertEqual(self.commerce.balance("inviter").available, 2)
+        self.assertEqual(self.commerce.entitlement_balance("inviter").available, 0)
+        with self.db.read() as c:
+            self.assertEqual(c.execute("SELECT status FROM referral_relationships WHERE id=?", (relation,)).fetchone()[0], "pending")
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM referral_bonus_grants WHERE beneficiary='inviter'").fetchone()[0], 0)
+            self.assertEqual(c.execute("SELECT typeof(total_generation_credits_adjusted) FROM user_credit_accounts WHERE user_id='inviter'").fetchone()[0], "integer")
+        # Repair only the synthetic near-capacity fixture, then existing restart recovery.
+        with self.db.transaction() as c:
+            c.execute("UPDATE user_credit_accounts SET total_generation_credits_adjusted=0,total_generation_credits_consumed=0 WHERE user_id='inviter'")
+        ReferralService(self.db, self.commerce, v2_enabled=True, clock=lambda: self.now)
+        self.assertEqual(self.commerce.balance("inviter").available, 6)
+        self.assertEqual(self.commerce.entitlement_balance("inviter").available, 2)
+
+    def test_corrupt_real_counter_is_rejected_before_any_bonus_write(self):
+        _, user = self.register()
+        self.success(user)
+        with self.db.transaction() as c:
+            c.execute("UPDATE user_credit_accounts SET total_generation_credits_adjusted=1.5 WHERE user_id='inviter'")
+        with self.assertRaisesRegex(InvalidInputError, "storage is invalid"):
+            self.referrals.reward_first_success(user)
+        self.assertEqual(self.commerce.balance("inviter").available, 2)
+        self.assertEqual(self.commerce.entitlement_balance("inviter").available, 0)
+
+    def test_hard_process_exit_between_bonus_types_rolls_back_and_recovers(self):
+        _, user = self.register()
+        self.success(user)
+        script = """import os,sys
+from pathlib import Path
+from app.database import Database
+from app.commerce import CommerceService
+from app.referrals import ReferralService
+db=Database(Path(sys.argv[1])); commerce=CommerceService(db)
+referrals=ReferralService(db,commerce,v2_enabled=False)
+referrals.v2_enabled=True
+commerce.adjust_unlock_entitlements=lambda *args,**kwargs: os._exit(73)
+referrals.reward_first_success(sys.argv[2])
+"""
+        stopped = subprocess.run([sys.executable, "-c", script, str(self.path), user],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=30)
+        self.assertEqual(stopped.returncode, 73)
+        self.assertEqual(self.commerce.balance("inviter").available, 2)
+        self.assertEqual(self.commerce.entitlement_balance("inviter").available, 0)
+        ReferralService(self.db, self.commerce, v2_enabled=True, clock=lambda: self.now)
+        self.assertEqual(self.commerce.balance("inviter").available, 6)
+        self.assertEqual(self.commerce.entitlement_balance("inviter").available, 2)
+
+    def test_paid_lots_and_originals_unchanged_by_promotion_and_pause(self):
+        from app.config import Settings
+        from app.payments import build_payment_service
+        settings = Settings("", "fake", "test", Path(self.temp.name), payments_enabled=True, payment_provider="robokassa",
+            robokassa_merchant_login="fixture", robokassa_password1="fixture-one", robokassa_password2="fixture-two")
+        payment = build_payment_service(settings, self.db, clock=lambda: self.now)
+        for package in (SMALL_PACKAGE, LARGE_PACKAGE):
+            order = payment.create_order("inviter", None, "paid-" + package.code, account_purchase=True, product_code=package.code)
+            amount = f"{package.price_minor / 100:.2f}"
+            fields = {"OutSum": amount, "InvId": str(order.provider_invoice_id), "Shp_order": order.public_token}
+            fields["SignatureValue"] = hashlib.sha256(f"{amount}:{order.provider_invoice_id}:fixture-two:Shp_order={order.public_token}".encode()).hexdigest()
+            self.assertTrue(payment.process_webhook(fields, method="POST", path="/result").accepted)
+            self.now += timedelta(seconds=1)
+        def paid_state():
+            with self.db.read() as c:
+                return [[tuple(row) for row in c.execute(sql)] for sql in (
+                    "SELECT * FROM payment_orders ORDER BY id",
+                    "SELECT * FROM continuation_pack_grants ORDER BY id",
+                    "SELECT * FROM generation_credit_lots WHERE source_type='continuation_pack' ORDER BY id",
+                    "SELECT * FROM unlock_entitlements WHERE source_payment_order_id NOT LIKE 'admin:%' ORDER BY id")]
+        before = paid_state()
+        _, user = self.register()
+        self.success(user)
+        self.referrals.reward_first_success(user)
+        paused = ReferralService(self.db, self.commerce, v2_enabled=True, promo_grants_enabled=False)
+        self.assertIsNone(paused.reward_first_success(user))
+        self.assertEqual(paid_state(), before)
+        self.assertEqual(self.commerce.balance("inviter").available, 108)
+        self.assertEqual(self.commerce.entitlement_balance("inviter").available, 53)
 
     def test_kill_switch_preserves_issued_rights_and_can_recover_pending_v2(self):
         _, user = self.register()
@@ -263,7 +376,7 @@ class ReferralV2Tests(TestCase):
             self.commerce.ensure_initial_grant(c, "v1-user")
         legacy.link_user("v1-no-activity", "v1-user")
         report = build_report(self.path, days=20, owner_platform_ids=("owner-max",), at=self.now + timedelta(days=15))
-        self.assertEqual(report["free_edit_cost"]["total_estimate_usd"], "NOT MEASURABLE")
+        self.assertEqual(report["free_edit_cost"]["total_estimate_rub"], "NOT MEASURABLE")
         self.assertEqual(report["repeat_users"]["D+1"]["eligible"], 1)
 
     def test_confirmed_payments_are_deduped_and_owner_excluded(self):
@@ -288,10 +401,16 @@ class ReferralV2Tests(TestCase):
     def test_promotional_usage_provenance_and_estimated_cost_alerts(self):
         _, user = self.register()
         self.success(user, cost=5.1)
-        with self.assertLogs("app.referrals", level="WARNING"):
+        with self.assertLogs("app.referrals", level="WARNING") as logs:
             self.referrals.observe_free_edit_cost("friend")
+        self.assertIn("estimated_rub=5.100", logs.output[0])
+        self.assertIn("threshold_rub=5.000", logs.output[0])
+        self.assertNotIn("usd", logs.output[0].lower())
         report = build_report(self.path, owner_platform_ids=("owner-max",), at=self.now + timedelta(hours=1))
-        self.assertEqual(report["free_edit_cost"]["known_estimate_usd"], 5.1)
+        self.assertEqual(report["free_edit_cost"]["known_estimate_rub"], 5.1)
+        self.assertEqual(report["free_edit_cost"]["currency"], "RUB")
+        self.assertEqual(report["free_edit_cost"]["actual_provider_cost"], "NOT MEASURABLE")
+        self.assertNotIn("usd", json.dumps(report["free_edit_cost"]).lower())
         self.assertTrue(report["warnings"])
         self.referrals.reward_first_success(user)
         # Consume one exact promotional lot, not an unrelated initial/paid lot.
@@ -301,6 +420,18 @@ class ReferralV2Tests(TestCase):
         self.success("inviter", cost=0.2)
         report = build_report(self.path, owner_platform_ids=("owner-max",), at=self.now + timedelta(hours=1))
         self.assertEqual(report["v2_bonus"]["consumed_edits"], 1)
+
+    def test_cost_threshold_is_rub_and_invalid_values_stay_unknown(self):
+        for index, value in enumerate((2.5, None, -1, "unavailable", float("inf"))):
+            _, user = self.register(f"cost-{index}")
+            self.success(user, cost=value)
+        with self.assertNoLogs("app.referrals", level="WARNING"):
+            self.referrals.observe_free_edit_cost("cost-0")
+        report = build_report(self.path, owner_platform_ids=("owner-max",), at=self.now + timedelta(hours=1))
+        cost = report["free_edit_cost"]
+        self.assertEqual((cost["known_estimate_rub"], cost["unknown_attempts"]), (2.5, 4))
+        self.assertEqual(cost["total_estimate_rub"], "NOT MEASURABLE")
+        self.assertIsNone(cost["review_alert"])
 
     def test_v2_flag_off_cannot_reward_v2_relationship_but_preserves_original(self):
         _, user = self.register()

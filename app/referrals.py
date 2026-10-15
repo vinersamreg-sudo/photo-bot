@@ -21,7 +21,21 @@ REFERRAL_REWARD_CREDITS = 2
 REFERRAL_V2_REWARD_CREDITS = 4
 REFERRAL_V2_REWARD_ORIGINALS = 2
 REFERRAL_BURST_ALERT_COUNT = 10  # Observation only, NEVER an invitation cap.
+REFERRAL_FREE_COST_REVIEW_THRESHOLD_RUB = 5.0  # Existing numeric warning threshold, NOT USD or a spending cap.
 LOGGER = logging.getLogger(__name__)
+
+
+def estimated_cost_rub(value):
+    """DemoService persists ProviderResult.estimated_cost_rub or its RUB fallback.
+
+    This is an internal estimate, not provider billing or a currency conversion.
+    Missing, malformed, negative or non-finite historical values stay unknown.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if not isinstance(value, bool) and math.isfinite(number) and number >= 0 else None
 
 
 @dataclass(frozen=True)
@@ -88,14 +102,14 @@ class ReferralService:
                   AND (EXISTS(SELECT 1 FROM referral_bonus_grants b WHERE b.credit_lot_id=l.id)
                        OR (l.source_type='initial_free' AND EXISTS(SELECT 1 FROM referral_relationships r
                            WHERE r.invitee_user_id=a.user_id AND r.program_version=2)))""", (now, now))]
-            total = sum(float(value) for value in estimates if value is not None and math.isfinite(float(value)) and float(value) >= 0)
-            if total >= 5:
+            total = sum(value for raw in estimates if (value := estimated_cost_rub(raw)) is not None)
+            if math.isfinite(total) and total >= REFERRAL_FREE_COST_REVIEW_THRESHOLD_RUB:
                 key = f"referral-estimated-cost:{now[:10]}"
                 exists = connection.execute("SELECT 1 FROM referral_diagnostics WHERE event_key=?",
                     (hashlib.sha256(f"referral:{key}:suspected".encode()).hexdigest(),)).fetchone()
                 if not exists:
                     self._diagnostic(connection, platform_user_id, key, "suspected", "estimated_free_cost_review_only")
-                    LOGGER.warning("Referral free-edit cost review (estimated_usd=%.3f,actual_billing=unavailable); grants not capped", total)
+                    LOGGER.warning("Referral free-edit cost review (estimated_rub=%.3f,threshold_rub=%.3f,actual_billing=unavailable); grants not capped", total, REFERRAL_FREE_COST_REVIEW_THRESHOLD_RUB)
 
     @staticmethod
     def subject(platform_user_id: str) -> str:
@@ -118,7 +132,7 @@ class ReferralService:
         if bonus_type == "edits":
             before = {row[0] for row in connection.execute("SELECT id FROM generation_credit_lots WHERE user_id=?", (user_id,))}
             self.commerce.adjust_generation_credits(connection, user_id=user_id, delta=quantity,
-                reason=reason, idempotency_key=key, referral_promotion=True)
+                reason=reason, idempotency_key=key, referral_relationship_id=relationship)
             created = [row[0] for row in connection.execute("SELECT id FROM generation_credit_lots WHERE user_id=?", (user_id,)) if row[0] not in before]
             if len(created) != 1:
                 raise RuntimeError("Referral credit lot was not confirmed")

@@ -27,14 +27,29 @@ Configure the canonical proven `MAX_OWNER_USER_IDS` filter. Missing/ambiguous
 mapping fails closed; no IDs, prompts or media paths are emitted. Revenue requires
 signature-valid HTTP200 ResultURL, processed event, paid order and linked grant,
 deduplicated per invoice. Promo consumption uses its exact credit lot/entitlement
-receipt, not account-wide consumption. Cost telemetry is ESTIMATED USD, not actual
-billing; unknown cost/provenance remains NOT MEASURABLE. A >=10-registration/hour
-burst and >=USD5 observed free-edit estimates/day trigger privacy-safe review
+receipt, not account-wide consumption. `generation_attempts.estimated_cost` is
+ESTIMATED RUB: DemoService uses `ProviderResult.estimated_cost_rub`, or the
+configured `DEMO_ESTIMATED_COST_RUB_PER_GENERATION` reserve when unavailable.
+Fake/local processing may explicitly report zero. This is not actual billing;
+the database does not distinguish provider estimates from fallback reserves.
+No RUB/USD conversion is performed. Unknown cost/provenance and actual provider
+billing remain NOT MEASURABLE. The existing numeric warning threshold is explicitly
+5 RUB (not USD5), an observation threshold, not a budget or an exchange-rate estimate.
+A >=10-registration/hour burst and >=5 RUB observed free-edit estimates/day trigger privacy-safe review
 warnings only; neither condition withholds rewards or caps legitimate invitations.
 MAX does not expose a reliable one-human/account-age/device proof here, so a
 distinct authenticated MAX identity is not a proven distinct human. Do not call
 bursts fraud without independent evidence, block by shared photo/IP, or add hidden
 limits. Operator fraud review/real provider billing remain explicit activation risks.
+
+There is no boolean balance-limit bypass. Only a pending V2 relationship with
+confirmed delivery proof can extend the normal credit ceiling, by its earned
+four credits plus previous typed +4 receipts. The bound grows with every valid
+invitation; no business invitation cap is imposed. Exact signed-64-bit arithmetic
+and account counter types are checked before writing any bonus. At an invalid
+storage/numeric-capacity state the atomic award stays pending with durable proof,
+not discarded or half-issued; correct that state and reconcile pending rewards.
+Paid/admin ceilings and package quantities are unchanged. No balances are rewritten.
 
 Activation GO plan: exact reviewed merge + green CI; fresh production schema15
 snapshot + verified encrypted recovery/restore/off-site; canonical migration-copy

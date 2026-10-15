@@ -11,7 +11,7 @@ import sys
 
 from app.database import ReadOnlyDatabase
 from app.feedback_report import ReportUnavailable, SAMARA, _SafeParser, _at, _owners, _time
-from app.referrals import ReferralService
+from app.referrals import ReferralService, REFERRAL_FREE_COST_REVIEW_THRESHOLD_RUB, estimated_cost_rub
 
 NM = "NOT MEASURABLE"
 
@@ -105,7 +105,7 @@ def build_report(path: Path, *, days=7, owner_platform_ids=(), at=None):
                 "limitations": ["Invitation screen/clipboard access does not prove that a link was sent.",
                     "V1 reward quantities/history are not upgraded; legacy registration dates and bonus consumption provenance can be unavailable.",
                     "D+N covers only V2 cohorts: a completed Samara calendar day after recorded registration; unaged cohorts are excluded. V1 lacks this activity telemetry. Activity uses server-received authenticated events, not client open/view tracking.",
-                    "Gross confirmed revenue is not net profit. Costs are provider telemetry estimates, not billing.",
+                    "Gross confirmed revenue is not net profit. Costs are internal RUB estimates/reserves, not actual provider billing; historical rows do not distinguish provider estimates from configured fallback reserves.",
                     "Distinct authenticated MAX identities do not prove distinct humans; MAX does not provide authoritative device/account-age identity proof here."],
             }
     except (sqlite3.Error, OSError):
@@ -146,15 +146,19 @@ def _free_cost(c, eligible, grants, owners, inside):
             continue
         if r["lot_id"] not in lots and not (r["user_id"] in eligible and r["source_type"] == "initial_free"):
             continue
-        if r["estimated_cost"] is None or not math.isfinite(float(r["estimated_cost"])) or float(r["estimated_cost"]) < 0:
+        estimate = estimated_cost_rub(r["estimated_cost"])
+        if estimate is None:
             unknown += 1
         else:
-            values.append(float(r["estimated_cost"]))
+            values.append(estimate)
     total = round(sum(values), 6)
-    return {"basis": "estimated_cost telemetry, USD; NOT actual API billing", "known_attempts": len(values),
-            "unknown_attempts": unknown, "known_estimate_usd": total,
-            "total_estimate_usd": NM if unknown else total,
-            "review_alert": "ESTIMATED_FREE_EDIT_COST_REVIEW" if total >= 5 else None}
+    finite = math.isfinite(total)
+    return {"basis": "DemoService estimated_cost: ProviderResult.estimated_cost_rub or configured RUB reserve; NOT actual API billing",
+            "currency": "RUB", "actual_provider_cost": NM, "known_attempts": len(values),
+            "unknown_attempts": unknown, "known_estimate_rub": total if finite else NM,
+            "total_estimate_rub": NM if unknown or not finite else total,
+            "review_threshold_rub": REFERRAL_FREE_COST_REVIEW_THRESHOLD_RUB,
+            "review_alert": "ESTIMATED_FREE_EDIT_COST_REVIEW" if finite and total >= REFERRAL_FREE_COST_REVIEW_THRESHOLD_RUB else None}
 
 
 def render_markdown(report):

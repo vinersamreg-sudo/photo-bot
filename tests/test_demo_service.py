@@ -124,6 +124,19 @@ class DemoServiceTests(TestCase):
             clock=self.clock,
         )
 
+    def test_estimated_cost_persistence_uses_provider_rub_or_configured_rub_reserve(self):
+        for index, (provider_rub, expected_rub) in enumerate(((2.75, 2.75), (None, 10.0), (0.0, 0.0))):
+            with self.subTest(provider_rub=provider_rub):
+                provider = FakeImageProvider()
+                edit_many = provider.edit_many
+                provider.edit_many = lambda paths, prompt, edit=edit_many, amount=provider_rub: replace(edit(paths, prompt), estimated_cost_rub=amount)
+                service = self.service(provider=provider)
+                session = service.start_session("max", f"rub-cost-{index}", self.source)
+                result = service.generate(session.session_id, "Светлый фон", f"rub-cost-event-{index}")
+                with service.database.read() as c:
+                    cost = c.execute("SELECT estimated_cost FROM generation_attempts WHERE id=?", (result.attempt_id,)).fetchone()[0]
+                self.assertEqual(cost, expected_rub)
+
     def test_one_account_can_use_different_photos_without_new_free_credits(self) -> None:
         service = self.service()
         first = service.start_session("max", "user-1", self.source)
