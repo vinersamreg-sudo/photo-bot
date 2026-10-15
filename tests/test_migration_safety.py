@@ -121,7 +121,7 @@ class MigrationSafetyTests(TestCase):
                 unlock_entitlement_quantity=SMALL_PACKAGE.unlock_entitlements,
             )
 
-    def test_v14_to_v15_copy_migration_preserves_paid_small_package(self) -> None:
+    def test_previous_schema_copy_migration_preserves_paid_small_package(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "production-copy-source.sqlite3"
@@ -129,14 +129,13 @@ class MigrationSafetyTests(TestCase):
             database = Database(source)
             self._seed_paid_small_package(database)
             with database.transaction() as connection:
-                connection.execute("DROP TABLE service_feedback")
-                connection.execute("DELETE FROM schema_migrations WHERE version=15")
+                connection.execute("DELETE FROM schema_migrations WHERE version>=16")
             source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
 
             report = verify_migration_copy(source, migrated)
 
             self.assertEqual(report["status"], "PASS")
-            self.assertEqual(report["source_schema"], 14)
+            self.assertEqual(report["source_schema"], 15)
             self.assertEqual(report["target_schema"], CURRENT_SCHEMA_VERSION)
             self.assertEqual(report["quick_check"], "ok")
             self.assertEqual(report["counts"]["paid_orders"], 1)
@@ -144,7 +143,7 @@ class MigrationSafetyTests(TestCase):
             self.assertTrue(report["small_49_grants_preserved"])
             self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), source_sha)
             with closing(sqlite3.connect(source)) as connection:
-                self.assertEqual(schema_version(connection), 14)
+                self.assertEqual(schema_version(connection), 15)
             with closing(sqlite3.connect(migrated)) as connection:
                 self.assertEqual(schema_version(connection), CURRENT_SCHEMA_VERSION)
                 self.assertEqual(

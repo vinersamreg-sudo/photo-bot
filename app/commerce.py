@@ -69,6 +69,7 @@ GENERATION_CREDITS_PER_PACK = SMALL_PACKAGE.generation_credits
 UNLOCK_ENTITLEMENTS_PER_PACK = SMALL_PACKAGE.unlock_entitlements
 INITIAL_GENERATION_CREDITS = 2
 MAX_ACCOUNT_BALANCE = 1_000_000
+MAX_SQLITE_INTEGER = (1 << 63) - 1
 
 
 def _utc_now() -> datetime:
@@ -315,7 +316,15 @@ class CommerceService:
         delta: int,
         reason: str,
         idempotency_key: str,
+        referral_relationship_id: Optional[str] = None,
     ) -> CreditBalance:
+        if type(delta) is not int:
+            raise InvalidInputError("Credit adjustment must be an integer")
+        if referral_relationship_id is not None and (
+            delta != 4 or reason != "referral_v2_inviter"
+            or idempotency_key != f"referral-v2:{referral_relationship_id}:inviter:edits"
+        ):
+            raise InvalidInputError("Invalid referral promotion contract")
         if delta == 0 or not reason.strip() or not idempotency_key:
             raise InvalidInputError("Non-zero delta, reason and idempotency key are required")
         existing = connection.execute(
@@ -325,6 +334,10 @@ class CommerceService:
         if existing:
             if existing["entity_type"] != "generation_credit" or existing["delta"] != delta:
                 raise InvalidInputError("Admin adjustment idempotency conflict")
+            if referral_relationship_id is not None and (
+                existing["subject_hash"] != _subject_hash(user_id) or existing["reason"] != reason
+            ):
+                raise InvalidInputError("Referral adjustment idempotency conflict")
             row = connection.execute(
                 "SELECT * FROM user_credit_accounts WHERE user_id=?", (user_id,)
             ).fetchone()
@@ -332,7 +345,11 @@ class CommerceService:
         account = self.ensure_initial_grant(connection, user_id)
         if delta < 0 and account.available < -delta:
             raise InvalidInputError("Adjustment would make generation balance negative")
-        if delta > 0 and account.available + account.reserved + delta > MAX_ACCOUNT_BALANCE:
+        ceiling = MAX_ACCOUNT_BALANCE
+        if referral_relationship_id is not None:
+            ceiling = self._referral_credit_ceiling(connection, user_id, referral_relationship_id)
+        self._check_adjustment_storage(connection, user_id, delta)
+        if delta > 0 and account.available + account.reserved + delta > ceiling:
             raise InvalidInputError("Generation balance safety limit exceeded")
         now = _iso(self.clock())
         if delta > 0:
@@ -401,6 +418,58 @@ class CommerceService:
             (_subject_hash(user_id), delta, reason.strip()[:300], idempotency_key, now),
         )
         return self._balance_row(refreshed)
+
+    @staticmethod
+    def _referral_credit_ceiling(connection, user_id: str, relationship_id: str) -> int:
+        """Extend the ordinary ceiling only by independently earned V2 awards.
+
+        A string prefix/boolean is not authority. The current pending relationship
+        must prove distinct authenticated MAX identities and confirmed delivery.
+        Each previous increment is backed by its typed +4 credit-lot receipt.
+        """
+        earned = connection.execute("""SELECT 1 FROM referral_relationships r
+            JOIN users inviter ON inviter.id=r.inviter_user_id AND inviter.platform='max'
+            JOIN users invitee ON invitee.id=r.invitee_user_id AND invitee.platform='max'
+            WHERE r.id=? AND r.inviter_user_id=? AND r.program_version=2 AND r.status='pending'
+              AND invitee.platform_user_id=r.invitee_platform_user_id
+              AND invitee.platform_user_id<>inviter.platform_user_id
+              AND EXISTS(SELECT 1 FROM generation_attempts a JOIN generation_credit_reservations c
+                  ON c.attempt_id=a.id AND c.status='consumed'
+                  WHERE a.user_id=r.invitee_user_id AND a.status='succeeded')""",
+            (relationship_id, user_id)).fetchone()
+        if not earned:
+            raise InvalidInputError("Confirmed referral reward proof is required")
+        previous = sum(row[0] for row in connection.execute("""SELECT b.quantity
+            FROM referral_bonus_grants b JOIN generation_credit_lots l ON l.id=b.credit_lot_id
+            WHERE b.user_id=? AND b.beneficiary='inviter' AND b.bonus_type='edits'
+              AND b.quantity=4 AND l.user_id=b.user_id AND l.granted_credits=b.quantity""", (user_id,)))
+        # No invitation-count cap: every earned award extends this bound by four.
+        return min(MAX_SQLITE_INTEGER, MAX_ACCOUNT_BALANCE + previous + 4)
+
+    @staticmethod
+    def _check_adjustment_storage(connection, user_id: str, delta: int) -> None:
+        """Prevent SQLite INTEGER arithmetic silently promoting counters to REAL.
+
+        Reject before any lot/account/ledger write. ReferralService consequently
+        retains the pending relationship and delivery proof for safe recovery;
+        neither bonus type is partly issued or silently discarded.
+        """
+        row = connection.execute("SELECT * FROM user_credit_accounts WHERE user_id=?", (user_id,)).fetchone()
+        fields = ("available_generation_credits", "reserved_generation_credits",
+                  "total_generation_credits_granted", "total_generation_credits_consumed",
+                  "total_generation_credits_refunded", "total_generation_credits_adjusted", "version")
+        for field in fields:
+            value = row[field]
+            minimum = -(1 << 63) if field == "total_generation_credits_adjusted" else (1 if field == "version" else 0)
+            if type(value) is not int or not minimum <= value <= MAX_SQLITE_INTEGER:
+                raise InvalidInputError("Credit counter storage is invalid")
+        computed = (row["available_generation_credits"] + delta,
+                    row["available_generation_credits"] + row["reserved_generation_credits"] + delta,
+                    row["total_generation_credits_adjusted"] + delta,
+                    row["total_generation_credits_granted"] + row["total_generation_credits_adjusted"] + delta,
+                    row["version"] + 1)
+        if any(not -(1 << 63) <= value <= MAX_SQLITE_INTEGER for value in computed):
+            raise InvalidInputError("Credit counter integer capacity exceeded; reward remains pending")
 
     def adjust_unlock_entitlements(
         self,

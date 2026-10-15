@@ -1,5 +1,66 @@
 # Operations
 
+## Prepared Referral V2 (default OFF; schema16)
+
+Preparation is not production activation. `REFERRAL_V2_ENABLED=false` preserves
+the V1 offer/reward for new relationships. Each relationship retains its version;
+old V1 payouts and balances are not upgraded. `REFERRAL_PROMO_GRANTS_ENABLED=false`
+is an emergency stop for new referral registration/grants of both versions. It
+does not revoke previous originals/edits or change packages, provider or payments.
+
+Schema15 -> 16 adds version/registration/first-delivery metadata to relationships,
+separate typed `referral_bonus_grants`, original entitlement provenance,
+hashed-event diagnostics/activity and first-activation metadata. The historical
+`bonus_credit_transactions CHECK(quantity=2)` table is UNCHANGED. V2 +4/+2 and
+invitee +1 original use one existing commerce transaction, auditable reasons and
+stable idempotency keys. Restart recovery processes only pending V2 relationships
+with succeeded generation plus consumed reservation (confirmed delivery proof).
+It never retries the provider, sends another preview, or retroactively upgrades V1.
+
+Read-only weekly command:
+
+```bash
+scripts/ravuna referral-report --days 7 --format json
+```
+
+Configure the canonical proven `MAX_OWNER_USER_IDS` filter. Missing/ambiguous
+mapping fails closed; no IDs, prompts or media paths are emitted. Revenue requires
+signature-valid HTTP200 ResultURL, processed event, paid order and linked grant,
+deduplicated per invoice. Promo consumption uses its exact credit lot/entitlement
+receipt, not account-wide consumption. `generation_attempts.estimated_cost` is
+ESTIMATED RUB: DemoService uses `ProviderResult.estimated_cost_rub`, or the
+configured `DEMO_ESTIMATED_COST_RUB_PER_GENERATION` reserve when unavailable.
+Fake/local processing may explicitly report zero. This is not actual billing;
+the database does not distinguish provider estimates from fallback reserves.
+No RUB/USD conversion is performed. Unknown cost/provenance and actual provider
+billing remain NOT MEASURABLE. The existing numeric warning threshold is explicitly
+5 RUB (not USD5), an observation threshold, not a budget or an exchange-rate estimate.
+A >=10-registration/hour burst and >=5 RUB observed free-edit estimates/day trigger privacy-safe review
+warnings only; neither condition withholds rewards or caps legitimate invitations.
+MAX does not expose a reliable one-human/account-age/device proof here, so a
+distinct authenticated MAX identity is not a proven distinct human. Do not call
+bursts fraud without independent evidence, block by shared photo/IP, or add hidden
+limits. Operator fraud review/real provider billing remain explicit activation risks.
+
+There is no boolean balance-limit bypass. Only a pending V2 relationship with
+confirmed delivery proof can extend the normal credit ceiling, by its earned
+four credits plus previous typed +4 receipts. The bound grows with every valid
+invitation; no business invitation cap is imposed. Exact signed-64-bit arithmetic
+and account counter types are checked before writing any bonus. At an invalid
+storage/numeric-capacity state the atomic award stays pending with durable proof,
+not discarded or half-issued; correct that state and reconcile pending rewards.
+Paid/admin ceilings and package quantities are unchanged. No balances are rewritten.
+
+Activation GO plan: exact reviewed merge + green CI; fresh production schema15
+snapshot + verified encrypted recovery/restore/off-site; canonical migration-copy
+check; quick_check/foreign_key_check and fingerprints for accounts, lots, ledgers,
+payments/grants, originals, gallery and legacy referrals before/after. Deploy with
+V2 OFF once, verify schema16/health/0 processing/reserved and unchanged `.env`.
+Only a separate configuration GO enables V2/new copy. Ordinary deploy cannot
+change flags. Stop new promos using the kill switch if necessary; do not revoke
+issued rights and do not blindly roll schema16 back to schema15 code. No real
+generation, payment or customer grant is authorized by preparing this implementation.
+
 ## Compact status
 
 On production, use the read-only summary first:

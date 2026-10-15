@@ -7,7 +7,7 @@ import logging
 import re
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Protocol, Sequence
 from uuid import uuid4
@@ -257,7 +257,10 @@ class MaxApplication:
         self.work_gallery = WorkGallery(database, settings.temp_dir)
         self.attribution = AttributionService(database)
         commerce = getattr(demo_service, "commerce", None) or CommerceService(database)
-        self.referrals = ReferralService(database, commerce)
+        self.referrals = ReferralService(database, commerce,
+            v2_enabled=settings.referral_v2_enabled,
+            promo_grants_enabled=settings.referral_promo_grants_enabled,
+            clock=getattr(demo_service, "clock", lambda: datetime.now(timezone.utc)))
         self._checkout_lock = threading.RLock()
         self._gallery_navigation_lock = threading.RLock()
 
@@ -417,8 +420,16 @@ class MaxApplication:
                 return True
             self.store.finish_event(event.event_key, False)
             raise
+        finally:
+            self._referral_activity(event)
         self.store.finish_event(event.event_key, True)
         return True
+
+    def _referral_activity(self, event: MaxIncomingEvent) -> None:
+        try:
+            self.referrals.record_activity(event.user_id, event.event_key)
+        except Exception as error:
+            LOGGER.warning("Referral activity not recorded (error_type=%s)", type(error).__name__)
 
     def _show_demo_error(self, event: MaxIncomingEvent, exc: DemoError) -> None:
         dialog = self.store.get(event.user_id)
@@ -666,7 +677,7 @@ class MaxApplication:
         parsed = parse_start_payload(event.start_payload)
         if parsed.referral_code:
             relationship_id = self.referrals.register_start(
-                event.user_id, parsed.referral_code
+                event.user_id, parsed.referral_code, event_key=event.event_key
             )
             referral_code = parsed.referral_code if relationship_id else None
         inviter_id = self.referrals.inviter_for_relationship(relationship_id)
@@ -1209,8 +1220,13 @@ class MaxApplication:
                 LOGGER.warning("Start payment offer is temporarily unavailable")
         self._send_view(
             user_id,
-            main_menu(balance, originals, payment_url, payment_status_action),
+            self._main_view(balance, originals, payment_url, payment_status_action),
         )
+
+    def _main_view(self, balance, originals, payment_url=None, payment_status_action=None):
+        return main_menu(balance, originals, payment_url, payment_status_action,
+            referral_v2_enabled=self.settings.referral_v2_enabled,
+            referral_promos_enabled=self.settings.referral_promo_grants_enabled)
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
         self.store.transition(
@@ -1415,7 +1431,7 @@ class MaxApplication:
                 gallery_item_id=dialog.current_gallery_item_id,
             )
             self._unlock_or_deliver(event, dialog)
-        elif action == "result:share":
+        elif action in {"result:share", "referral:open"}:
             self._show_share(event, dialog)
         elif action == "result:rate":
             self._show_rating(event, dialog)
@@ -2223,7 +2239,7 @@ class MaxApplication:
                 )
         else:
             account = restored.user_id or self.adapter.ensure_account(event.user_id)
-            view = main_menu(
+            view = self._main_view(
                 self.demo.commerce.balance(account).available,
                 self.demo.commerce.entitlement_balance(account).available,
             )
@@ -2276,13 +2292,16 @@ class MaxApplication:
 
         def deliver(preview: Path, _attempt_id: str) -> bool:
             nonlocal preview_delivered
-            caption = result_actions(remaining_after).text
+            result_view = result_actions(remaining_after,
+                referral_v2_enabled=self.settings.referral_v2_enabled,
+                referral_promos_enabled=self.settings.referral_promo_grants_enabled)
+            caption = result_view.text
             if self.settings.max_single_screen_ui_enabled:
                 try:
                     rendered = self.ui.render(
                         event.user_id,
                         text=caption,
-                        buttons=result_actions(remaining_after).buttons,
+                        buttons=result_view.buttons,
                         screen="result_ready",
                         context={
                             "gallery_item_id": dialog.current_gallery_item_id,
@@ -2315,7 +2334,7 @@ class MaxApplication:
                     event.user_id,
                     preview,
                     caption,
-                    result_actions(remaining_after).buttons,
+                    result_view.buttons,
                     screen="result_ready",
                 )
             )
@@ -2405,8 +2424,15 @@ class MaxApplication:
                 idempotency_key=f"first-success:{result.attempt_id}",
                 user_id=dialog.user_id,
             )
-        if successful_count == 1 and dialog.user_id and preview_delivered:
-            reward = self.referrals.reward_first_success(dialog.user_id)
+        if successful_count >= 1 and dialog.user_id and preview_delivered:
+            try:
+                reward = self.referrals.reward_first_success(dialog.user_id)
+            except Exception as error:
+                # A promotion ledger failure must not regenerate a delivered
+                # image or poison MAX polling. V2 is recovered from durable
+                # delivery/consumption proof on restart or a later success.
+                LOGGER.error("Referral reward remains pending (error_type=%s)", type(error).__name__)
+                reward = None
             if reward:
                 self.attribution.record_event(
                     event.user_id,
@@ -2415,10 +2441,16 @@ class MaxApplication:
                     user_id=dialog.user_id,
                 )
                 try:
+                    reward_text = "🎁 Друг воспользовался вашей ссылкой.\nВам начислено 2 бонусные обработки."
+                    if reward.program_version == 2:
+                        balance = self.demo.commerce.balance(reward.inviter_user_id).available
+                        originals = self.demo.commerce.entitlement_balance(reward.inviter_user_id).available
+                        reward_text = ("🎁 Друг выполнил первую успешную обработку.\n"
+                            "Вам начислены 4 обработки и 2 оригинала.\n\n"
+                            f"Ваш баланс:\n⚡ Обработки: {balance}\n🖼 Оригиналы без водяного знака: {originals}")
                     self.transport.send_message(
                         reward.inviter_platform_user_id,
-                        "🎁 Друг воспользовался вашей ссылкой.\n"
-                        "Вам начислено 2 бонусные обработки.",
+                        reward_text,
                         (),
                     )
                 except MaxTransportError:
@@ -2431,6 +2463,10 @@ class MaxApplication:
             duration_ms=attempt["duration_ms"] if attempt else None,
             estimated_cost=attempt["estimated_cost"] if attempt else None,
         )
+        try:
+            self.referrals.observe_free_edit_cost(event.user_id)
+        except Exception as error:
+            LOGGER.warning("Referral cost observation unavailable (error_type=%s)", type(error).__name__)
 
     def _favorite(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_version_id:
@@ -2444,6 +2480,9 @@ class MaxApplication:
         self._show_selected_work(event, self.store.get(event.user_id) or dialog)
 
     def _show_share(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        if self.settings.referral_v2_enabled or not self.settings.referral_promo_grants_enabled:
+            self._show_invitation_v2(event, dialog)
+            return
         if not dialog.user_id or not dialog.current_version_id:
             raise InvalidInputError("No result is selected for sharing")
         code = self.referrals.get_or_create_code(dialog.user_id)
@@ -2496,6 +2535,34 @@ class MaxApplication:
                 "version_id": dialog.current_version_id,
             },
         )
+
+    def _show_invitation_v2(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
+        account_id = self.adapter.ensure_account(event.user_id)
+        code = self.referrals.get_or_create_code(account_id)
+        separator = "&" if "?" in self.settings.max_bot_url else "?"
+        url = f"{self.settings.max_bot_url}{separator}start=ref_{code}"
+        conditions = ("Ваш друг получит 2 бесплатные обработки и 1 оригинал без водяного знака.\n\n"
+            "После первой успешной обработки друга вы получите 4 обработки и 2 оригинала.\n\n"
+            "Приглашайте сколько угодно друзей!")
+        invitation = ("Попробуйте Ravuna — обработку фотографий прямо в MAX.\n"
+            "По моей ссылке вы получите 2 бесплатные обработки и 1 оригинал без водяного знака.\n"
+            "После вашей первой успешной обработки я получу 4 обработки и 2 оригинала.\n\n" + url)
+        if not self.settings.referral_promo_grants_enabled:
+            conditions = "Начисление новых реферальных бонусов временно приостановлено. Ранее выданные права сохраняются."
+            invitation = "Попробуйте Ravuna — обработку фотографий прямо в MAX. Новые реферальные бонусы сейчас приостановлены.\n\n" + url
+        self.attribution.record_event(event.user_id, "share_opened", idempotency_key=f"share:{event.event_key}", user_id=account_id)
+        self.store.update(event.user_id, user_id=account_id, pending_prompt=None, pending_action=NAV_SHARE)
+        back = "nav:back:work" if dialog.current_gallery_item_id and dialog.current_version_id else "nav:back:main"
+        balance = self.demo.commerce.balance(account_id).available
+        originals = self.demo.commerce.entitlement_balance(account_id).available
+        self._send_message(event.user_id,
+            "🎁 Подарите другу готовую фотографию!\n\n" + conditions + "\n\nВаша ссылка:\n" + url
+            + f"\n\nВаш баланс: {balance} обработок / {originals} оригиналов.\n\n"
+            "Скопируйте приглашение и отправьте его другу самостоятельно.",
+            (Button("📋 Скопировать приглашение", invitation, 0, "clipboard"),
+             Button("📋 Скопировать только ссылку", url, 1, "clipboard"),
+             Button("← Назад", back, 2)), screen="share",
+            context={"gallery_item_id": dialog.current_gallery_item_id, "version_id": dialog.current_version_id})
 
     def _unlock_or_deliver(self, event: MaxIncomingEvent, dialog: MaxDialog) -> None:
         if not dialog.user_id or not dialog.current_version_id:
@@ -3048,7 +3115,7 @@ class MaxApplication:
                 pending_request_id=None,
                 status_message_id=None,
             )
-            menu = main_menu(balance.available, entitlements.available)
+            menu = self._main_view(balance.available, entitlements.available)
             self._send_view(
                 row["platform_user_id"],
                 View(
@@ -3453,7 +3520,9 @@ class MaxApplication:
         )
         if remaining <= 0:
             caption += "\n\n" + PURCHASE_OPTIONS_TEXT
-        buttons = gallery_item_actions(remaining)
+        buttons = gallery_item_actions(remaining,
+            referral_v2_enabled=self.settings.referral_v2_enabled,
+            referral_promos_enabled=self.settings.referral_promo_grants_enabled)
         if not self._send_image(
             platform_user_id, current.preview_path, caption, buttons,
             screen=NAV_WORK,

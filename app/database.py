@@ -10,7 +10,7 @@ from typing import Iterator
 from uuid import NAMESPACE_URL, uuid5
 
 
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16
 
 
 class UnsupportedSchemaVersionError(RuntimeError):
@@ -821,6 +821,49 @@ ON attribution_events(source,created_at DESC);
 """
 
 
+REFERRAL_V2_SCHEMA = """
+CREATE TABLE IF NOT EXISTS referral_program_metadata (
+    name TEXT PRIMARY KEY, first_enabled_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS referral_bonus_grants (
+    id TEXT PRIMARY KEY,
+    relationship_id TEXT NOT NULL REFERENCES referral_relationships(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    beneficiary TEXT NOT NULL CHECK(beneficiary IN ('invitee','inviter')),
+    bonus_type TEXT NOT NULL CHECK(bonus_type IN ('edits','originals')),
+    quantity INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    credit_lot_id TEXT UNIQUE REFERENCES generation_credit_lots(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(relationship_id,beneficiary,bonus_type),
+    CHECK((beneficiary='invitee' AND bonus_type='originals' AND quantity=1)
+       OR (beneficiary='inviter' AND bonus_type='edits' AND quantity=4)
+       OR (beneficiary='inviter' AND bonus_type='originals' AND quantity=2))
+);
+CREATE TABLE IF NOT EXISTS referral_bonus_entitlements (
+    id INTEGER PRIMARY KEY,
+    grant_id TEXT NOT NULL REFERENCES referral_bonus_grants(id) ON DELETE CASCADE,
+    entitlement_id TEXT UNIQUE REFERENCES unlock_entitlements(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS referral_diagnostics (
+    event_key TEXT PRIMARY KEY,
+    relationship_id TEXT REFERENCES referral_relationships(id) ON DELETE SET NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    subject_hash TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK(event_type IN
+        ('opened','accepted','duplicate','rejected','suspected','first_success','paused')),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_referral_diagnostics_time ON referral_diagnostics(created_at,event_type);
+CREATE TABLE IF NOT EXISTS referral_activity (
+    event_key TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    received_at TEXT NOT NULL
+);
+"""
+
+
 class ReadOnlyDatabase:
     """Open an existing SQLite database without initialization or write access."""
 
@@ -1262,6 +1305,26 @@ class Database:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
+            if connection.execute("SELECT 1 FROM schema_migrations WHERE version=16").fetchone() is None:
+                # The legacy quantity=2 table is deliberately unchanged. V2 has
+                # separate typed provenance; no balances/history are rewritten.
+                try:
+                    connection.executescript("BEGIN IMMEDIATE;\n" + REFERRAL_V2_SCHEMA)
+                    columns = {row[1] for row in connection.execute("PRAGMA table_info(referral_relationships)")}
+                    for name, declaration in (
+                        ("program_version", "INTEGER NOT NULL DEFAULT 1 CHECK(program_version IN (1,2))"),
+                        ("registered_at", "TEXT"),
+                        ("first_success_at", "TEXT"),
+                        ("first_success_attempt_id", "TEXT REFERENCES generation_attempts(id) ON DELETE SET NULL"),
+                    ):
+                        if name not in columns:
+                            connection.execute(f"ALTER TABLE referral_relationships ADD COLUMN {name} {declaration}")
+                    connection.execute("INSERT INTO schema_migrations(version,name,applied_at) VALUES(16,?,?)",
+                        ("referral_v2_typed_promotion_ledgers", datetime.now(timezone.utc).isoformat()))
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
             if schema_version(connection) != CURRENT_SCHEMA_VERSION:
                 raise RuntimeError("Database did not reach the required schema version")
         finally:
