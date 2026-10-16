@@ -380,6 +380,10 @@ class GalleryService:
             ).fetchall()
         return [self._version(row) for row in rows]
 
+    def get_version(self, user_id: str, version_id: str) -> GalleryVersion:
+        with self.database.read() as connection:
+            return self._version(self._require_version(connection,user_id,version_id))
+
     def set_version_favorite(self, user_id: str, version_id: str, favorite: bool) -> None:
         with self.database.transaction() as connection:
             row = self._require_version(connection, user_id, version_id)
@@ -666,6 +670,8 @@ class GalleryService:
         return [row["id"] for row in rows]
 
     def purge_item(self, item_id: str) -> None:
+        if self.settings.result_retention_enabled:
+            raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
         if (
             self.provider_context_service is not None
             and self.settings.openai_context_delete_on_gallery_delete
@@ -713,6 +719,8 @@ class GalleryService:
             )
 
     def purge_due(self, execute: bool = False) -> list[str]:
+        if self.settings.result_retention_enabled:
+            raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
         due = self.due_for_cleanup()
         if execute:
             for item_id in due:

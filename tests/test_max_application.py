@@ -852,7 +852,7 @@ class MaxApplicationTests(TestCase):
         self.callback(action)
 
         dialog = self.store.get("u1")
-        self.assertEqual(dialog.current_gallery_item_id, expected_item)
+        self.assertEqual(dialog.current_version_id, expected_item)
         self.assertEqual(dialog.pending_action, NAV_WORK)
         opened_message = self.app.ui.current("u1").message_id
         self.assertNotEqual(opened_message, works_message)
@@ -959,8 +959,8 @@ class MaxApplicationTests(TestCase):
         }
 
         self.assertNotEqual(first_send[1], second_edit[1])
-        self.assertNotEqual(first_sheet, second_edit[1].read_bytes())
-        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertEqual(first_sheet, second_edit[1].read_bytes())
+        self.assertEqual(first_ids,second_ids)
         open_second = next(
             parse_versioned_action(button.action)[1]
             for button in second_edit[3]
@@ -968,16 +968,16 @@ class MaxApplicationTests(TestCase):
         )
         expected = open_second.rsplit(":", 1)[1]
         self.callback(open_second)
-        self.assertEqual(self.store.get("u1").current_gallery_item_id, expected)
+        self.assertEqual(self.store.get("u1").current_version_id, expected)
         self.callback("nav:back:works")
-        self.assertIn("Страница 2 из 4", self.transport.images[-1][2])
+        self.assertNotIn("Страница", self.transport.images[-1][2])
         self.callback("works:page:4")
         last_buttons = [
             button.text
             for button in self.transport.images[-1][3]
             if button.text.startswith("Открыть ")
         ]
-        self.assertEqual(last_buttons, ["Открыть 1", "Открыть 2"])
+        self.assertEqual(last_buttons, ["Открыть 1", "Открыть 2", "Открыть 3"])
 
     def test_gallery_cycles_1_2_3_1_match_tiles_buttons_and_reject_old_callbacks(self) -> None:
         self.enable_single_screen()
@@ -998,11 +998,12 @@ class MaxApplicationTests(TestCase):
             buttons = [b for b in sent[3] if b.text.startswith("Открыть ")]
             self.assertEqual(len(buttons), len(page.entries))
             self.assertEqual([parse_versioned_action(b.action)[1] for b in buttons],
-                             [f"works:open:{entry.id}" for entry in page.entries])
+                             [f"works:result:{entry.id}" for entry in page.entries])
             expected_sheet = self.app.work_gallery.contact_sheet(
                 f"works:{user_id}:c1", page, active.revision)
             self.assertEqual(sent[1].read_bytes(), expected_sheet.read_bytes())
-            self.assertIn(f"Страница {page_number} из 3", sent[2])
+            self.assertNotIn("Страница", sent[2])
+            self.assertFalse(any(b.text in {'◀','▶','1/1'} for b in sent[3]))
             self.assertNotEqual(active.message_id, before.message_id)
             self.assertIn(before.message_id, self.transport.deletes)
             self.assertLess(
@@ -1041,7 +1042,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.transport.deletes, deletes)
         self.transport.image_delivery = True
         self.app.handle(event)
-        self.assertEqual(self.store.get("u1").gallery_cursor, 2)
+        self.assertEqual(self.store.get("u1").gallery_cursor, 1)
         self.assertIn(before.message_id, self.transport.deletes)
         self.assertEqual(self.visible_ui_message_ids(), {self.app.ui.current("u1").message_id})
 
@@ -1085,6 +1086,32 @@ class MaxApplicationTests(TestCase):
             list(executor.map(self.app.handle, events))
         self.assertEqual(len(self.transport.images), count + 1)
         self.assertEqual(self.visible_ui_message_ids(), {self.app.ui.current("u1").message_id})
+
+    def test_three_result_cleanup_runs_only_after_real_preview_delivery(self) -> None:
+        from tests.test_result_retention import fixture_unlink
+        self.enable_single_screen()
+        self.app.settings=replace(self.app.settings,result_retention_enabled=True)
+        with patch('app.result_retention._unlink',side_effect=fixture_unlink):
+            self.generate_first()
+            first=self.store.get('u1').current_version_id
+            user=self.store.get('u1').user_id
+            with self.database.transaction() as c:
+                self.demo.commerce.adjust_generation_credits(c,user_id=user,delta=5,
+                    reason='fixture',idempotency_key='retention-fixture')
+            balance=self.demo.commerce.balance(user).available
+            for _ in range(3):
+                self.callback('result:correct');self.clock.advance(2)
+                self.app.handle(self.event('message_created',text='Синтетическое исправление'))
+            with self.database.read() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM gallery_versions').fetchone()[0],3)
+                self.assertIsNone(c.execute('SELECT 1 FROM gallery_versions WHERE id=?',(first,)).fetchone())
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM generation_attempts WHERE status='succeeded'").fetchone()[0],4)
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM generation_credit_reservations WHERE status='consumed'").fetchone()[0],4)
+            self.assertEqual(self.demo.commerce.balance(user).available,balance-3)
+            self.assertEqual(self.demo.commerce.balance(user).reserved,0)
+        self.callback('studio:works')
+        self.assertEqual(len([b for b in self.transport.images[-1][3] if b.text.startswith('Открыть ')]),3)
+        self.assertNotIn('Версия',self.transport.images[-1][2])
 
     def test_legacy_history_actions_never_expose_or_select_other_versions(self) -> None:
         self.enable_single_screen()
@@ -2369,9 +2396,12 @@ class MaxApplicationTests(TestCase):
         with Image.open(pending_cards[0][0]) as displayed:
             self.assertEqual(displayed.convert("RGB").getpixel((0, 0)), (180, 35, 24))
         self.assertIn("У вас закончились обработки.", PENDING_EDIT_PAYMENT_TEXT)
-        visible_work_ids = {
-            entry.id for entry in self.app.work_gallery.works(user_id, 1).entries
-        }
+        with self.database.read() as connection:
+            visible_work_ids = {
+                connection.execute('SELECT gallery_item_id FROM gallery_versions WHERE id=?',
+                                   (entry.id,)).fetchone()[0]
+                for entry in self.app.work_gallery.works(user_id, 1).entries
+            }
         self.assertIn(old_item_id, visible_work_ids)
         self.assertNotIn(dialog.current_gallery_item_id, visible_work_ids)
         with self.database.read() as connection:
@@ -2738,7 +2768,7 @@ class MaxApplicationTests(TestCase):
 
         self.assertEqual(len(self.transport.images), image_count + 1)
         self.assertEqual(self.transport.images[-1][1], selected_preview)
-        self.assertEqual(self.transport.images[-1][2], "Выбранная версия")
+        self.assertEqual(self.transport.images[-1][2], "Выбранная фотография")
         self.assertEqual(self.transport.images[-1][3], ())
         offers = [
             message
@@ -3384,9 +3414,9 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(works.pending_action, NAV_WORKS)
         self.assertTrue(
             any(
-                message[1] == "📂 Мои работы\n\nВыберите работу."
-                and message[2][-1].text == "← Назад"
-                for message in self.transport.messages
+                image[2] == "📂 Мои работы\n\nДо 3 последних готовых результатов. Выберите фотографию."
+                and image[3][-1].text == "← Назад"
+                for image in self.transport.images
             )
         )
         self.assertEqual(self.provider.calls, provider_calls)
@@ -3404,7 +3434,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(self.store.get("u1").state, "waiting_for_correction")
         self.assertEqual(len(self.transport.images), image_count + 1)
         self.assertEqual(self.transport.images[-1][1], selected_preview)
-        self.assertEqual(self.transport.images[-1][2], "Текущая версия")
+        self.assertEqual(self.transport.images[-1][2], "Выбранная фотография")
         self.assertEqual(self.transport.images[-1][3], ())
         self.assertEqual(self.transport.messages[-1][1], CORRECTION_REQUEST_TEXT)
         self.assertEqual(
@@ -3445,7 +3475,7 @@ class MaxApplicationTests(TestCase):
         self.callback("result:favorite")
         self.callback("studio:works")
         self.assertTrue(
-            any("📂 Мои работы" in message[1] for message in self.transport.messages[-3:])
+            any("📂 Мои работы" in image[2] for image in self.transport.images[-3:])
         )
         self.callback(f"works:open:{dialog.current_gallery_item_id}")
         self.callback("work:history")

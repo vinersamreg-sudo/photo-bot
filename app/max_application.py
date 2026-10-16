@@ -21,6 +21,8 @@ from app.commerce import (
     continuation_package,
 )
 from app.database import Database
+from app.media_guard import media_operation
+from app.result_retention import ResultRetention, visible_results
 from app.demo_service import DemoService
 from app.direct_prompt import build_direct_edit_plan
 from app.domain import (
@@ -199,14 +201,6 @@ FEEDBACK_PROMPT_TEXT = (
 FEEDBACK_SAVED_TEXT = "Спасибо! Команда Ravuna получила ваше сообщение 🙌"
 
 
-def _version_word(count: int) -> str:
-    if count % 10 == 1 and count % 100 != 11:
-        return "версия"
-    if count % 10 in {2, 3, 4} and count % 100 not in {12, 13, 14}:
-        return "версии"
-    return "версий"
-
-
 class LiveMaxTransport(Protocol):
     def send_message(
         self, user_id: str, text: str, buttons: Sequence[Button] = (), **kwargs
@@ -263,6 +257,7 @@ class MaxApplication:
             clock=getattr(demo_service, "clock", lambda: datetime.now(timezone.utc)))
         self._checkout_lock = threading.RLock()
         self._gallery_navigation_lock = threading.RLock()
+        self._result_retention_request = threading.local()
 
     def _track(self, event_type: str, **values: object) -> None:
         try:
@@ -325,6 +320,22 @@ class MaxApplication:
         return len(rows)
 
     def handle(self, event: MaxIncomingEvent) -> bool:
+        try:
+            return self._handle_media_event(event)
+        finally:
+            self._cleanup_delivered_results()
+
+    def _cleanup_delivered_results(self) -> None:
+        user_id = getattr(self._result_retention_request, 'user_id', None)
+        self._result_retention_request.user_id = None
+        if user_id and self.settings.result_retention_enabled:
+            try:
+                ResultRetention(self.settings,self.database,clock=self.demo.clock).run(execute=True,user_id=user_id)
+            except Exception as error:
+                LOGGER.error('Result cleanup deferred (error_type=%s)',type(error).__name__)
+
+    @media_operation
+    def _handle_media_event(self, event: MaxIncomingEvent) -> bool:
         _revision, action = parse_versioned_action(event.callback_payload or "")
         if event.event_type == "message_callback" and (
             action.startswith(("works:", "versions:", "work:"))
@@ -1384,10 +1395,7 @@ class MaxApplication:
                 self._show_works(event, dialog, max(dialog.gallery_cursor, 1))
             return
         if action == "nav:back:work":
-            if (
-                dialog.pending_action != NAV_WORK
-                and dialog.current_gallery_item_id
-            ):
+            if dialog.current_gallery_item_id:
                 self._show_selected_work(event, dialog)
             return
         if action == "nav:back:prompt":
@@ -1520,7 +1528,7 @@ class MaxApplication:
                 )
             else:
                 self._send_selected_preview(
-                    event.user_id, dialog, "Текущая версия"
+                    event.user_id, dialog, "Выбранная фотография"
                 )
                 self._send_message(
                     event.user_id,
@@ -1577,6 +1585,8 @@ class MaxApplication:
             self._show_works(event, dialog, page)
         elif action.startswith("works:open:"):
             self._open_work(event, dialog, action.rsplit(":", 1)[1])
+        elif action.startswith("works:result:"):
+            self._open_result(event, dialog, action.rsplit(":", 1)[1])
         elif action == "work:open":
             if not dialog.current_gallery_item_id:
                 raise InvalidInputError("No gallery work selected")
@@ -2463,6 +2473,8 @@ class MaxApplication:
             duration_ms=attempt["duration_ms"] if attempt else None,
             estimated_cost=attempt["estimated_cost"] if attempt else None,
         )
+        if preview_delivered:
+            self._result_retention_request.user_id = dialog.user_id
         try:
             self.referrals.observe_free_edit_cost(event.user_id)
         except Exception as error:
@@ -2810,9 +2822,18 @@ class MaxApplication:
                 screen="error",
             )
             return
+        with self.database.read() as connection:
+            available = connection.execute(
+                """SELECT v.original_path FROM gallery_versions v JOIN gallery_items i
+                   ON i.id=v.gallery_item_id WHERE v.id=? AND i.user_id=? AND i.deleted=0""",
+                (dialog.current_version_id,dialog.user_id),
+            ).fetchone()
+        if not available or not available[0] or not Path(available[0]).is_file():
+            self._show_works(event,dialog)
+            return
         if dialog.current_version_id and not self.settings.max_single_screen_ui_enabled:
             self._send_selected_preview(
-                event.user_id, dialog, "Выбранная версия"
+                event.user_id, dialog, "Выбранная фотография"
             )
         self.store.transition(
             event.user_id,
@@ -3034,6 +3055,13 @@ class MaxApplication:
             LOGGER.info("MAX payment keyboard could not be deactivated")
 
     def notify_continuation_pack_paid(self, order_id: str) -> bool:
+        try:
+            return self._notify_continuation_pack_paid(order_id)
+        finally:
+            self._cleanup_delivered_results()
+
+    @media_operation
+    def _notify_continuation_pack_paid(self, order_id: str) -> bool:
         """Notify after the atomic ledger grant; no original is auto-unlocked."""
 
         with self.database.read() as connection:
@@ -3175,6 +3203,7 @@ class MaxApplication:
         )
         return True
 
+    @media_operation
     def deliver_paid_original(self, order_id: str) -> bool:
         """Deliver an already-paid exact version; payment stays paid on MAX failure."""
 
@@ -3266,16 +3295,7 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        if self.settings.max_single_screen_ui_enabled:
-            self._show_works_page(event, dialog, page)
-            # Adopt logical navigation only after the new screen was delivered.
-            # On failure the previous work/correction screen stays usable too.
-            self.store.transition(
-                event.user_id, "gallery", event_key=event.event_key, force=True,
-                pending_prompt=None, pending_action=NAV_WORKS,
-                status_message_id=None,
-            )
-            return
+        self._show_works_page(event, dialog, 1)
         self.store.transition(
             event.user_id,
             "gallery",
@@ -3283,69 +3303,9 @@ class MaxApplication:
             force=True,
             pending_prompt=None,
             pending_action=NAV_WORKS,
-            gallery_cursor=max(page, 1),
+            gallery_cursor=1,
             status_message_id=None,
         )
-        if not dialog.user_id:
-            self._send_message(
-                event.user_id,
-                "Здесь пока пусто.\n\nСоздайте первую фотографию.",
-                (Button("← Назад", "nav:back:main"),),
-            )
-            return
-        with self.database.read() as connection:
-            rows = connection.execute(
-                """SELECT id,title,generation_count,favorite,created_at,cover_preview_path
-                   FROM gallery_items WHERE user_id=? AND deleted=0
-                   ORDER BY updated_at DESC LIMIT 5""",
-                (dialog.user_id,),
-            ).fetchall()
-        if not rows:
-            self._send_message(
-                event.user_id,
-                "Здесь пока пусто.\n\nСоздайте первую фотографию.",
-                (Button("← Назад", "nav:back:main"),),
-            )
-            return
-        self._send_message(
-            event.user_id,
-            "📂 Мои работы\n\nВыберите работу.",
-            (Button("← Назад", "nav:back:main"),),
-        )
-        fallback_buttons: list[Button] = []
-        for row in rows:
-            favorite = " ⭐" if row["favorite"] else ""
-            count = row["generation_count"]
-            version_word = _version_word(count)
-            try:
-                created = datetime.fromisoformat(row["created_at"]).strftime("%d.%m.%Y")
-            except (TypeError, ValueError):
-                created = ""
-            caption = (
-                f"{row['title'][:36]}{favorite}\n"
-                f"{created} · {count} {version_word}"
-            )
-            preview = Path(row["cover_preview_path"]) if row["cover_preview_path"] else None
-            if preview and preview.is_file() and self._send_image(
-                event.user_id,
-                preview,
-                caption,
-                (Button("Открыть", f"works:open:{row['id']}"),),
-            ):
-                continue
-            fallback_buttons.append(
-                Button(
-                    f"{row['title'][:28]}{favorite} · {count} {version_word}",
-                    f"works:open:{row['id']}",
-                )
-            )
-        if fallback_buttons:
-            self._send_message(
-                event.user_id,
-                "Работы без доступного превью.",
-                tuple(fallback_buttons)
-                + (Button("← Назад", "nav:back:main"),),
-            )
 
     def _show_works_page(
         self, event: MaxIncomingEvent, dialog: MaxDialog, page: int
@@ -3377,7 +3337,7 @@ class MaxApplication:
         message_id = self._send_image(
             event.user_id,
             sheet,
-            f"📂 Мои работы\n\nСтраница {gallery_page.page} из {gallery_page.pages}",
+            "📂 Мои работы\n\nДо 3 последних готовых результатов. Выберите фотографию.",
             buttons,
             screen="works_gallery",
             context={"page": gallery_page.page},
@@ -3394,43 +3354,44 @@ class MaxApplication:
         buttons = tuple(
             Button(
                 f"Открыть {index}",
-                f"works:open:{entry.id}",
+                f"works:result:{entry.id}",
                 (index - 1) // 3,
             )
             for index, entry in enumerate(page.entries, 1)
         )
-        navigation_row = 2
-        previous_page = max(1, page.page - 1)
-        next_page = min(page.pages, page.page + 1)
-        navigation = (
-            Button("◀", f"works:page:{previous_page}", navigation_row),
-            Button(
-                f"{page.page}/{page.pages}",
-                f"works:page:{page.page}",
-                navigation_row,
-            ),
-            Button("▶", f"works:page:{next_page}", navigation_row),
-        )
         back = Button(
             "← Назад",
             "nav:back:main",
-            3,
+            1,
         )
-        return buttons + navigation + (back,)
+        return buttons + (back,)
 
     def _open_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, item_id: str
     ) -> None:
+        # Compatibility for old item-id buttons; never resurrect older versions.
+        with self.database.read() as connection:
+            row = next((r for r in visible_results(connection,dialog.user_id)
+                        if r['gallery_item_id']==item_id),None)
+        if row is None:
+            self._show_works(event,dialog)
+            return
+        self._open_result(event,dialog,row['id'])
+
+    def _open_result(
+        self, event: MaxIncomingEvent, dialog: MaxDialog, version_id: str
+    ) -> None:
         if not dialog.user_id:
             raise InvalidInputError("Gallery owner is missing")
-        item, best = self.gallery.open_item(dialog.user_id, item_id)
-        versions = self._ready_gallery_versions(
-            self.gallery.list_versions(dialog.user_id, item_id)
-        )
-        if best not in versions:
-            best = None
-        if not best and versions:
-            best = versions[-1]
+        with self.database.read() as connection:
+            row = next((r for r in visible_results(connection,dialog.user_id)
+                        if r['id']==version_id),None)
+        if row is None:
+            self._show_works(event,dialog)
+            return
+        item, _best = self.gallery.open_item(dialog.user_id, row['gallery_item_id'])
+        versions = self._ready_gallery_versions([self.gallery.get_version(dialog.user_id,version_id)])
+        best = next((v for v in versions if v.id==version_id),None)
         self._send_work(event.user_id, item.title, item.favorite, versions, best)
         self.store.transition(
             event.user_id, "gallery", event_key=event.event_key, force=True,
@@ -3444,37 +3405,10 @@ class MaxApplication:
     def _show_selected_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog
     ) -> None:
-        if not dialog.user_id or not dialog.current_gallery_item_id:
+        if not dialog.user_id or not dialog.current_version_id:
             self._show_works(event, dialog)
             return
-        item, best = self.gallery.open_item(
-            dialog.user_id, dialog.current_gallery_item_id
-        )
-        versions = self._ready_gallery_versions(
-            self.gallery.list_versions(dialog.user_id, item.id)
-        )
-        selected = next(
-            (
-                version
-                for version in versions
-                if version.id == dialog.current_version_id
-            ),
-            best or (versions[-1] if versions else None),
-        )
-        self._send_work(
-            event.user_id, item.title, item.favorite, versions, selected
-        )
-        self.store.transition(
-            event.user_id,
-            "gallery",
-            event_key=event.event_key,
-            force=True,
-            current_gallery_item_id=item.id,
-            current_version_id=selected.id if selected else None,
-            pending_prompt=None,
-            pending_action=NAV_WORK,
-            status_message_id=None,
-        )
+        self._open_result(event,dialog,dialog.current_version_id)
 
     def _send_work(
         self,
@@ -3509,8 +3443,7 @@ class MaxApplication:
         status = "Готово" if metadata and metadata["status"] == "succeeded" else "В работе"
         caption = (
             f"{title}{' ⭐' if favorite or current.favorite else ''}\n"
-            f"Версия {current.version_number} из {len(versions)}"
-            f"{f' · {created}' if created else ''} · {status}"
+            f"{created} · {status}"
         )
         dialog = self.store.get(platform_user_id)
         remaining = (

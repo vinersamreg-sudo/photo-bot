@@ -85,18 +85,18 @@ class WorkGalleryTests(TestCase):
                     ),
                 )
 
-    def test_zero_one_six_seven_and_twenty_work_pagination(self) -> None:
+    def test_zero_one_two_three_four_hundred_have_no_pagination(self) -> None:
         self.assertEqual(self.gallery.works("u", 1).total, 0)
-        for quantity, pages, last_size in ((1, 1, 1), (6, 1, 6), (7, 2, 1), (20, 4, 2)):
+        for quantity in (1,2,3,4,100):
             with self.database.transaction() as connection:
                 connection.execute("DELETE FROM gallery_versions")
                 connection.execute("DELETE FROM gallery_items")
             self.seed_works(quantity)
             first = self.gallery.works("u", 1)
-            last = self.gallery.works("u", pages)
-            self.assertEqual(first.pages, pages)
-            self.assertEqual(len(last.entries), last_size)
-            self.assertLessEqual(len(first.entries), 6)
+            last = self.gallery.works("u", 99)
+            self.assertEqual(first.pages, 1)
+            self.assertEqual(len(last.entries), min(quantity,3))
+            self.assertEqual(last,first)
 
     def test_contact_sheet_uses_current_page_previews_and_is_cached(self) -> None:
         self.seed_works(7)
@@ -127,7 +127,7 @@ class WorkGalleryTests(TestCase):
         first = self.gallery.works("u", 1)
         second = self.gallery.works("u", 2)
 
-        self.assertEqual(first.total, 6)
+        self.assertEqual(first.total, 3)
         self.assertEqual(first.pages, 1)
         self.assertEqual(second.page, 1)
         self.assertNotIn("work-1", {entry.id for entry in first.entries})
@@ -147,19 +147,15 @@ class WorkGalleryTests(TestCase):
         self.assertEqual(page.total, 0)
         self.assertEqual(page.entries, ())
 
-    def test_pages_have_distinct_ids_cache_keys_and_twenty_split(self) -> None:
+    def test_legacy_page_requests_show_the_same_latest_three_results(self) -> None:
         self.seed_works(20)
         pages = [self.gallery.works("u", page) for page in range(1, 5)]
-        self.assertEqual([len(page.entries) for page in pages], [6, 6, 6, 2])
-        self.assertTrue(
-            set(entry.id for entry in pages[0].entries).isdisjoint(
-                entry.id for entry in pages[1].entries
-            )
-        )
+        self.assertEqual([len(page.entries) for page in pages], [3, 3, 3, 3])
+        self.assertTrue(all(page==pages[0] for page in pages))
         first_path = self.gallery.contact_sheet("works:u:chat", pages[0], 1)
         second_path = self.gallery.contact_sheet("works:u:chat", pages[1], 2)
         self.assertNotEqual(first_path, second_path)
-        self.assertNotEqual(first_path.read_bytes(), second_path.read_bytes())
+        self.assertEqual(first_path.read_bytes(), second_path.read_bytes())
 
     def test_version_gallery_is_paginated_from_watermarked_previews(self) -> None:
         self.seed_works(1)

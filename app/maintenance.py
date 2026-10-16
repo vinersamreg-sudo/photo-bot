@@ -127,6 +127,21 @@ def _write_report(settings: Settings, report: dict[str, Any]) -> None:
 
 
 def run_maintenance(settings: Settings, *, execute: bool) -> dict[str, Any]:
+    if settings.result_retention_enabled:
+        # The existing independent timer is reused; no second publisher/runtime.
+        # Do not run the legacy whole-item rmtree path alongside result retention.
+        from app.result_retention import ResultRetention
+        report = ResultRetention(settings).run(execute=execute)
+        if execute and report['mode']=='execute':
+            # Preserve the existing independent provider-context expiry policy;
+            # never invoke a provider from the new read-only planner.
+            database = Database(settings.database_path)
+            gateway = (OpenAIProviderContextGateway(create_openai_client(settings))
+                       if settings.openai_api_key else None)
+            contexts = ProviderContextService(settings,database,gateway)
+            report['provider_context_due_count'] = len(contexts.cleanup_due(execute=True))
+            _write_report(settings,report)
+        return report
     database = Database(settings.database_path)
     storage = PrivateStorage(
         settings.users_dir, settings.max_source_file_size_mb * 1024 * 1024

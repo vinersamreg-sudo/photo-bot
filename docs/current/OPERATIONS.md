@@ -125,6 +125,73 @@ partial historical coverage and payment-method limitations.
 
 ## Retention cleanup
 
+### Prepared three-result retention (OFF until separate deletion GO)
+
+`RESULT_RETENTION_ENABLED=false` is the default. No production activation or
+historical deletion is implied by merging this code. UI visibility is at most
+three delivered results; physical lifecycle is independent and conservative.
+
+Read-only plan (no `Database()` initialization, report write, lock creation,
+provider call or VACUUM):
+
+```bash
+scripts/ravuna results-cleanup
+```
+
+The report contains only counts/bytes, reasons for protection, projected version
+deletes versus metadata stubs, and SQLite free pages/page size. It ranks delivery-
+committed succeeded attempts; legacy succeeded gallery records remain supported.
+Existing paid users' media are conservatively protected for the configured 180
+days from completion/payment/delivery, whichever is later. Targeted pending,
+expired-but-not-proven-cancelled payments, unconfirmed original delivery, pending
+edits, active correction/source dialogs, provider contexts and trash obligations
+fail closed. An expired local checkout alone is not proof that a late ResultURL
+cannot arrive. Protected media can exceed three physical files/results. Existing
+exact-target original retry/re-delivery still verifies ownership and entitlements;
+the MAX-delivered original attachment also remains in its conversation.
+
+An explicitly approved `--execute` re-plans under a process/thread media writer
+guard plus SQLite `BEGIN IMMEDIATE`. Normal MAX events, paid notifications,
+original delivery and direct generation hold shared reader guards. An active
+reader defers cleanup, without serializing normal Linux readers. Each apply
+handles at most 100 results and 200 aged derived cache files; retry converges.
+Only regular single-link files under their proven user root (or the designated
+derived contact-sheet cache) are unlinked, using POSIX directory descriptors and
+`O_NOFOLLOW`. Shared references are retained. Windows execution refuses physical
+deletion; POSIX safety/crash tests run in Linux CI.
+
+Filesystem unlink cannot roll back. If interrupted, DB rollback retains the
+hidden candidates; a retry removes their remaining files/DB references. Already
+missing files are counted separately, never claimed as newly deleted. The latest
+aggregate receipt is `result_retention_last.json`. Financial targets/feedback/live
+state retain pathless metadata stubs where FK/reference evidence requires them.
+Legacy gallery-only successes also retain chronology stubs; attempt-backed
+success chronology survives in the mandatory generation-attempt records. An
+already retired stub does not consume a cleanup batch or revive older files.
+Attempts, successful-delivery/debit proof, payments, credits, original entitlements
+and V1/V2 referral evidence are not deleted or re-granted. Whole-item purge APIs
+refuse execution once result retention is enabled.
+
+Release sequence: review/CI; stop the independent retention timer and verify its
+oneshot is idle; fresh encrypted backup/recovery/restore/off-site; canonical copy
+check and fingerprints; deploy with automatic result retention OFF; repeat this
+read-only plan and original/paid recovery checks. Only a separate deletion GO
+permits bounded one-time `results-cleanup --execute`. After reconciliation,
+enable the flag and re-enable the existing independent retention timer. Successful
+MAX preview delivery then requests a user-scoped cleanup after releasing its
+reader guard; failures defer to the timer, never replay generation. The timer
+uses the same planner and preserves existing provider-context expiry handling.
+No extra bot runtime or new scheduler is installed. Never re-enable the legacy
+whole-item timer while evaluating the new lifecycle.
+
+No schema migration is required (schema16). Deleted rows free SQLite pages for
+reuse; the DB file need not shrink. Never VACUUM the active database. Optional
+future compaction requires a separate idle window, verified backup, free-space
+check and financial/integrity validation. Existing encrypted backup retention
+is unchanged; historical copies age out through their own approved policy.
+
+### Legacy whole-work retention
+
 `ravuna-retention-cleanup.service` is an independent, locked oneshot. Its timer
 runs daily at 02:30 UTC, after the scheduled encrypted backup window, with up to
 ten minutes of randomized delay. It has no dependency on `photo-bot.service` and
