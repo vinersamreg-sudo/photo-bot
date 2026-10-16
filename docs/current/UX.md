@@ -151,21 +151,27 @@ pending request; a previous or latest completed work is never used as fallback.
   cannot duplicate the record or charge an edit. Public copy uses “сервис Ravuna”
   / “команда Ravuna”, without naming an individual operator.
 
-## Works and versions
+## Three-result works list
 
-- «Мои работы» contains only successfully completed works whose selected
-  succeeded version has an existing watermarked preview. Source-only,
-  processing, failed, rejected and missing-preview records are skipped before
-  page counts and callbacks are calculated.
-- A contact sheet has one to six real tiles and no placeholders. Its layout is
-  dynamic for 1–6 items, each tile has a contrasting number badge, and the
+- «Мои работы» shows at most three latest succeeded **results**, not three source
+  works. Corrections/repeats each occupy one slot. Order is successful completion
+  time (legacy gallery creation fallback), then stable attempt/legacy-result key
+  descending. Retained attempt chronology survives gallery-row cleanup. Opening,
+  favouriting and choosing current-best never reorder the list. Failed/in-flight
+  attempts cannot evict a successful result. Missing/deleted results never revive
+  older history. A missing preview is omitted after selecting the latest three.
+- The screen says «До 3 последних готовых результатов. Выберите фотографию.»
+  There are no page arrows, page numbers, version counters or history labels.
+  An opened result shows its date/status and the existing original, correction,
+  repeat, referral and feedback actions. Source order/selected parent is unchanged.
+- A contact sheet has one to three real tiles and no placeholders. Each tile has
+  a contrasting number badge, and the
   matching buttons are labelled “Открыть N”. A true clickable tile gallery would
   require a separate MAX mini-app and is not simulated by the bot image.
 - Page identity includes user/chat, page, ordered item/version ids, preview
   revision and layout. Every gallery page and opened work sends a fresh native
   image message to avoid stale attachment caching on MAX iOS, adopts it and only
-  then deletes the previous bot UI message; 20 ready works produce four pages
-  (6 + 6 + 6 + 2). A failed image POST keeps the old UI revision/keyboard usable
+  then deletes the previous bot UI message. A failed image POST keeps the old UI revision/keyboard usable
   for retry. A failed delete attempts to clear the old keyboard; message/revision
   guards reject any remaining stale callbacks. Gallery navigation is serialized
   so simultaneous taps cannot create two active screens.
@@ -173,8 +179,10 @@ pending request; a previous or latest completed work is never used as fallback.
   exposes the selected ready version's existing correction, repeat and original
   actions directly. Versions, lineage, current-best selection and balances are
   retained. Legacy history/previous/next/version callbacks return only to the
-  user's currently owned work (or their works list); supplied legacy version IDs
-  never select another work/version.
+  user's currently owned visible result (or their works list); supplied legacy
+  version IDs never select another work/version. Old page requests render the
+  same single screen. Financially protected older files are not extra history
+  tiles: existing owned payment-return/original-delivery paths retain exact targets.
 
 ## Payment state
 

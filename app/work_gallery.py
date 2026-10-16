@@ -12,6 +12,7 @@ from typing import Optional, Sequence
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.database import Database
+from app.result_retention import visible_results
 
 
 PAGE_SIZE = 6
@@ -44,42 +45,22 @@ class WorkGallery:
 
     def works(self, user_id: str, page: int) -> GalleryPage:
         with self.database.read() as connection:
-            rows = connection.execute(
-                """SELECT i.id,i.title,i.created_at,i.updated_at,
-                          v.id AS version_id,v.preview_watermarked_path,
-                          v.created_at AS version_created_at,v.status
-                   FROM gallery_items AS i
-                   JOIN gallery_versions AS v ON v.id=i.current_best_version_id
-                   LEFT JOIN generation_attempts AS a ON a.id=v.attempt_id
-                   WHERE i.user_id=? AND i.deleted=0
-                     AND v.status='succeeded'
-                     AND (a.id IS NULL OR a.status='succeeded')
-                   ORDER BY i.updated_at DESC,i.id DESC""",
-                (user_id,),
-            ).fetchall()
+            rows = visible_results(connection, user_id)
         entries = tuple(
             GalleryThumbnail(
                 row["id"],
                 Path(row["preview_watermarked_path"]),
-                row["title"],
-                row["created_at"],
+                "Моя работа",
+                row["completed_at"],
                 row["status"],
-                f"{row['version_id']}:{row['version_created_at']}:{row['updated_at']}",
+                f"{row['id']}:{row['completed_at']}",
             )
             for row in rows
             if self._preview_is_available(row["preview_watermarked_path"])
         )
         self._record_skipped("works", len(rows) - len(entries))
         total = len(entries)
-        pages = max(1, math.ceil(total / PAGE_SIZE))
-        selected_page = min(max(page, 1), pages)
-        offset = (selected_page - 1) * PAGE_SIZE
-        return GalleryPage(
-            entries[offset : offset + PAGE_SIZE],
-            selected_page,
-            pages,
-            total,
-        )
+        return GalleryPage(entries, 1, 1, total)
 
     def versions(self, user_id: str, item_id: str, page: int) -> GalleryPage:
         with self.database.read() as connection:

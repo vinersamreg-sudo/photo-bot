@@ -15,6 +15,7 @@ from uuid import uuid4
 from app.config import Settings
 from app.commerce import CommerceService
 from app.database import Database
+from app.media_guard import media_operation
 from app.direct_prompt import (
     DIRECT_PROMPT_VERSION,
     build_direct_edit_plan,
@@ -313,6 +314,7 @@ class DemoService:
             ),
         )
 
+    @media_operation
     def generate(
         self,
         session_id: str,
@@ -354,6 +356,8 @@ class DemoService:
             ).fetchone()
             if replay:
                 if replay["status"] == "succeeded":
+                    if not replay["demo_result_path"] or not Path(replay["demo_result_path"]).is_file():
+                        raise InvalidInputError("Stored result is no longer available")
                     balance = self.commerce.ensure_initial_grant(
                         connection, replay["user_id"]
                     )

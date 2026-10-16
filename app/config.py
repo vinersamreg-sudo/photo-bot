@@ -105,6 +105,7 @@ class Settings:
     demo_retention_days: int = 30
     paid_retention_days: int = 180
     trash_retention_days: int = 30
+    result_retention_enabled: bool = False
     max_bot_token: str = ""
     max_bot_url: str = "https://max.ru/se13572368_bot"
     max_api_base_url: str = "https://platform-api2.max.ru"
@@ -626,6 +627,7 @@ def load_settings(
         demo_retention_days=_positive_int(values, "DEMO_RETENTION_DAYS", 30),
         paid_retention_days=_positive_int(values, "PAID_RETENTION_DAYS", 180),
         trash_retention_days=_positive_int(values, "TRASH_RETENTION_DAYS", 30),
+        result_retention_enabled=_boolean(values, "RESULT_RETENTION_ENABLED", False),
         max_bot_token=values.get("MAX_BOT_TOKEN", "").strip(),
         max_bot_url=(
             values.get("MAX_BOT_URL", "https://max.ru/se13572368_bot").strip()

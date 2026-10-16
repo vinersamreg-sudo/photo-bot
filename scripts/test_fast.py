@@ -47,6 +47,8 @@ PROFILES: dict[str, tuple[str, ...]] = {
     ),
     "site": ("site/tests/test_site.py",),
     "storage": (
+        "tests.test_result_retention",
+        "tests.test_work_gallery",
         "tests.test_demo_service",
         "tests.test_gallery",
         "tests.test_backup_maintenance_operations",
