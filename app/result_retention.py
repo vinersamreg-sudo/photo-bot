@@ -257,7 +257,7 @@ class ResultRetention:
                 reason='paid_retention'
             if not reason and first_batch:
                 created = _time(r['work_created_at'])
-                if not created or not _time(r['retention_until']):
+                if not created or not _time(r['retention_until']) or complete < created:
                     reason = 'legacy_expiry_unverified'
                 elif (not expired or now < created + timedelta(days=30) or
                       now < complete + timedelta(days=30)):

@@ -191,6 +191,7 @@ class ResultRetentionTests(TestCase):
     def test_first_batch_old_fully_spent_customer_is_not_free(self):
         seeded=self.seed(5);self.age_results()
         with self.db.transaction() as c:
+            c.execute('UPDATE gallery_items SET created_at=?',((NOW-timedelta(days=500)).isoformat(),))
             c.execute('UPDATE generation_attempts SET completed_at=?',((NOW-timedelta(days=400)).isoformat(),))
             c.execute("""INSERT INTO payment_orders(id,public_token,attempt_id,version_id,user_id,
                 provider,merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
@@ -255,6 +256,22 @@ class ResultRetentionTests(TestCase):
         with patch.object(sys,'argv',['results-cleanup','--first-batch']), redirect_stdout(io.StringIO()) as output:
             with patch('app.config.load_settings',return_value=self.settings):self.assertEqual(main(),0)
         self.assertEqual(json.loads(output.getvalue())['candidate_results'],0)
+
+    def test_first_batch_exact_age_boundary_and_invalid_chronology(self):
+        seeded=self.seed(4);self.age_results()
+        for completion, expected, reason in (
+            (NOW-timedelta(days=30),1,None),
+            (NOW-timedelta(days=30)+timedelta(microseconds=1),0,'early_eviction_excluded'),
+            (NOW-timedelta(days=41),0,'legacy_expiry_unverified'),
+        ):
+            with self.subTest(completion=completion):
+                with self.db.transaction() as c:
+                    c.execute('UPDATE generation_attempts SET completed_at=? WHERE id=?',
+                              (completion.isoformat(),'a-'+seeded[0][0]))
+                path=self.legacy_review(seeded[:1])
+                report=self.retention.run(first_batch=True,review_path=path)
+                self.assertEqual(report['candidate_results'],expected)
+                if reason:self.assertGreater(report['protection_reasons'][reason],0)
 
     @skipUnless(os.name=='posix','Production private evidence permissions')
     def test_first_batch_public_or_symlink_review_refused_without_unlink(self):
