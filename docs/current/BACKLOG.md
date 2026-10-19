@@ -11,6 +11,17 @@ not authorization to implement.
 
 ## P1
 
+### Retention beyond the controlled first batch
+
+- Prove applicable historical terms per target; unknown records remain excluded.
+  The ten-target legacy-expiry review is not retroactive C2 consent. Before
+  general/early-C2 automation, implement only the legal applicability evidence
+  actually required for those cohorts; keep automatic cleanup OFF meanwhile.
+- Separately approve instruction retention (R1/R2), including JSON/inherited
+  copies, pending edits and post-restore suppression. Do not fold prompt deletion
+  into media cleanup. Immutable legal archives/acceptance improvements remain
+  separate work, not a migration prerequisite invented for the first cohort.
+
 ### Production monitoring and recovery
 
 - Select and approve an external alert destination, configure

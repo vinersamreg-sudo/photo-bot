@@ -131,6 +131,81 @@ partial historical coverage and payment-method limitations.
 historical deletion is implied by merging this code. UI visibility is at most
 three delivered results; physical lifecycle is independent and conservative.
 
+### Controlled first batch: legacy expiry only, maximum 10
+
+The approved future C2 policy is NOT retroactive approval for old works. The
+first production execution must use the existing planner's `--first-batch`
+profile, never unrestricted `--execute`, a SQL purge, or the legacy timer.
+Keep automatic result retention OFF and the timer disabled. This PR/code and
+green CI do not authorize deploy, backup creation or physical deletion.
+
+```bash
+scripts/ravuna results-cleanup --first-batch
+scripts/ravuna results-cleanup --first-batch --legacy-review <private-reviewed-json>
+```
+
+Both are read-only. Without verified historical evidence, candidate count is
+zero (`legacy_terms_unverified`); the earlier 125 technical candidates / 100-row
+batch are NOT a legally approved deletion set. This profile requires both the
+work and successful result to be at least 30 days old, and its ordinary deadline
+to have elapsed. Early C2 eviction and fresh corrections of old works are
+excluded. Existing payment/delivery/editing/trash/reservation/path/shared-file
+protections still run. Additionally, any user with a payment order, intent,
+pack grant or original entitlement history, or a non-demo target, is excluded
+from this initial cohort, even after paid protection has elapsed. This narrow
+exclusion does not revoke any rights or redefine a former payer as free.
+
+An operator must first verify the actual historical terms applicable to each
+target and absence of unresolved rights. Unknown acceptance/version evidence
+means exclusion, not a guessed consent. The private review is an explicit
+attestation of that completed review, NOT a new consent or proof inferred from
+age/filename. Its hash references must identify the actual archived terms and
+review evidence; merely filling 64 hexadecimal characters is not legal proof.
+No automatic mapping of `2026-07-draft-1` to a public revision is permitted.
+
+Private review format (synthetic example, never commit customer identifiers):
+
+```json
+{
+  "schema_version": 1,
+  "basis": "legacy_expiry_30d",
+  "reviewed_at": "2026-10-19T12:00:00+00:00",
+  "results": [{
+    "version_id": "synthetic-version",
+    "user_id": "synthetic-user",
+    "gallery_item_id": "synthetic-work",
+    "work_created_at": "2026-08-01T12:00:00+00:00",
+    "completed_at": "2026-08-01T12:01:00+00:00",
+    "terms_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "evidence_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }]
+}
+```
+
+At most ten distinct results; exact timestamps must match current DB records.
+The file must be regular, non-symlink, <=64 KiB and, on production POSIX, owned
+by the invoking user with no group/other permissions (normally 0600). Store it
+outside Git/public paths. Dry-run prints only counts/reasons and the review hash,
+never identifiers, prompts, evidence content or private paths. Preserve the
+review privately alongside the separately verified evidence and receipt.
+
+Future execution requires separate GO, a fresh verified recovery/restore/off-site
+proof, current SHA/health/idle checks and a reviewed dry-run. Then the ONLY
+initial operator command is:
+
+```bash
+scripts/ravuna results-cleanup --first-batch --legacy-review <private-reviewed-json> --execute
+```
+
+The same planner revalidates all protections and the review under the writer
+guard and `BEGIN IMMEDIATE`. The ten-entry evidence set prevents a retry from
+spilling into a new batch. This profile never sweeps unrelated contact-sheet
+cache files. Reconcile files, FK, commerce/referrals and MAX after the one run;
+stop for review rather than looping or enabling timers. No schema, consent,
+prompt-retention or production environment changes are part of this profile.
+
+### Existing general planner (not first-run authorization)
+
 Read-only plan (no `Database()` initialization, report write, lock creation,
 provider call or VACUUM):
 
@@ -161,7 +236,9 @@ derived contact-sheet cache) are unlinked, using POSIX directory descriptors and
 deletion; POSIX safety/crash tests run in Linux CI.
 
 Filesystem unlink cannot roll back. If interrupted, DB rollback retains the
-hidden candidates; a retry removes their remaining files/DB references. Already
+metadata while some files may already be absent. Candidates may include expired
+results still visible in the latest three, not just hidden history. A reviewed
+retry reconciles remaining files/DB references in the same approved set. Already
 missing files are counted separately, never claimed as newly deleted. The latest
 aggregate receipt is `result_retention_last.json`. Financial targets/feedback/live
 state retain pathless metadata stubs where FK/reference evidence requires them.
@@ -176,8 +253,9 @@ Release sequence: review/CI; stop the independent retention timer and verify its
 oneshot is idle; fresh encrypted backup/recovery/restore/off-site; canonical copy
 check and fingerprints; deploy with automatic result retention OFF; repeat this
 read-only plan and original/paid recovery checks. Only a separate deletion GO
-permits bounded one-time `results-cleanup --execute`. After reconciliation,
-enable the flag and re-enable the existing independent retention timer. Successful
+permits the ten-target legacy-expiry command above. Do not enable the flag or
+timer after that run: wider/early-C2 automatic execution needs separately proven
+legal applicability and a separate GO. In that future mode, successful
 MAX preview delivery then requests a user-scoped cleanup after releasing its
 reader guard; failures defer to the timer, never replay generation. The timer
 uses the same planner and preserves existing provider-context expiry handling.
@@ -192,31 +270,12 @@ is unchanged; historical copies age out through their own approved policy.
 
 ### Legacy whole-work retention
 
-`ravuna-retention-cleanup.service` is an independent, locked oneshot. Its timer
-runs daily at 02:30 UTC, after the scheduled encrypted backup window, with up to
-ten minutes of randomized delay. It has no dependency on `photo-bot.service` and
-does not restart or reconfigure the bot.
-
-Before first activation, and after any retention-code change, require a verified
-backup and inspect the privacy-safe dry-run:
-
-```bash
-venv/bin/python -m app.main maintenance-cleanup
-```
-
-The report contains counts and bytes only. `path_anomaly_count` must be zero;
-otherwise execution is fail-closed. The first authorized execution is manual:
-
-```bash
-sudo -u photoapp venv/bin/python -m app.main maintenance-cleanup --execute
-sudo systemctl enable --now ravuna-retention-cleanup.timer
-```
-
-The service preserves every DB-referenced primary/secondary source, preview,
-original and pending-edit source. Deleted gallery items wait the full trash
-retention even when their normal gallery retention has already expired. Repeated
-execution is idempotent. Never enable the timer before the first backup/dry-run
-comparison has passed.
+Historical whole-work cleanup is NOT an approved execution path. Keep its timer
+disabled; do not run `maintenance-cleanup --execute` or reactivate the old timer
+to verify this release. It may unlink files before a failing database deletion.
+Future reuse of a unit must first verify that it invokes the reviewed new
+planner, and needs a separate GO. Backup and photo-bot services are unrelated
+and must not be stopped or modified by first-batch preparation.
 
 ## External watchdog
 

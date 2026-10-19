@@ -309,8 +309,20 @@ class RavunaSiteTests(unittest.TestCase):
     # 34
     def test_privacy_discloses_retention_and_cookies(self) -> None:
         privacy = self.pages["legal/privacy.html"]
-        for text in ("до 30 дней", "до 180 дней", "24 часов", "не устанавливает cookies"):
+        for text in ("до 30 дней", "180 дней", "24 часов", "не устанавливает cookies"):
             self.assertIn(text, privacy)
+
+    def test_retention_drafts_separate_legacy_expiry_eviction_and_trash(self) -> None:
+        for name in ('offer', 'privacy', 'personal-data', 'terms'):
+            html = self.pages[f'legal/{name}.html']
+            self.assertIn('не опубликован и не вступил в силу', html)
+            self.assertIn('задним числом', html)
+        offer = self.pages['legal/offer.html']
+        self.assertIn('без предварительной корзины', offer)
+        self.assertIn('не начинает обычный срок заново', offer)
+        self.assertIn('не аннулируются', offer)
+        self.assertIn('семи последних recovery snapshots не означает семь календарных дней', offer)
+        self.assertIn('Для уже оплаченного заказа применяются условия, действовавшие при оплате', offer)
 
     # 35
     def test_consent_matches_actual_save_semantics(self) -> None:
