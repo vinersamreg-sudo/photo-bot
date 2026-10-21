@@ -122,6 +122,101 @@ class ResultRetentionTests(TestCase):
         with patch('app.result_retention._unlink',side_effect=fixture_unlink):
             return self.retention.run(execute=True,first_batch=True,review_path=path)
 
+    def cohort_review(self):
+        with self.db.transaction() as c:
+            c.execute('UPDATE gallery_items SET created_at=?,retention_until=?',
+                      ((NOW-timedelta(days=100)).isoformat(), (NOW-timedelta(days=70)).isoformat()))
+            c.execute('UPDATE generation_attempts SET completed_at=?', ((NOW-timedelta(days=90)).isoformat(),))
+            c.execute("INSERT OR IGNORE INTO max_legal_documents(document_type,version,created_at) VALUES('offer','historical-verified',?)",
+                      ((NOW-timedelta(days=150)).isoformat(),))
+            c.execute("INSERT OR REPLACE INTO max_legal_acceptances VALUES('u','offer','historical-verified',?)",
+                      ((NOW-timedelta(days=110)).isoformat(),))
+        digest=self.retention.run(first_batch=True)['inventory_sha256']
+        value={'schema_version':2,'basis':'legacy_expiry_30d_cohort','reviewed_at':NOW.isoformat(),
+               'cohort':{'published_from':(NOW-timedelta(days=150)).isoformat(),
+                         'published_until':NOW.isoformat(), 'offer_version':'historical-verified',
+                         'notice_published_at':(NOW-timedelta(days=40)).isoformat(),
+                         'trash_transition':'expiry_plus_30d_and_notice_plus_30d',
+                         'terms_sha256':'a'*64,'publication_evidence_sha256':'b'*64,
+                         'notice_evidence_sha256':'c'*64,'inventory_sha256':digest}}
+        path=self.base/'cohort.json';path.write_text(json.dumps(value));path.chmod(0o600)
+        return path
+
+    def test_cohort_one_rule_selects_ten_and_replay_cannot_spill(self):
+        seeded=self.seed(14);path=self.cohort_review();before=self.financial()
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['candidate_results'],10)
+        self.assertTrue(dry['cohort_review'])
+        self.assertEqual(self.first_apply(path)['removed_versions'],10)
+        self.assertEqual(self.financial(),before)
+        with self.assertRaises(ValueError):self.first_apply(path)
+        self.assertEqual(sum(all(p.exists() for p in paths) for _,_,paths in seeded),4)
+
+    def test_cohort_unknown_acceptance_and_transition_grace_excluded(self):
+        self.seed(5);path=self.cohort_review()
+        with self.db.transaction() as c:c.execute('DELETE FROM max_legal_acceptances')
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['candidate_results'],0)
+        self.assertEqual(dry['protection_reasons']['legacy_acceptance_unverified'],5)
+        path=self.cohort_review();value=json.loads(path.read_text())
+        value['cohort']['notice_published_at']=(NOW-timedelta(days=29)).isoformat()
+        path.write_text(json.dumps(value));path.chmod(0o600)
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['protection_reasons']['legacy_transition_grace'],5)
+
+    def test_cohort_crash_retry_reconciles_same_ten_not_following_four(self):
+        seeded=self.seed(14);path=self.cohort_review();calls=[]
+        def interrupted(file,root,identity):
+            calls.append(file)
+            if len(calls)>1:raise OSError('synthetic interruption')
+            fixture_unlink(file,root,identity)
+        with patch('app.result_retention._unlink',side_effect=interrupted):
+            with self.assertRaises(OSError):self.first_apply_without_patch(path)
+        self.assertEqual(self.first_apply(path)['candidate_results'],10)
+        self.assertEqual(sum(all(p.exists() for p in paths) for _,_,paths in seeded),4)
+
+    def first_apply_without_patch(self,path):
+        return self.retention.run(execute=True,first_batch=True,review_path=path)
+
+    def test_cohort_does_not_bypass_live_trash_or_pending_payment(self):
+        seeded=self.seed(5);path=self.cohort_review()
+        self.gallery.soft_delete('u',seeded[0][1])
+        # Changing the cohort after review must block, not switch targets.
+        with self.assertRaises(ValueError):self.first_apply(path)
+        path=self.cohort_review()
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['protection_reasons']['trash_retention'],1)
+
+    def test_disk_audit_is_readonly_masks_and_counts_each_inode_once(self):
+        from app.storage_audit import audit
+        self.seed(4);self.age_results()
+        self.settings.logs_dir.mkdir(parents=True,exist_ok=True)
+        (self.settings.logs_dir/'secret-customer-name.log').write_text('private-content')
+        self.settings.backup_dir_path.mkdir(parents=True,exist_ok=True)
+        (self.settings.backup_dir_path/'ravuna-recovery-partial.tar.gz.enc').write_bytes(b'enc')
+        before={p.relative_to(self.base):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        report=audit(self.settings)
+        after={p.relative_to(self.base):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        self.assertEqual(before,after)
+        self.assertEqual(report['free_photo_cleanup']['candidate_results'],0)
+        self.assertEqual(report['categories']['logs']['files'],1)
+        text=json.dumps(report)
+        for private in ('secret-customer-name','private-content',str(self.base),'u-v-'):
+            self.assertNotIn(private,text)
+        self.assertIn('source_inputs',report['categories'])
+
+    def test_disk_audit_exact_recovery_comparison_does_not_prune(self):
+        from app.storage_audit import audit
+        from tests.test_recovery_retention import RecoveryRetentionTests
+        root=self.settings.backup_dir_path;root.mkdir(parents=True,exist_ok=True)
+        helper=RecoveryRetentionTests()
+        files=[helper.snapshot(root,i) for i in range(7)]
+        report=audit(self.settings,files[-1].name)
+        comparison=report['recovery_comparison']
+        self.assertEqual(comparison['incremental_7_to_3_logical_bytes'],sum(p.stat().st_size for p in files[:4]))
+        self.assertTrue(comparison['offsite_recheck_required'])
+        self.assertTrue(all(p.exists() for p in files))
+
     def test_first_batch_unknown_terms_means_zero_and_readonly(self):
         self.seed(15);self.age_results()
         before=self.settings.database_path.read_bytes()

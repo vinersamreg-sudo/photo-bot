@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import tempfile
+import io
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
@@ -11,9 +12,68 @@ from unittest.mock import patch
 from app.backup import BackupError, BackupManager
 from app.recovery_retention import RetentionError, artifact, import_legacy_proofs, main, prune, read_json, write_stage
 from tests.test_backup_streaming import SECRET, plain_stream
+from app.recovery_retention import verify_reduced_offsite
 
 
 class RecoveryRetentionTests(TestCase):
+    def test_gated_cli_seven_to_three_then_new_snapshot_keeps_exactly_three(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);now=datetime.now(timezone.utc)
+            last=int((now-datetime(2026,1,1,tzinfo=timezone.utc)).total_seconds()//3600)-1
+            files=[self.snapshot(root,i) for i in range(last-6,last+1)]
+            sqlite=root/'pixora-untouched.sqlite3.enc';sqlite.write_bytes(b'keep')
+            for newest in (files[-1],None):
+                newest=newest or self.snapshot(root,last+1)
+                receipt=read_json(root/(newest.name+'.proof.json'))
+                receipt['offsite']['provider']='github-actions'
+                (root/(newest.name+'.proof.json')).write_text(json.dumps(receipt))
+                check={'status':'PASS','provider':'github-actions','backup_name':newest.name,
+                       'sha256':receipt['sha256'],'size_bytes':newest.stat().st_size,
+                       'checked_at':now.isoformat(),'expires_at':(now+timedelta(days=14)).isoformat()}
+                with patch('app.config.load_settings') as settings,patch('builtins.print'),patch('sys.stdin',io.StringIO(json.dumps(check))):
+                    settings.return_value.backup_dir_path=root
+                    self.assertEqual(main(['--confirmed-backup',newest.name,'--keep','3','--apply','--offsite-check-stdin']),0)
+                self.assertEqual(len(list(root.glob('ravuna-recovery-*.tar.gz.enc'))),3)
+                self.assertTrue(newest.exists());self.assertTrue(sqlite.exists())
+            self.assertEqual(len(list(root.glob('*.proof.json'))),8)
+
+    def test_keep_three_gate_requires_fresh_download_lifetime_and_all_proofs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);files=[self.snapshot(root,i) for i in range(7)]
+            receipt=read_json(root/(files[-1].name+'.proof.json'))
+            receipt['offsite']['provider']='github-actions'
+            (root/(files[-1].name+'.proof.json')).write_text(json.dumps(receipt))
+            now=datetime.fromisoformat(receipt['created_at'])+timedelta(hours=1)
+            check={'status':'PASS','provider':'github-actions','backup_name':files[-1].name,
+                   'sha256':receipt['sha256'],'size_bytes':files[-1].stat().st_size,
+                   'checked_at':now.isoformat(),'expires_at':(now+timedelta(days=14)).isoformat()}
+            verify_reduced_offsite(root,files[-1].name,check,now)
+            dry=prune(root,confirmed_backup=files[-1].name,keep=3)
+            self.assertEqual(dry['delete_bytes'],sum(p.stat().st_size for p in files[:4]))
+            self.assertEqual(sum(e['action']=='KEEP' for e in dry['entries']),3)
+            for key,value in (('sha256','0'*64),('status','FAIL'),
+                              ('expires_at',(now+timedelta(days=6)).isoformat()),
+                              ('checked_at',(now-timedelta(hours=25)).isoformat())):
+                with self.subTest(key=key),self.assertRaises(RetentionError):
+                    verify_reduced_offsite(root,files[-1].name,{**check,key:value},now)
+            with patch('app.config.load_settings') as settings,patch('builtins.print'):
+                settings.return_value.backup_dir_path=root
+                self.assertEqual(main(['--confirmed-backup',files[-1].name,'--keep','3','--apply']),1)
+            self.assertTrue(all(p.exists() for p in files))
+
+    def test_downloaded_offsite_zip_hash_and_expiry_checked_without_extraction(self):
+        from scripts.verify_offsite_recovery import verify
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);file=self.snapshot(root,1);archive=root/'encrypted.zip'
+            with zipfile.ZipFile(archive,'w') as output:output.write(file,arcname=file.name)
+            now=datetime(2026,1,2,tzinfo=timezone.utc)
+            expires=(now+timedelta(days=14)).isoformat()
+            check=verify(archive,file.name,hashlib.sha256(file.read_bytes()).hexdigest(),expires,now)
+            self.assertEqual(check['size_bytes'],file.stat().st_size)
+            for sha,expiry in (('0'*64,expires),(check['sha256'],now.isoformat())):
+                with self.assertRaises(ValueError):verify(archive,file.name,sha,expiry,now)
+
     def snapshot(self, root, number, stages=3):
         created = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(hours=number)
         name = 'ravuna-recovery-' + created.strftime('%Y%m%dT%H%M%S%fZ') + '.tar.gz.enc'

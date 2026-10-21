@@ -112,6 +112,25 @@ def _legacy_review(path, now):
         raise ValueError('Invalid legacy review')
     reviewed = _time(value.get('reviewed_at'))
     entries = value.get('results')
+    if value.get('schema_version') == 2:
+        # One reviewed historical rule, not one invented consent per photograph.
+        # Bind the complete inventory so replay cannot silently select ten more.
+        rule = value.get('cohort')
+        if (value.get('basis') != 'legacy_expiry_30d_cohort' or not reviewed or reviewed > now
+                or not isinstance(rule, dict)):
+            raise ValueError('Invalid legacy cohort review')
+        start, end, notice = (_time(rule.get(k)) for k in
+                              ('published_from', 'published_until', 'notice_published_at'))
+        if (not start or not end or not notice or start >= end or notice > reviewed or end > reviewed
+                or rule.get('trash_transition') != 'expiry_plus_30d_and_notice_plus_30d'
+                or not isinstance(rule.get('offer_version'), str)
+                or not 1 <= len(rule['offer_version']) <= 128
+                or any(not isinstance(rule.get(k), str) or
+                       not re.fullmatch(r'[0-9a-f]{64}', rule[k]) for k in
+                       ('terms_sha256', 'publication_evidence_sha256',
+                        'notice_evidence_sha256', 'inventory_sha256'))):
+            raise ValueError('Invalid legacy cohort review')
+        return {'__cohort__': rule}, hashlib.sha256(raw).hexdigest()
     if (value.get('schema_version') != 1 or value.get('basis') != 'legacy_expiry_30d' or
             not reviewed or reviewed > now or not isinstance(entries, list) or
             not 1 <= len(entries) <= FIRST_BATCH_LIMIT):
@@ -132,6 +151,35 @@ def _legacy_review(path, now):
             raise ValueError('Invalid legacy review target')
         result[identifier] = entry
     return result, hashlib.sha256(raw).hexdigest()
+
+
+def inventory_digest(rows):
+    """Opaque batch boundary only; never print or export the identifiers."""
+    payload = sorted(tuple(r[k] for k in ('id', 'user_id', 'gallery_item_id',
+                       'work_created_at', 'completed_at', 'retention_until', 'deleted'))
+                     for r in rows)
+    return hashlib.sha256(json.dumps(payload, separators=(',', ':')).encode()).hexdigest()
+
+
+def _cohort_reason(connection, row, rule, now):
+    created, complete, expiry = (_time(row[k]) for k in
+                                  ('work_created_at', 'completed_at', 'retention_until'))
+    if not (_time(rule['published_from']) <= created < _time(rule['published_until'])):
+        return 'legacy_publication_scope_unverified'
+    acceptance = connection.execute('''SELECT a.accepted_at FROM max_legal_acceptances a
+        JOIN users u ON u.platform_user_id=a.platform_user_id AND u.platform='max'
+        WHERE u.id=? AND a.document_type='offer' AND a.document_version=?''',
+        (row['user_id'], rule['offer_version'])).fetchone()
+    accepted = _time(acceptance[0]) if acceptance else None
+    if not accepted or not (_time(rule['published_from']) <= accepted <= created):
+        return 'legacy_acceptance_unverified'
+    # Additional grace preserves the old trash promise conservatively. This is
+    # an explicit reviewed transition, not evidence that a work was in trash.
+    deadline = max(expiry, created + timedelta(days=30), complete + timedelta(days=30),
+                   _time(rule['notice_published_at'])) + timedelta(days=30)
+    if now < deadline:
+        return 'legacy_transition_grace'
+    return None
 
 
 def _safe_metadata(path, root):
@@ -187,6 +235,10 @@ class ResultRetention:
     def _plan(self,c,user_id=None,*,batch_limit=None,first_batch=False,review_path=None):
         now=self.clock();rows=successful_results(c,user_id);keys=result_keys(c,user_id);counts=Counter();latest=set()
         reviews, review_digest = _legacy_review(review_path, now) if first_batch else ({}, None)
+        cohort = reviews.get('__cohort__')
+        digest = inventory_digest(rows)
+        if cohort and cohort['inventory_sha256'] != digest:
+            raise ValueError('Legacy cohort inventory changed; review a new dry-run')
         policy_counts = Counter()
         # First-batch scope deliberately excludes all commerce history, including
         # pending/late orders, old fully spent purchases and promotional originals.
@@ -267,6 +319,8 @@ class ResultRetention:
                     review = reviews.get(r['id'])
                     if r['user_id'] in commerce_users or r['unlock_status'] != 'demo':
                         reason = 'commerce_history_first_batch'
+                    elif cohort:
+                        reason = _cohort_reason(c, r, cohort, now)
                     elif review is None:
                         reason = 'legacy_terms_unverified'
                     elif (review['user_id'] != r['user_id'] or
@@ -335,9 +389,34 @@ class ResultRetention:
                 'path_anomaly_count':anomalies,'busy_operations':busy,
                 'removed_files':0,'removed_bytes':0,'removed_versions':0,'removed_items':0,
                 'metadata_stubs_preserved':0,'database_access':'mode=ro; query_only=ON'}
+        report['inventory_sha256'] = digest
+        commerce_media_users = commerce_users | set(paid) | unknown_paid_users
+        commerce_paths = set()
+        commerce_results = 0
+        for row in rows:
+            if row['user_id'] in commerce_media_users:
+                commerce_results += 1
+                commerce_paths.update(_path(self.settings, row[key])
+                                      for key in PATHS['gallery_versions'] if row[key])
+        for row in c.execute('SELECT user_id,' + ','.join(PATHS['gallery_items']) + ' FROM gallery_items'):
+            if row['user_id'] in commerce_media_users:
+                commerce_paths.update(_path(self.settings, row[key])
+                                      for key in PATHS['gallery_items'] if row[key])
+        physical = {}; unavailable = 0
+        for path in sorted(commerce_paths):
+            try:
+                identity = _safe_metadata(path, root)
+                if identity is None:unavailable += 1
+                else:physical[identity[:2]] = identity[2]
+            except (OSError,ValueError):unavailable += 1
+        report['protected_commerce_media'] = {
+            'results': commerce_results, 'files':len(physical),
+            'logical_bytes':sum(physical.values()), 'missing_or_unsafe_references':unavailable,
+            'deletion_authorized':False}
         if first_batch:
             report.update(profile='first-batch-legacy-expiry', review_sha256=review_digest,
-                          reviewed_targets=len(reviews), **policy_counts)
+                          reviewed_targets=0 if cohort else len(reviews),
+                          cohort_review=bool(cohort), **policy_counts)
             report.setdefault('legacy_expired_results', 0)
         return report,targets,attempts,dead_items,dead_sessions,files
 

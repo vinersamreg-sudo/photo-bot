@@ -13,7 +13,10 @@ not authorization to implement.
 
 ### Retention beyond the controlled first batch
 
-- Prove applicable historical terms per target; unknown records remain excluded.
+- Prove the publication/version mapping once per historical cohort; unknown
+  records remain excluded. PR48 prepares one conservative cohort transition,
+  not invented consents or retrospective C2. Public drafts and MAX warning must
+  be separately approved/published before prospective C2 execution.
   The ten-target legacy-expiry review is not retroactive C2 consent. Before
   general/early-C2 automation, implement only the legal applicability evidence
   actually required for those cohorts; keep automatic cleanup OFF meanwhile.

@@ -15,6 +15,11 @@ if [ "${1:-}" = "avito" ]; then
   cd "$ROOT"
   exec "$PYTHON" -m app.avito_responder.cli "$@"
 fi
+if [ "${1:-}" = "disk-audit" ]; then
+  shift
+  cd "$ROOT"
+  exec "$PYTHON" -B -m app.storage_audit "$@"
+fi
 if [ "${1:-}" = "results-cleanup" ]; then
   shift
   cd "$ROOT"

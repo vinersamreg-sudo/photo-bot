@@ -313,16 +313,15 @@ class RavunaSiteTests(unittest.TestCase):
             self.assertIn(text, privacy)
 
     def test_retention_drafts_separate_legacy_expiry_eviction_and_trash(self) -> None:
+        draft = (ROOT / 'docs/current/RETENTION_POLICY_DRAFT.md').read_text(encoding='utf-8')
         for name in ('offer', 'privacy', 'personal-data', 'terms'):
             html = self.pages[f'legal/{name}.html']
-            self.assertIn('не опубликован и не вступил в силу', html)
-            self.assertIn('задним числом', html)
-        offer = self.pages['legal/offer.html']
-        self.assertIn('без предварительной корзины', offer)
-        self.assertIn('не начинает обычный срок заново', offer)
-        self.assertIn('не аннулируются', offer)
-        self.assertIn('семи последних recovery snapshots не означает семь календарных дней', offer)
-        self.assertIn('Для уже оплаченного заказа применяются условия, действовавшие при оплате', offer)
+            self.assertNotIn('Проект изменений', html)
+        for text in ('НЕ опубликован и НЕ вступил в силу', 'задним числом',
+                     'не аннулируются', 'корзину', 'три последние', 'Предупреждение'):
+            self.assertIn(text.lower(), draft.lower())
+        self.assertIn('После удаления работа находится в корзине до 30 дней',
+                      self.pages['legal/offer.html'])
 
     # 35
     def test_consent_matches_actual_save_semantics(self) -> None:
