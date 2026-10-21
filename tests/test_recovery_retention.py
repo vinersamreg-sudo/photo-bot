@@ -16,6 +16,21 @@ from app.recovery_retention import verify_reduced_offsite
 
 
 class RecoveryRetentionTests(TestCase):
+    def test_workflow_proof_survives_ssh_argument_joining(self):
+        import base64
+        import subprocess
+        proof={'status':'PASS','provider':'github-actions','checked_at':'2026-10-21T12:00:00+00:00'}
+        token=base64.b64encode(json.dumps(proof).encode()).decode()
+        # SSH joins arguments into a remote shell command: raw JSON would lose
+        # quoting and split into many arguments. Only the base64 token travels.
+        if os.name=='posix':
+            result=subprocess.run(['sh','-c','set -- '+token+'; printf "%s" "$1" | base64 --decode'],
+                                  capture_output=True,check=True,text=True)
+            self.assertEqual(json.loads(result.stdout),proof)
+        workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/backup.yml').read_text()
+        self.assertIn('"$RECOVERY_LOCAL_KEEP" "$OFFSITE_CHECK_B64"',workflow)
+        self.assertIn("printf '%s' \"$4\" | base64 --decode | scripts/ravuna recovery-prune",workflow)
+
     def test_gated_cli_seven_to_three_then_new_snapshot_keeps_exactly_three(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);now=datetime.now(timezone.utc)
