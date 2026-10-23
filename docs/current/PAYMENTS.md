@@ -6,7 +6,10 @@
   name remains **Пакет доступа Ravuna** and its identifiers are unchanged.
 - **1990 ₽** one-time package: 100 edits and 50 originals. Its fiscal item is
   **Пакет Ravuna: 100 обработок и 50 оригиналов**.
-- Neither package is a subscription and neither creates recurring charges.
+- **490 ₽** one-time package: 22 edits and 11 originals, code
+  `continuation_pack_22_plus_11`, exact amount **49000 kopecks**. Fiscal item:
+  **Пакет Ravuna: 22 обработки и 11 оригиналов**. Prepared; no production GO implied.
+- No package is a subscription or creates recurring charges.
 - Every PaymentOrder persists the exact package code, amount and grant
   quantities; reuse and expired-checkout recovery preserve all four values.
 
@@ -15,7 +18,7 @@
 - Provider: Robokassa.
 - Production mode uses SHA-256.
 - Receipt item is package-specific, quantity 1, tax `none`, with exact sum
-  49.00 or 1990.00.
+  49.00, 490.00 or 1990.00, respectively (4900 / 49000 / 199000 kopecks).
 - Existing fiscal fields and self-employed receipt configuration must not be
   changed without a separate fiscal review.
 - Static SuccessURL and FailURL remain configured in the Robokassa cabinet.
@@ -39,7 +42,7 @@
 4. Robokassa POSTs ResultURL.
 5. Ravuna verifies Password #2 signature, invoice, order state, package code,
    exact package amount and persisted grant quantities.
-6. One transaction marks the order paid and grants exactly +2/+1 or +100/+50.
+6. One transaction marks the order paid and grants exactly +2/+1, +22/+11 or +100/+50.
 7. Exactly one sale receipt/audit record is associated with the payment.
 8. The browser return opens Ravuna in MAX. A return before ResultURL shows
    “Проверяем оплату…” and does not grant or consume anything.
@@ -164,7 +167,7 @@ Aggregate reconciliation exposes `expired_checkout_events` and
 `ROBOKASSA_PAYMENT_METHODS=` (default) preserves the existing unrestricted form.
 The intended opt-in configuration is `BankCard,SBP,SberPay`; each configured
 alias becomes a separate repeated `PaymentMethods` POST field, not a combined
-comma-separated provider value. The same setting applies to both 49 ₽ and
+comma-separated provider value. The same setting applies to 49 ₽, 490 ₽ and
 1990 ₽ orders, including reopening a reusable invoice. Configured order is
 preserved in transport; Robokassa may arrange the visible methods differently.
 This follows the official [payment interface](https://docs.robokassa.ru/ru/pay-interface)

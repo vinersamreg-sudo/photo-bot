@@ -34,6 +34,15 @@ SMALL_PACKAGE = ContinuationPackage(
     generation_credits=2,
     unlock_entitlements=1,
 )
+MEDIUM_PACKAGE = ContinuationPackage(
+    code="continuation_pack_22_plus_11",
+    product_name="Ravuna 22 + 11 Pack",
+    user_name="Пакет Ravuna: 22 обработки и 11 оригиналов",
+    receipt_name="Пакет Ravuna: 22 обработки и 11 оригиналов",
+    price_minor=49_000,
+    generation_credits=22,
+    unlock_entitlements=11,
+)
 LARGE_PACKAGE = ContinuationPackage(
     code="continuation_pack_100_plus_50",
     product_name="Ravuna 100 + 50 Pack",
@@ -44,7 +53,7 @@ LARGE_PACKAGE = ContinuationPackage(
     unlock_entitlements=50,
 )
 CONTINUATION_PACKAGES = {
-    package.code: package for package in (SMALL_PACKAGE, LARGE_PACKAGE)
+    package.code: package for package in (SMALL_PACKAGE, MEDIUM_PACKAGE, LARGE_PACKAGE)
 }
 
 

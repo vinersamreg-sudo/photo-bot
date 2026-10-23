@@ -336,7 +336,9 @@ class PaymentService:
                    event_type,created_at,attempt_id,gallery_item_id,subject_hash,value_integer
                ) VALUES(?,?,?,?,?,?)""",
             (
-                event_type, _iso(self.clock()), attempt_id, item_id,
+                # Account/pending purchases use an empty legacy order target;
+                # product-event foreign keys must represent absence as NULL.
+                event_type, _iso(self.clock()), attempt_id or None, item_id or None,
                 subject_hash, value_integer,
             ),
         )

@@ -16,6 +16,7 @@ from app.attribution import AttributionService, parse_start_payload
 from app.config import Settings
 from app.commerce import (
     LARGE_PACKAGE,
+    MEDIUM_PACKAGE,
     PRODUCT_CODE,
     CommerceService,
     continuation_package,
@@ -51,9 +52,10 @@ from app.feedback import FeedbackService, MAX_FEEDBACK_MESSAGE_LENGTH
 from app.edit_intent import parse_edit_intent
 from app.max_adapter import (
     Button,
-    LARGE_PURCHASE_BUTTON_TEXT,
     PURCHASE_OPTIONS_TEXT,
     SMALL_PURCHASE_BUTTON_TEXT,
+    purchase_action,
+    purchase_buttons,
     MaxDemoAdapter,
     View,
     delete_confirmation_view,
@@ -485,8 +487,7 @@ class MaxApplication:
                 "Бесплатные обработки закончились.\n\n" + PURCHASE_OPTIONS_TEXT,
                 (
                     Button("⬇ Получить оригинал", "result:unlock"),
-                    Button(SMALL_PURCHASE_BUTTON_TEXT, "package:offer"),
-                    Button(LARGE_PURCHASE_BUTTON_TEXT, "package:offer:large"),
+                    *purchase_buttons("offer"),
                     Button("📂 Мои работы", "studio:works"),
                     Button("← Назад", "nav:back:work"),
                 ),
@@ -905,6 +906,7 @@ class MaxApplication:
                         payment_url,
                     ),
                     _payment_status_button(order),
+                    *purchase_buttons("buy", exclude=order.product_code),
                     Button("← Назад", "nav:back:main"),
                 ),
                 screen="payment_offer",
@@ -941,6 +943,7 @@ class MaxApplication:
                 (
                     Button(_pay_button_text(order.product_code), payment_url),
                     _payment_status_button(order),
+                    *purchase_buttons("offer", exclude=order.product_code),
                     Button("← Назад", "nav:back:work"),
                 ),
                 screen="payment_offer",
@@ -986,6 +989,7 @@ class MaxApplication:
                 (
                     Button(_pay_button_text(order.product_code), payment_url),
                     _payment_status_button(order),
+                    *purchase_buttons("buy", exclude=order.product_code),
                     Button("← Назад", "nav:back:main"),
                 ),
                 screen="pending_payment_offer",
@@ -1449,10 +1453,17 @@ class MaxApplication:
             except ValueError:
                 return
             self._record_rating(event, dialog, rating)
+        elif action == "package:choose":
+            self._reset_dialog_to_main(event.user_id, event.event_key)
+            self._send_message(event.user_id, PURCHASE_OPTIONS_TEXT,
+                (*purchase_buttons("buy"), Button("← Назад", "nav:back:main")),
+                screen="payment_offer")
         elif action == "package:buy":
             self._buy_continuation_pack(event, dialog, PRODUCT_CODE)
         elif action == "package:buy:large":
             self._buy_continuation_pack(event, dialog, LARGE_PACKAGE.code)
+        elif action == "package:buy:medium":
+            self._buy_continuation_pack(event, dialog, MEDIUM_PACKAGE.code)
         elif action.startswith("payment:refresh:"):
             self._show_payment_return(
                 event,
@@ -1505,6 +1516,8 @@ class MaxApplication:
             self._show_continuation_pack_offer(event, dialog, PRODUCT_CODE)
         elif action == "package:offer:large":
             self._show_continuation_pack_offer(event, dialog, LARGE_PACKAGE.code)
+        elif action == "package:offer:medium":
+            self._show_continuation_pack_offer(event, dialog, MEDIUM_PACKAGE.code)
         elif action == "result:correct":
             if not dialog.session_id or self._remaining(dialog.session_id) <= 0:
                 self._show_continuation_pack_offer(event, dialog)
@@ -2242,8 +2255,7 @@ class MaxApplication:
             else:
                 self._send_message(
                     event.user_id, PURCHASE_OPTIONS_TEXT,
-                    (Button(SMALL_PURCHASE_BUTTON_TEXT, "package:buy"),
-                     Button(LARGE_PURCHASE_BUTTON_TEXT, "package:buy:large"),
+                    (*purchase_buttons("buy"),
                      Button("← Назад", "nav:back:main")),
                     screen="pending_payment_offer" if restored.pending_request_id else "payment_offer",
                 )
@@ -2727,10 +2739,7 @@ class MaxApplication:
             (
                 Button(SMALL_PURCHASE_BUTTON_TEXT, payment_url),
                 *((status_button,) if status_button is not None else ()),
-                Button(
-                    LARGE_PURCHASE_BUTTON_TEXT,
-                    "package:buy:large",
-                ),
+                *purchase_buttons("buy", exclude=PRODUCT_CODE),
                 Button("← Назад", "nav:back:main"),
             ),
             screen="pending_payment_offer",
@@ -2854,18 +2863,12 @@ class MaxApplication:
             status_button = _payment_status_button(order)
         except (PaymentError, PaymentUnavailable) as exc:
             self._record_payment_preparation_failure(exc)
-            payment_url = "package:buy"
+            payment_url = purchase_action(product_code, "buy")
             status_button = None
         offer_buttons = (
             Button(_pay_button_text(product_code), payment_url),
             *((status_button,) if status_button is not None else ()),
-            Button(
-                LARGE_PURCHASE_BUTTON_TEXT,
-                "package:offer:large",
-            ) if product_code == PRODUCT_CODE else Button(
-                SMALL_PURCHASE_BUTTON_TEXT,
-                "package:offer",
-            ),
+            *purchase_buttons("offer", exclude=product_code),
             Button("← Назад", "nav:back:work"),
         )
         offer_text = _package_offer_text(product_code)

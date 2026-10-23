@@ -18,6 +18,52 @@ requests and pushes. Site production deployment is separately manual in
 Changing or fast-forwarding `main` therefore cannot deploy the application or
 site by itself.
 
+### Prepared 490 RUB package release (not deployed)
+
+PR #49 adds 490 RUB / 22 edits / 11 originals; the existing 49 RUB / 2+1 and
+1990 RUB / 100+50 products remain unchanged. No schema/dependency migration or
+configuration activation is required. PR #48 retention/storage is excluded.
+
+After a separate owner GO, use one coordinated release:
+
+1. Recheck the approved PR head, merge only that head, and wait for Backend and
+   Site CI on the exact merge SHA. Pin both deploy workflows to that SHA; never
+   substitute a later main automatically.
+2. Capture current backend/site SHAs, runtime/PID/restarts, schema/integrity,
+   commerce/order/gallery fingerprints, payment reconciliation and exact `.env`
+   fingerprint/flags. Require no active processing/reservations and verified
+   backup/restore readiness. Do not change provider, PaymentMethods, refund,
+   referral, retention or Content Studio state.
+3. Run manual `deploy.yml target_sha=<merge SHA>` with all canonical gates and
+   one normal main-bot restart. Verify health before proceeding to the site.
+4. Apply the reviewed Ravuna nginx CSP candidate using the existing narrow
+   `ops/deploy_nginx_ravuna_payment.sh` procedure: the changed JSON-LD requires
+   its matching SHA256 allowlist. Require `nginx -t`; preserve payment routes
+   and other vhosts. Site-deploy alone does not install nginx configuration.
+5. Run manual `site-deploy.yml target_sha=<same merge SHA>`. The owner-approved
+   publication date of revision 1.4 is 2026-10-23 Europe/Samara, shown in both
+   offer and payment/refund pages. This is preparation, not proof of publication:
+   the wording makes effectiveness conditional on actual publication. Confirm
+   the served documents after the immutable release switch. If release slips
+   to another date, correct the publication date and pass CI before publishing;
+   never present the preparation date as an earlier actual publication.
+6. Verify backend/site markers, one runtime/NRestarts=0, MAX `/me` and fresh
+   polling, ResultURL transport, unchanged schema/configuration/commerce
+   fingerprints and reconciliation, processing/reserved=0/0. Smoke MAX main,
+   zero-balance, pending-edit, result/work and repeat-purchase choices using only
+   an agreed test identity. Do not reset customer balances or fabricate grants.
+7. Verify all three exact contracts in an isolated synthetic checkout test:
+   4900/49000/199000 kopecks, receipt sums 49.00/490.00/1990.00, grants 2/1,
+   22/11, 100/50, ResultURL replay/wrong amounts and refunds. Do not send a
+   synthetic callback to production or perform a real payment. Check live
+   existing order/receipt integrity read-only; report live paid-flow testing as
+   not performed. Require served legal dates/terms, version, HTTP and CSP smoke.
+
+Any failed gate stops progression. Preserve evidence and the previous site
+release; do not blindly restore SQLite or erase valid orders/credits received
+after the snapshot. A backend rollback requires explicit authorization and
+schema compatibility. If publication fails, do not claim the terms are live.
+
 Content Studio is a separate runtime and release procedure using
 `ops/deploy_ravuna_content_studio.sh`, `/opt/ravuna-content/current/REVISION` and
 `ravuna-content-publisher.timer`. Main-bot deployment must not deploy, restart or
