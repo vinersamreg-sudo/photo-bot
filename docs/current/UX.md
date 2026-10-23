@@ -16,9 +16,9 @@ The primary MAX flow is intentionally compact:
    generation.
 3. Ravuna produces one watermarked preview with direct actions.
 4. User corrects/repeats, opens works, or requests the original.
-5. If no original entitlement exists, Ravuna shows one compact 49 ₽ package
+5. If no original entitlement exists, Ravuna shows the three 49/490/1990 ₽ options
    screen and creates/reuses its exact target-scoped PaymentIntent.
-6. “Оплатить 49 ₽” opens Ravuna's opaque short URL and then Robokassa directly;
+6. “Купить за … ₽” opens Ravuna's opaque short URL and then Robokassa directly;
    there is no second link screen and no long URL in message text.
 7. ResultURL remains the only payment confirmation. Browser return either shows
    “Проверяем оплату…” or resumes the exact confirmed purchase context.
@@ -194,33 +194,30 @@ For an unprocessed pending photo, prefix the package language with:
 Чтобы обработать эту фотографию, приобретите пакет Ravuna.
 ```
 
-Use exactly the product language:
+Use exactly the product language on every purchase, zero-balance, continuation,
+pending-edit, result and opened-work paywall:
 
 ```text
-Пакет Ravuna — 49 ₽
+Выберите вариант:
 
-В пакет входит:
-• 2 обработки фотографий
-• оригинал этой фотографии без водяного знака
+⚡ 2 обработки + 1 оригинал — 49 ₽
 
-После подтверждения оплаты баланс обновится автоматически в течение нескольких секунд.
-```
+✨ 22 обработки + 11 оригиналов — 490 ₽
 
-The large-package alternative is shown at the same paywall entry points:
-
-```text
-Пакет Ravuna — 1990 ₽
-
-В пакет входит:
-• 100 обработок фотографий
-• 50 оригиналов без водяного знака
+💎 100 обработок + 50 оригиналов — 1990 ₽
 
 Разовая покупка. Автосписаний и подписки нет.
 
 После подтверждения оплаты баланс обновится автоматически в течение нескольких секунд.
 ```
 
-Selecting either offer binds checkout to that exact package. A refreshed link
+Buttons are `Купить за 49 ₽`, `Купить за 490 ₽`, `Купить за 1990 ₽`.
+Existing small/large callback actions are unchanged; the new actions use
+`package:buy:medium` / `package:offer:medium`. The positive-balance main menu
+adds `💳 Купить обработки`, which opens the same three-option selector without
+creating an invoice. Repeat purchases stack with remaining paid/free balances.
+
+Selecting an offer binds checkout to that exact package. A refreshed link
 must render the same price and package; it must never fall back to the 49 ₽
 package or to another photo/request.
 
@@ -246,9 +243,9 @@ Rows: “💳 Попробовать оплатить ещё раз” (same inv
 lack of funds from a failure return. A late failure return for a confirmed
 purchase resumes its existing context rather than inviting another payment.
 
-The zero-balance screen uses “Купить пакет — 49 ₽” and the mobile-safe
-“💎 Большой пакет — 1990 ₽” button labels. Its text keeps the full large-package
-composition visible: “100 обработок + 50 оригиналов — 1990 ₽”.
+All three options use the same short mobile-safe labels and explicit compositions
+above. Ordinary selection never includes “Проверить оплату”; an existing pending
+checkout retains that action. The 490 ₽ preparation is not production activation.
 
 Do not call the package “generations”. Browser return pages explain that only the
 server ResultURL confirms payment.

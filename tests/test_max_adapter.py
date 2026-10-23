@@ -47,6 +47,7 @@ class MaxAdapterTests(TestCase):
         self.assertEqual(
             [button.text for button in menu.buttons],
             [
+                "💳 Купить обработки",
                 "📁 Мои работы",
                 "📄 Публичная оферта",
                 "🔐 Обработка персональных данных",
@@ -132,6 +133,7 @@ class MaxAdapterTests(TestCase):
             [
                 "⬇️ Получить оригинал",
                 "Купить за 49 ₽",
+                "Купить за 490 ₽",
                 "Купить за 1990 ₽",
                 "🎁 Пригласить друга — получить +2 обработки",
                 "⭐ Оценить",
@@ -141,7 +143,7 @@ class MaxAdapterTests(TestCase):
         )
         self.assertEqual(
             [button.row for button in result_actions(0).buttons],
-            [0, 1, 2, 3, 4, 5, 6],
+            [0, 1, 2, 3, 4, 5, 6, 7],
         )
         self.assertIn(
             "⚡ 2 обработки + 1 оригинал — 49 ₽",
@@ -159,6 +161,7 @@ class MaxAdapterTests(TestCase):
             },
             {
                 "Купить за 49 ₽": "package:offer",
+                "Купить за 490 ₽": "package:offer:medium",
                 "Купить за 1990 ₽": "package:offer:large",
             },
         )
@@ -195,6 +198,7 @@ class MaxAdapterTests(TestCase):
                 "⬇ Получить оригинал",
                 "🎁 Поделиться и получить бонус",
                 "Купить за 49 ₽",
+                "Купить за 490 ₽",
                 "Купить за 1990 ₽",
                 "Ещё",
                 "← Назад",
@@ -208,6 +212,7 @@ class MaxAdapterTests(TestCase):
             },
             {
                 "Купить за 49 ₽": "package:offer",
+                "Купить за 490 ₽": "package:offer:medium",
                 "Купить за 1990 ₽": "package:offer:large",
             },
         )

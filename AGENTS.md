@@ -12,8 +12,9 @@ source of truth; use the repository and the current production snapshot.
 - The application repository and systemd service retain the technical name
   `photo-bot`; do not rename internal identifiers merely for branding.
 - The 49 ₽ public product remains “Пакет доступа Ravuna”: two photo edits and
-  one original without a watermark. Ravuna also offers a one-time 1990 ₽
-  package with 100 edits and 50 originals; neither package is a subscription.
+  one original without a watermark. The registry also supports one-time 490 ₽
+  (22 edits / 11 originals) and 1990 ₽ (100 edits / 50 originals) packages.
+  None is a subscription; publishing/deploying the 490 ₽ option requires GO.
 - The repository default image provider is Google Gemini Nano Banana Pro using
   `gemini-3-pro-image`; OpenAI `gpt-image-2` remains a selectable option.
 - Robokassa confirms payment through the server-side ResultURL.

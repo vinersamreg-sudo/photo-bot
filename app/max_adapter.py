@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol, Sequence
 
 from app.database import Database
+from app.commerce import SMALL_PACKAGE, MEDIUM_PACKAGE, LARGE_PACKAGE, continuation_package
 from app.demo_service import DeliverPreview, DemoService, iso, utc_now
 from app.domain import DemoGenerationResult, DemoSessionInfo, InvalidInputError
 from app.scenarios import SCENARIOS
@@ -53,10 +54,12 @@ LEGAL_TEXT = (
 )
 
 SMALL_PURCHASE_BUTTON_TEXT = "Купить за 49 ₽"
+MEDIUM_PURCHASE_BUTTON_TEXT = "Купить за 490 ₽"
 LARGE_PURCHASE_BUTTON_TEXT = "Купить за 1990 ₽"
 PURCHASE_OPTIONS_TEXT = (
     "Выберите вариант:\n\n"
     "⚡ 2 обработки + 1 оригинал — 49 ₽\n\n"
+    "✨ 22 обработки + 11 оригиналов — 490 ₽\n\n"
     "💎 100 обработок + 50 оригиналов — 1990 ₽"
 )
 REFERRAL_V2_BUTTON = "🎁 Пригласить друга — получить 4 обработки и 2 оригинала"
@@ -89,6 +92,22 @@ class Button:
 class View:
     text: str
     buttons: tuple[Button, ...]
+
+
+_PACKAGE_SUFFIXES = {SMALL_PACKAGE.code: "", MEDIUM_PACKAGE.code: ":medium", LARGE_PACKAGE.code: ":large"}
+
+
+def purchase_action(product_code: str, kind: str = "offer") -> str:
+    continuation_package(product_code)
+    if kind not in {"buy", "offer"}:
+        raise ValueError("Invalid purchase action")
+    return f"package:{kind}{_PACKAGE_SUFFIXES[product_code]}"
+
+
+def purchase_buttons(kind: str = "offer", *, exclude: str | None = None) -> tuple[Button, ...]:
+    return tuple(Button(f"Купить за {continuation_package(code).price_minor // 100} ₽",
+                        purchase_action(code, kind))
+                 for code in _PACKAGE_SUFFIXES if code != exclude)
 
 
 def upload_legal_buttons() -> tuple[Button, ...]:
@@ -161,10 +180,7 @@ def main_menu(
         )
         buttons = (
             Button(SMALL_PURCHASE_BUTTON_TEXT, payment_url or "package:buy"),
-            Button(
-                LARGE_PURCHASE_BUTTON_TEXT,
-                "package:buy:large",
-            ),
+            *purchase_buttons("buy", exclude=SMALL_PACKAGE.code),
             Button("📁 Мои работы", "studio:works"),
             Button("📄 Публичная оферта", "https://ravuna.ru/legal/offer.html"),
             Button(
@@ -177,6 +193,7 @@ def main_menu(
     return _main_referral(View(
         text,
         (
+            Button("💳 Купить обработки", "package:choose"),
             Button("📁 Мои работы", "studio:works"),
             Button(
                 "📄 Публичная оферта",
@@ -314,19 +331,20 @@ def result_actions(remaining: int, *, referral_v2_enabled: bool = False, referra
             (
                 Button("⬇️ Получить оригинал", "result:unlock", 0),
                 Button(SMALL_PURCHASE_BUTTON_TEXT, "package:offer", 1),
+                Button(MEDIUM_PURCHASE_BUTTON_TEXT, "package:offer:medium", 2),
                 Button(
                     LARGE_PURCHASE_BUTTON_TEXT,
                     "package:offer:large",
-                    2,
+                    3,
                 ),
                 Button(
                     invitation_label,
                     "result:share",
-                    3,
+                    4,
                 ),
-                Button("⭐ Оценить", "result:rate", 4),
-                Button("📁 Мои работы", "studio:works", 5),
-                Button("← Назад", "nav:back:main", 6),
+                Button("⭐ Оценить", "result:rate", 5),
+                Button("📁 Мои работы", "studio:works", 6),
+                Button("← Назад", "nav:back:main", 7),
             ),
         )
     return View(
@@ -390,6 +408,7 @@ def gallery_item_actions(remaining: int = 1, *, referral_v2_enabled: bool = Fals
             Button("⬇ Получить оригинал", "result:unlock"),
             Button(invitation_label, "result:share"),
             Button(SMALL_PURCHASE_BUTTON_TEXT, "package:offer"),
+            Button(MEDIUM_PURCHASE_BUTTON_TEXT, "package:offer:medium"),
             Button(
                 LARGE_PURCHASE_BUTTON_TEXT,
                 "package:offer:large",

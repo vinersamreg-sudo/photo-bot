@@ -15,7 +15,7 @@ import httpx
 from openai import APITimeoutError
 from PIL import Image
 
-from app.commerce import LARGE_PACKAGE, SMALL_PACKAGE
+from app.commerce import LARGE_PACKAGE, MEDIUM_PACKAGE, SMALL_PACKAGE
 from app.config import Settings
 from app.database import Database
 from app.demo_service import DemoService
@@ -149,6 +149,71 @@ class FakeMaxTransport:
 
 
 class MaxApplicationTests(TestCase):
+    def test_medium_package_selection_account_repeat_and_replay(self):
+        paid_app,payments=self.paid_application()
+        paid_app.handle(self.event('bot_started'))
+        provider_calls=self.provider.calls
+        paid_app.handle(self.event('message_callback',action='package:choose'))
+        menu=self.transport.messages[-1]
+        self.assertIn('22 обработки + 11 оригиналов — 490 ₽',menu[1])
+        actions={b.text:b.action for b in menu[2]}
+        self.assertEqual(actions['Купить за 490 ₽'],'package:buy:medium')
+        self.assertNotIn('Проверить оплату',actions)
+        with self.database.read() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM payment_orders').fetchone()[0],0)
+        event=self.event('message_callback',action='package:buy:medium')
+        paid_app.handle(event);paid_app.handle(event)
+        paid_app.handle(self.event('message_callback',action='package:buy:medium'))
+        with self.database.read() as c:
+            orders=c.execute('SELECT * FROM payment_orders').fetchall()
+        self.assertEqual(len(orders),1)
+        order=orders[0]
+        self.assertEqual((order['product_code'],order['amount_minor'],order['generation_credit_quantity'],order['unlock_entitlement_quantity']),
+                         (MEDIUM_PACKAGE.code,49000,22,11))
+        self.assertEqual(order['payment_purpose'],'account_topup')
+        self.assertEqual(self.provider.calls,provider_calls)
+        self.assertEqual(self.demo.commerce.balance(order['user_id']).available,2)
+
+    def test_medium_offer_keeps_selected_work_and_fallback_product(self):
+        self.generate_first();paid_app,payments=self.paid_application()
+        version=self.store.get('u1').current_version_id
+        paid_app.handle(self.event('message_callback',action='package:offer:medium'))
+        offer=self.transport.messages[-1]
+        self.assertEqual(offer[2][0].text,'Купить за 490 ₽')
+        with self.database.read() as c:
+            order=c.execute('SELECT * FROM payment_orders WHERE product_code=?',(MEDIUM_PACKAGE.code,)).fetchone()
+        self.assertEqual(order['version_id'],version)
+        self.assertEqual(order['amount_minor'],49000)
+        from app.payments import PaymentUnavailable
+        with patch.object(payments,'reusable_order_for_target',return_value=None), patch.object(
+                payments,'create_order',side_effect=PaymentUnavailable('synthetic')):
+            paid_app.handle(self.event('message_callback',action='package:offer:medium'))
+        self.assertEqual(self.transport.messages[-1][2][0].action,'package:buy:medium')
+
+    def test_medium_pending_edit_payment_resumes_once_with_exact_grants(self):
+        self.onboard_to_prompt();dialog=self.store.get('u1')
+        with self.database.transaction() as c:
+            self.demo.commerce.adjust_generation_credits(c,user_id=dialog.user_id,delta=-2,
+                reason='test_exhaustion',idempotency_key='medium-pending-exhaust')
+        paid_app,payments=self.paid_application();calls=self.provider.calls
+        paid_app.handle(self.event('message_created',text='Улучши фон'))
+        pending_id=self.store.get('u1').pending_request_id
+        self.assertTrue(pending_id)
+        self.assertIn('Купить за 490 ₽',[b.text for b in self.transport.images[-1][3]])
+        paid_app.handle(self.event('message_callback',action='package:buy:medium'))
+        with self.database.read() as c:
+            order=c.execute('SELECT * FROM payment_orders WHERE product_code=?',(MEDIUM_PACKAGE.code,)).fetchone()
+        self.assertEqual(order['pending_request_id'],pending_id)
+        self.assertEqual(order['payment_purpose'],'processing_request')
+        values={'OutSum':'490.00','InvId':str(order['provider_invoice_id']),'Shp_order':order['public_token']}
+        values['SignatureValue']=hashlib.sha256(f"490.00:{order['provider_invoice_id']}:two:Shp_order={order['public_token']}".encode()).hexdigest()
+        for _ in range(2):
+            self.assertTrue(payments.process_webhook(values,method='POST',path='/payments/robokassa/result').accepted)
+        paid_app.notify_continuation_pack_paid(order['id'])
+        paid_app.handle(self.event('message_callback',action='pending:process'))
+        self.assertEqual(self.provider.calls,calls+1)
+        self.assertEqual(self.demo.commerce.balance(order['user_id']).available,21)
+        self.assertEqual(self.demo.commerce.entitlement_balance(order['user_id']).available,11)
+
     def test_payfail_recovery_reuses_checkout_without_grant_and_deduplicates_replay(self) -> None:
         self.generate_first()
         paid_app, payments = self.paid_application()
@@ -415,6 +480,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(
             [button.text for button in menu[2]],
             [
+                "💳 Купить обработки",
                 "📁 Мои работы",
                 "📄 Публичная оферта",
                 "🔐 Обработка персональных данных",
@@ -1146,6 +1212,7 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(
             [(button.text, button.action) for button in start_message[2]],
             [
+                ("💳 Купить обработки", "package:choose"),
                 ("📁 Мои работы", "studio:works"),
                 (
                     "📄 Публичная оферта",
@@ -2783,6 +2850,10 @@ class MaxApplicationTests(TestCase):
                 (
                     "Проверить оплату",
                     offers[0][2][1].action,
+                ),
+                (
+                    "Купить за 490 ₽",
+                    "package:offer:medium",
                 ),
                 (
                     "Купить за 1990 ₽",

@@ -1,4 +1,5 @@
 import base64
+import ast
 import hashlib
 import json
 import re
@@ -111,13 +112,25 @@ class RavunaSiteTests(unittest.TestCase):
     # 05
     def test_price_is_49_rubles_for_continuation_pack(self) -> None:
         self.assertIn("49 ₽", self.html)
-        self.assertIn(
-            "Пакет доступа Ravuna — 49 ₽",
-            self.html,
-        )
+        self.assertIn("Пакет доступа Ravuna — 49 ₽", self.html)
         self.assertIn("2 обработки и 1 оригинал", self.html)
         forbidden_price = f"{3 * 50 - 1} ₽"
         self.assertNotIn(forbidden_price, self.html)
+
+    def test_all_public_tariffs_match_backend_registry(self):
+        tree=ast.parse((ROOT/'app/commerce.py').read_text(encoding='utf-8'))
+        packages=[]
+        for node in tree.body:
+            if isinstance(node,ast.Assign) and isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Name) and node.value.func.id=='ContinuationPackage':
+                packages.append({kw.arg:ast.literal_eval(kw.value) for kw in node.value.keywords})
+        self.assertEqual([(p['price_minor'],p['generation_credits'],p['unlock_entitlements']) for p in packages],
+                         [(4900,2,1),(49000,22,11),(199000,100,50)])
+        for page in ('index.html','legal/offer.html','legal/payment-refund.html'):
+            text=re.sub(r'<[^>]+>',' ',self.pages[page])
+            for p in packages:
+                edits=p['generation_credits'];originals=p['unlock_entitlements']
+                composition=f"{edits} {'обработки' if edits in (2,22) else 'обработок'} + {originals} {'оригинал' if originals==1 else 'оригиналов'} — {p['price_minor']//100} ₽"
+                self.assertIn(composition,text,page)
 
     def test_public_copy_sells_access_package_not_generations(self) -> None:
         public_pages = [

@@ -18,6 +18,7 @@ from app.config import Settings
 from app.commercial_operations import cost_status, payment_status
 from app.commerce import (
     LARGE_PACKAGE,
+    MEDIUM_PACKAGE,
     RECEIPT_ITEM_NAME,
     SMALL_PACKAGE,
     USER_PRODUCT_NAME,
@@ -59,6 +60,160 @@ class Clock:
 
 
 class PaymentTests(TestCase):
+    def medium_order(self, key="medium", **target):
+        version_id=target.pop('version_id',None)
+        if version_id is None and not target:target['account_purchase']=True
+        return self.service.create_order(self.user_id, version_id, key,
+            product_code=MEDIUM_PACKAGE.code, **target)
+
+    def test_medium_order_receipt_form_signature_and_pending_reuse_exact(self):
+        order=self.medium_order()
+        self.assertEqual((order.product_code,order.amount_minor,order.generation_credit_quantity,
+                          order.unlock_entitlement_quantity),('continuation_pack_22_plus_11',49000,22,11))
+        form=dict(self.service.payment_redirect_form(order.public_token).fields)
+        query=parse_qs(urlparse(order.payment_url).query)
+        self.assertEqual(form['OutSum'],'490.00')
+        self.assertEqual(form['SignatureValue'],query['SignatureValue'][0])
+        receipt=json.loads(unquote_plus(query['Receipt'][0]))
+        self.assertEqual(receipt,{'items':[{'name':MEDIUM_PACKAGE.receipt_name,'quantity':1,'sum':490.0,'tax':'none'}]})
+        replay=self.medium_order('medium-again')
+        self.assertEqual(replay.id,order.id)
+        with self.database.read() as c:
+            fiscal=c.execute('SELECT amount_minor,item_name FROM payment_receipts WHERE order_id=?',(order.id,)).fetchone()
+            self.assertEqual(tuple(fiscal),(49000,MEDIUM_PACKAGE.receipt_name))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM payment_orders').fetchone()[0],1)
+
+    def test_medium_wrong_amount_and_tampered_grants_never_grant(self):
+        order=self.medium_order()
+        for amount in ('49.00','1990.00','489.99','490.01'):
+            result=self.service.process_webhook(self.signed_callback(order,amount=amount),
+                        method='POST',path='/payments/robokassa/result')
+            self.assertFalse(result.accepted);self.assertEqual(result.reason,'amount_mismatch')
+        with self.database.transaction() as c:
+            c.execute('UPDATE payment_orders SET generation_credit_quantity=23 WHERE id=?',(order.id,))
+        result=self.service.process_webhook(self.signed_callback(order),method='POST',path='/payments/robokassa/result')
+        self.assertFalse(result.accepted);self.assertEqual(result.reason,'order_package_mismatch')
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available,0)
+        self.assertEqual(self.demo.commerce.entitlement_balance(self.user_id).available,0)
+
+    def test_medium_concurrent_result_url_grants_once_stacks_and_survives_restart(self):
+        expected_edits=expected_originals=0
+        for package in (SMALL_PACKAGE,MEDIUM_PACKAGE,LARGE_PACKAGE):
+            order=self.service.create_order(self.user_id,None,'stack-'+package.code,
+                    account_purchase=True,product_code=package.code)
+            values=self.signed_callback(order)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results=list(pool.map(lambda _:self.service.process_webhook(values,method='POST',
+                            path='/payments/robokassa/result'),range(2)))
+            self.assertTrue(all(r.accepted for r in results))
+            expected_edits+=package.generation_credits;expected_originals+=package.unlock_entitlements
+            self.assertEqual(self.demo.commerce.balance(self.user_id).available,expected_edits)
+            self.assertEqual(self.demo.commerce.entitlement_balance(self.user_id).available,expected_originals)
+            with self.database.read() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM continuation_pack_grants WHERE payment_order_id=?',(order.id,)).fetchone()[0],1)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM payment_receipts WHERE order_id=?',(order.id,)).fetchone()[0],1)
+        restarted=self.demo.commerce.__class__(Database(self.settings.database_path),self.clock)
+        self.assertEqual((restarted.balance(self.user_id).available,restarted.entitlement_balance(self.user_id).available),(124,62))
+        self.assertTrue(payment_show(self.database,order.provider_invoice_id)['consistent'])
+
+    def test_medium_browser_returns_never_grant_and_late_result_confirms(self):
+        order=self.medium_order()
+        server=PaymentWebhookServer(self.service,'127.0.0.1',0,'/payments/robokassa/result')
+        server.start();self.addCleanup(server.stop)
+        base=f'http://127.0.0.1:{server.bound_port}'
+        for route,status in (('fail',303),('success',200)):
+            self.assertEqual(httpx.get(f'{base}/payment/{route}/{order.public_token}').status_code,status)
+            self.assertEqual(self.demo.commerce.balance(self.user_id).available,0)
+        self.assertEqual(self.medium_order('retry-after-fail').id,order.id)
+        self.clock.advance(minutes=31)
+        for _ in range(2):
+            result=self.service.process_webhook(self.signed_callback(order),method='POST',path='/payments/robokassa/result')
+            self.assertTrue(result.accepted)
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available,22)
+        self.assertEqual(self.demo.commerce.entitlement_balance(self.user_id).available,11)
+
+    def test_medium_refresh_preserves_each_exact_target(self):
+        pending=self.pending_request()
+        orders=[self.medium_order('medium-version',version_id=self.versions[0]['id'],account_purchase=False),
+                self.medium_order('medium-pending',pending_request_id=pending),self.medium_order('medium-account')]
+        self.clock.advance(minutes=31)
+        for old in orders:
+            fresh=self.service.refresh_order_for_platform_user(old.public_token,'owner')
+            self.assertNotEqual(fresh.id,old.id)
+            self.assertEqual((fresh.amount_minor,fresh.generation_credit_quantity,fresh.unlock_entitlement_quantity),(49000,22,11))
+            self.assertEqual((fresh.product_code,fresh.purpose,fresh.version_id,fresh.pending_request_id),
+                             (old.product_code,old.purpose,old.version_id,old.pending_request_id))
+
+    def test_medium_full_refund_only_revokes_its_unused_units_once(self):
+        orders=[]
+        for package in (SMALL_PACKAGE,MEDIUM_PACKAGE,LARGE_PACKAGE):
+            order=self.service.create_order(self.user_id,None,'refund-'+package.code,
+                    account_purchase=True,product_code=package.code)
+            callback=self.signed_callback(order);callback['OpKey']='synthetic-operation'
+            self.assertTrue(self.service.process_webhook(callback,method='POST',path='/payments/robokassa/result').accepted)
+            orders.append(order)
+        class FakeRefund:
+            name='robokassa';merchant_login='ravuna-test'
+            def create_refund(self,request):
+                self.request=request
+                return RobokassaRefundResult(True,'synthetic-refund',None,200)
+            def refund_status(self,request_id):return 'finished',200
+        provider=FakeRefund();self.service.provider=provider
+        object.__setattr__(self.settings,'payment_refunds_enabled',True)
+        refund=self.service.prepare_refund(orders[1].id,49000,'customer_request','medium-refund')
+        self.service.submit_refund(refund.id)
+        for _ in range(2):self.assertEqual(self.service.refresh_refund(refund.id).status.value,'succeeded')
+        self.assertEqual(provider.request.amount_minor,49000)
+        self.assertEqual((self.demo.commerce.balance(self.user_id).available,
+                          self.demo.commerce.entitlement_balance(self.user_id).available),(102,51))
+        with self.database.read() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM payment_receipts WHERE order_id=? AND receipt_type='refund'",(orders[1].id,)).fetchone()[0],1)
+            self.assertTrue(all(c.execute('SELECT status FROM continuation_pack_grants WHERE payment_order_id=?',(o.id,)).fetchone()[0]=='active' for o in (orders[0],orders[2])))
+
+    def test_medium_used_original_prevents_automatic_full_refund(self):
+        order=self.medium_order()
+        self.assertTrue(self.service.process_webhook(self.signed_callback(order),method='POST',path='/payments/robokassa/result').accepted)
+        self.demo.commerce.unlock_version(self.user_id,self.versions[0]['id'])
+        self.assertFalse(self.demo.commerce.refund_eligibility(order.id).eligible)
+
+    def test_medium_repeat_purchase_is_two_invoices_not_duplicate_grants(self):
+        ids=[]
+        for number in range(2):
+            order=self.medium_order(f'medium-repeat-{number}');ids.append(order.id)
+            for _ in range(2):
+                self.assertTrue(self.service.process_webhook(self.signed_callback(order),
+                    method='POST',path='/payments/robokassa/result').accepted)
+        self.assertNotEqual(*ids)
+        self.assertEqual((self.demo.commerce.balance(self.user_id).available,
+                          self.demo.commerce.entitlement_balance(self.user_id).available),(44,22))
+
+    def test_medium_used_edit_prevents_automatic_full_refund(self):
+        order=self.medium_order()
+        self.assertTrue(self.service.process_webhook(self.signed_callback(order),method='POST',path='/payments/robokassa/result').accepted)
+        self.clock.advance(seconds=3)
+        self.demo.generate(self.session.session_id,'Светлее','medium-paid-edit',correction=True)
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available,21)
+        self.assertFalse(self.demo.commerce.refund_eligibility(order.id).eligible)
+
+    def test_medium_cancelled_refund_releases_hold_without_revoking_purchase(self):
+        order=self.medium_order();values=self.signed_callback(order);values['OpKey']='synthetic-op'
+        self.assertTrue(self.service.process_webhook(values,method='POST',path='/payments/robokassa/result').accepted)
+        class FakeRefund:
+            name='robokassa';merchant_login='ravuna-test'
+            def create_refund(self,request):return RobokassaRefundResult(True,'cancelled-refund',None,200)
+            def refund_status(self,request_id):return 'canceled',200
+        self.service.provider=FakeRefund()
+        object.__setattr__(self.settings,'payment_refunds_enabled',True)
+        refund=self.service.prepare_refund(order.id,49000,'customer_request','medium-cancel-refund')
+        self.service.submit_refund(refund.id)
+        with self.database.read() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM unlock_entitlements WHERE source_payment_order_id=? AND status='reserved'",(order.id,)).fetchone()[0],11)
+        # Refund hold blocks spending; it is not a premature debit/revocation.
+        self.assertEqual(self.demo.commerce.balance(self.user_id).available,22)
+        self.assertEqual(self.service.refresh_refund(refund.id).status.value,'cancelled')
+        self.assertEqual((self.demo.commerce.balance(self.user_id).available,
+                          self.demo.commerce.entitlement_balance(self.user_id).available),(22,11))
+
     def test_configured_methods_html_form_and_result_grants_remain_idempotent(self) -> None:
         class HiddenFields(HTMLParser):
             def __init__(self):
@@ -77,7 +232,7 @@ class PaymentTests(TestCase):
         server.start()
         self.addCleanup(server.stop)
         expected_edits = expected_originals = 0
-        for package in (SMALL_PACKAGE, LARGE_PACKAGE):
+        for package in (SMALL_PACKAGE, MEDIUM_PACKAGE, LARGE_PACKAGE):
             with self.subTest(package=package.code):
                 order = service.create_order(self.user_id, None, "methods-" + package.code,
                     account_purchase=True, product_code=package.code)
