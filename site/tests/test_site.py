@@ -117,6 +117,11 @@ class RavunaSiteTests(unittest.TestCase):
         forbidden_price = f"{3 * 50 - 1} ₽"
         self.assertNotIn(forbidden_price, self.html)
 
+    def test_revision_14_has_approved_date_but_requires_publication(self):
+        for page in ("legal/offer.html", "legal/payment-refund.html"):
+            self.assertIn('Редакция 1.4 от <time datetime="2026-10-23">23 октября 2026 г.</time>', self.pages[page])
+            self.assertIn("Действует с момента публикации.", self.pages[page])
+
     def test_all_public_tariffs_match_backend_registry(self):
         tree=ast.parse((ROOT/'app/commerce.py').read_text(encoding='utf-8'))
         packages=[]
