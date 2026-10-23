@@ -3,7 +3,8 @@
 Dry-run uses mode=ro/query_only and never creates a Database or writes a report.
 Execution re-plans under the media writer guard and BEGIN IMMEDIATE. Filesystem
 unlink is not transactional: interruption rolls DB changes back, and a retry
-finishes the same hidden results (missing files are not counted as deletions).
+reconciles the same results (which may still be visible; missing files are not
+counted as newly deleted).
 Attempts, payment/commerce/referral evidence and feedback are never deleted.
 """
 from collections import Counter, defaultdict
@@ -12,6 +13,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import hashlib
+import re
 import stat
 import sqlite3
 
@@ -19,6 +22,7 @@ from app.database import Database, ReadOnlyDatabase
 from app.media_guard import media_guard
 
 LIMIT = 3
+FIRST_BATCH_LIMIT = 10
 PATHS = {
     "gallery_versions": ("source_path", "secondary_source_path", "preview_watermarked_path", "original_path"),
     "generation_attempts": ("source_path", "secondary_source_path", "original_result_path", "demo_result_path"),
@@ -35,6 +39,7 @@ Succeeded is the existing delivery/debit commit contract; legacy gallery-only
 rows retain their explicit succeeded status. Opening/favouriting is not a clock.
     """
     return connection.execute("""SELECT v.*,i.user_id,i.deleted,i.retention_until,i.purge_after,
+        i.created_at AS work_created_at,
         COALESCE(a.completed_at,v.created_at) AS completed_at
         FROM gallery_versions v JOIN gallery_items i ON i.id=v.gallery_item_id
         LEFT JOIN generation_attempts a ON a.id=v.attempt_id
@@ -78,6 +83,103 @@ def _time(value):
 def _path(settings, value):
     p = Path(value)
     return Path(os.path.abspath(p if p.is_absolute() else settings.base_dir/p))
+
+
+def _legacy_review(path, now):
+    """Explicit private operator evidence, not inferred consent or a C2 opt-in.
+
+    Hash references attest to a separately verified historical legal review.
+    Syntax/hash strings cannot prove its legal truth; missing evidence is NOT
+    permission. Exact work/result timestamps bind each decision to its target.
+    The <=10-entry set also prevents a retry from spilling into the next batch.
+    """
+    if path is None:
+        return {}, None
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError('Unsafe legacy review')
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(fd, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_size > 65536 or
+                (os.name == 'posix' and (info.st_mode & 0o077 or info.st_uid != os.geteuid()))):
+            raise ValueError('Unsafe legacy review')
+        raw = source.read(65537)
+    if len(raw) > 65536:
+        raise ValueError('Oversized legacy review')
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError('Invalid legacy review')
+    reviewed = _time(value.get('reviewed_at'))
+    entries = value.get('results')
+    if value.get('schema_version') == 2:
+        # One reviewed historical rule, not one invented consent per photograph.
+        # Bind the complete inventory so replay cannot silently select ten more.
+        rule = value.get('cohort')
+        if (value.get('basis') != 'legacy_expiry_30d_cohort' or not reviewed or reviewed > now
+                or not isinstance(rule, dict)):
+            raise ValueError('Invalid legacy cohort review')
+        start, end, notice = (_time(rule.get(k)) for k in
+                              ('published_from', 'published_until', 'notice_published_at'))
+        if (not start or not end or not notice or start >= end or notice > reviewed or end > reviewed
+                or rule.get('trash_transition') != 'expiry_plus_30d_and_notice_plus_30d'
+                or not isinstance(rule.get('offer_version'), str)
+                or not 1 <= len(rule['offer_version']) <= 128
+                or any(not isinstance(rule.get(k), str) or
+                       not re.fullmatch(r'[0-9a-f]{64}', rule[k]) for k in
+                       ('terms_sha256', 'publication_evidence_sha256',
+                        'notice_evidence_sha256', 'inventory_sha256'))):
+            raise ValueError('Invalid legacy cohort review')
+        return {'__cohort__': rule}, hashlib.sha256(raw).hexdigest()
+    if (value.get('schema_version') != 1 or value.get('basis') != 'legacy_expiry_30d' or
+            not reviewed or reviewed > now or not isinstance(entries, list) or
+            not 1 <= len(entries) <= FIRST_BATCH_LIMIT):
+        raise ValueError('Invalid legacy review')
+    result = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError('Invalid legacy review target')
+        identifier = entry.get('version_id')
+        if (not isinstance(identifier, str) or not identifier or len(identifier) > 128 or
+                identifier in result or not _time(entry.get('work_created_at')) or
+                not _time(entry.get('completed_at')) or
+                any(not isinstance(entry.get(key), str) or not entry[key] or len(entry[key]) > 128
+                    for key in ('user_id', 'gallery_item_id')) or
+                any(not isinstance(entry.get(key), str) or
+                    not re.fullmatch(r'[0-9a-f]{64}', entry[key])
+                    for key in ('terms_sha256', 'evidence_sha256'))):
+            raise ValueError('Invalid legacy review target')
+        result[identifier] = entry
+    return result, hashlib.sha256(raw).hexdigest()
+
+
+def inventory_digest(rows):
+    """Opaque batch boundary only; never print or export the identifiers."""
+    payload = sorted(tuple(r[k] for k in ('id', 'user_id', 'gallery_item_id',
+                       'work_created_at', 'completed_at', 'retention_until', 'deleted'))
+                     for r in rows)
+    return hashlib.sha256(json.dumps(payload, separators=(',', ':')).encode()).hexdigest()
+
+
+def _cohort_reason(connection, row, rule, now):
+    created, complete, expiry = (_time(row[k]) for k in
+                                  ('work_created_at', 'completed_at', 'retention_until'))
+    if not (_time(rule['published_from']) <= created < _time(rule['published_until'])):
+        return 'legacy_publication_scope_unverified'
+    acceptance = connection.execute('''SELECT a.accepted_at FROM max_legal_acceptances a
+        JOIN users u ON u.platform_user_id=a.platform_user_id AND u.platform='max'
+        WHERE u.id=? AND a.document_type='offer' AND a.document_version=?''',
+        (row['user_id'], rule['offer_version'])).fetchone()
+    accepted = _time(acceptance[0]) if acceptance else None
+    if not accepted or not (_time(rule['published_from']) <= accepted <= created):
+        return 'legacy_acceptance_unverified'
+    # Additional grace preserves the old trash promise conservatively. This is
+    # an explicit reviewed transition, not evidence that a work was in trash.
+    deadline = max(expiry, created + timedelta(days=30), complete + timedelta(days=30),
+                   _time(rule['notice_published_at'])) + timedelta(days=30)
+    if now < deadline:
+        return 'legacy_transition_grace'
+    return None
 
 
 def _safe_metadata(path, root):
@@ -130,8 +232,23 @@ class ResultRetention:
         self.database=database
         self.clock=clock or (lambda: datetime.now(timezone.utc))
 
-    def _plan(self,c,user_id=None,*,batch_limit=None):
+    def _plan(self,c,user_id=None,*,batch_limit=None,first_batch=False,review_path=None):
         now=self.clock();rows=successful_results(c,user_id);keys=result_keys(c,user_id);counts=Counter();latest=set()
+        reviews, review_digest = _legacy_review(review_path, now) if first_batch else ({}, None)
+        cohort = reviews.get('__cohort__')
+        digest = inventory_digest(rows)
+        if cohort and cohort['inventory_sha256'] != digest:
+            raise ValueError('Legacy cohort inventory changed; review a new dry-run')
+        policy_counts = Counter()
+        # First-batch scope deliberately excludes all commerce history, including
+        # pending/late orders, old fully spent purchases and promotional originals.
+        commerce_users = set()
+        if first_batch:
+            batch_limit = FIRST_BATCH_LIMIT
+            commerce_users = {r[0] for r in c.execute('''SELECT user_id FROM payment_orders
+                UNION SELECT user_id FROM payment_intents
+                UNION SELECT user_id FROM continuation_pack_grants
+                UNION SELECT user_id FROM unlock_entitlements''')}
         for r in keys:
             counts[r['user_id']]+=1
             if counts[r['user_id']]<=LIMIT:latest.add(r['version_id'])
@@ -190,6 +307,27 @@ class ResultRetention:
             elif (paid_anchor or unlocked_anchor or r['unlock_status']=='unlocked') and (
                     not anchor or now < anchor+timedelta(days=self.settings.paid_retention_days)):
                 reason='paid_retention'
+            if not reason and first_batch:
+                created = _time(r['work_created_at'])
+                if not created or not _time(r['retention_until']) or complete < created:
+                    reason = 'legacy_expiry_unverified'
+                elif (not expired or now < created + timedelta(days=30) or
+                      now < complete + timedelta(days=30)):
+                    reason = 'early_eviction_excluded'
+                else:
+                    policy_counts['legacy_expired_results'] += 1
+                    review = reviews.get(r['id'])
+                    if r['user_id'] in commerce_users or r['unlock_status'] != 'demo':
+                        reason = 'commerce_history_first_batch'
+                    elif cohort:
+                        reason = _cohort_reason(c, r, cohort, now)
+                    elif review is None:
+                        reason = 'legacy_terms_unverified'
+                    elif (review['user_id'] != r['user_id'] or
+                          review['gallery_item_id'] != r['gallery_item_id'] or
+                          _time(review['work_created_at']) != created or
+                          _time(review['completed_at']) != complete):
+                        reason = 'legacy_review_target_mismatch'
             if reason:protected[reason]+=1
             else:targets.append(r)
         eligible_total=len(targets)
@@ -228,8 +366,8 @@ class ResultRetention:
         # Cache files are derived, not customer originals. A grace period avoids
         # upload-in-progress files; the media writer guard excludes active reads.
         cache=self.settings.temp_dir/'max-contact-sheets'
-        if cache.is_symlink():anomalies+=1
-        elif cache.is_dir() and user_id is None:
+        if not first_batch and cache.is_symlink():anomalies+=1
+        elif not first_batch and cache.is_dir() and user_id is None:
             cached=sorted(cache.glob('*.jpg'));cache_selected=0
             for path in cached:
                 try:
@@ -251,6 +389,35 @@ class ResultRetention:
                 'path_anomaly_count':anomalies,'busy_operations':busy,
                 'removed_files':0,'removed_bytes':0,'removed_versions':0,'removed_items':0,
                 'metadata_stubs_preserved':0,'database_access':'mode=ro; query_only=ON'}
+        report['inventory_sha256'] = digest
+        commerce_media_users = commerce_users | set(paid) | unknown_paid_users
+        commerce_paths = set()
+        commerce_results = 0
+        for row in rows:
+            if row['user_id'] in commerce_media_users:
+                commerce_results += 1
+                commerce_paths.update(_path(self.settings, row[key])
+                                      for key in PATHS['gallery_versions'] if row[key])
+        for row in c.execute('SELECT user_id,' + ','.join(PATHS['gallery_items']) + ' FROM gallery_items'):
+            if row['user_id'] in commerce_media_users:
+                commerce_paths.update(_path(self.settings, row[key])
+                                      for key in PATHS['gallery_items'] if row[key])
+        physical = {}; unavailable = 0
+        for path in sorted(commerce_paths):
+            try:
+                identity = _safe_metadata(path, root)
+                if identity is None:unavailable += 1
+                else:physical[identity[:2]] = identity[2]
+            except (OSError,ValueError):unavailable += 1
+        report['protected_commerce_media'] = {
+            'results': commerce_results, 'files':len(physical),
+            'logical_bytes':sum(physical.values()), 'missing_or_unsafe_references':unavailable,
+            'deletion_authorized':False}
+        if first_batch:
+            report.update(profile='first-batch-legacy-expiry', review_sha256=review_digest,
+                          reviewed_targets=0 if cohort else len(reviews),
+                          cohort_review=bool(cohort), **policy_counts)
+            report.setdefault('legacy_expired_results', 0)
         return report,targets,attempts,dead_items,dead_sessions,files
 
     @staticmethod
@@ -265,9 +432,12 @@ class ResultRetention:
             if table=='gallery_versions' and c.execute('SELECT 1 FROM '+other+' WHERE version_id=? LIMIT 1',(identifier,)).fetchone():return True
         return False
 
-    def _apply(self,c,user_id):
-        report,targets,attempts,items,sessions,files=self._plan(c,user_id,batch_limit=100)
+    def _apply(self,c,user_id,*,first_batch=False,review_path=None,expected_review_digest=None):
+        report,targets,attempts,items,sessions,files=self._plan(
+            c,user_id,batch_limit=100,first_batch=first_batch,review_path=review_path)
         report.update(mode='execute',database_access='BEGIN IMMEDIATE; revalidated plan')
+        if first_batch and report['review_sha256'] != expected_review_digest:
+            raise RuntimeError('Legacy review changed before execution')
         if report['busy_operations']:
             report['mode']='busy'
             return report
@@ -298,18 +468,29 @@ class ResultRetention:
         if c.execute('PRAGMA foreign_key_check').fetchone():raise RuntimeError('Result cleanup integrity check failed')
         return report
 
-    def run(self,*,execute=False,user_id=None):
+    def run(self,*,execute=False,user_id=None,first_batch=False,review_path=None):
+        review_digest = None
+        if review_path is not None and not first_batch:
+            raise ValueError('Legacy review requires first-batch profile')
+        if execute and first_batch:
+            if self.settings.result_retention_enabled:
+                raise ValueError('Automatic result retention must remain OFF')
+            reviews, review_digest = _legacy_review(review_path, self.clock())
+            if not reviews:
+                raise ValueError('First batch requires verified legacy review')
         if not execute:
             with ReadOnlyDatabase(self.settings.database_path).read() as c:
                 c.execute('BEGIN')
-                report,*_=self._plan(c,user_id)
+                report,*_=self._plan(c,user_id,first_batch=first_batch,review_path=review_path)
                 report['sqlite_free_pages']=c.execute('PRAGMA freelist_count').fetchone()[0]
                 report['sqlite_page_size']=c.execute('PRAGMA page_size').fetchone()[0]
                 return report
         with media_guard(self.settings.data_dir,exclusive=True,blocking=False) as acquired:
             if not acquired:return {'mode':'busy','removed_files':0,'removed_bytes':0}
             database=self.database or Database(self.settings.database_path)
-            with database.transaction() as c:report=self._apply(c,user_id)
+            with database.transaction() as c:report=self._apply(
+                c,user_id,first_batch=first_batch,review_path=review_path,
+                expected_review_digest=review_digest)
             # No user identifiers or private file names in the operator receipt.
             from app.storage import PrivateStorage
             PrivateStorage.write_private(self.settings.data_dir/'result_retention_last.json',json.dumps(report,sort_keys=True).encode())
@@ -320,9 +501,14 @@ def main():
     from app.config import load_settings
     parser=argparse.ArgumentParser(description='Read-only three-result retention plan; explicit --execute required.')
     parser.add_argument('--execute',action='store_true')
+    parser.add_argument('--first-batch',action='store_true',help='At most 10 reviewed legacy-expired results; no cache sweep')
+    parser.add_argument('--legacy-review',type=Path,help='Private verified historical-terms evidence (not consent)')
     args=parser.parse_args()
+    if args.execute and not args.first_batch:
+        parser.error('Operator execution requires --first-batch; automatic cleanup is separately gated')
     try:
-        report=ResultRetention(load_settings()).run(execute=args.execute)
+        report=ResultRetention(load_settings()).run(execute=args.execute,first_batch=args.first_batch,
+                                                   review_path=args.legacy_review)
     except (OSError,ValueError,RuntimeError,sqlite3.Error):
         print(json.dumps({'status':'FAIL','reason':'result_retention_safety_gate'}));return 2
     print(json.dumps(report,sort_keys=True));return 0

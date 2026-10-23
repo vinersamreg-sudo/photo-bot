@@ -12,6 +12,8 @@ from unittest import TestCase, skipUnless
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import io
+from contextlib import redirect_stdout, redirect_stderr
 
 from PIL import Image
 from app.config import Settings
@@ -94,6 +96,287 @@ class ResultRetentionTests(TestCase):
             return {t:[tuple(r) for r in c.execute('SELECT * FROM '+t+' ORDER BY 1')]
                     for t in ('users','user_credit_accounts','generation_credit_lots','credit_ledger',
                               'unlock_entitlements','payment_orders','continuation_pack_grants','referral_bonus_grants','bonus_credit_transactions')}
+
+    def age_results(self):
+        with self.db.transaction() as c:
+            c.execute('UPDATE gallery_items SET created_at=?,retention_until=?',
+                      ((NOW-timedelta(days=40)).isoformat(),(NOW-timedelta(days=10)).isoformat()))
+            c.execute('UPDATE generation_attempts SET completed_at=?',((NOW-timedelta(days=31)).isoformat(),))
+            c.execute('UPDATE gallery_versions SET created_at=?',((NOW-timedelta(days=31)).isoformat(),))
+
+    def legacy_review(self, seeded):
+        with self.db.read() as c:
+            from app.result_retention import successful_results
+            rows={r['id']:r for r in successful_results(c)}
+        value={'schema_version':1,'basis':'legacy_expiry_30d','reviewed_at':NOW.isoformat(),
+               'results':[{'version_id':v,'user_id':rows[v]['user_id'],
+                           'gallery_item_id':rows[v]['gallery_item_id'],
+                           'work_created_at':rows[v]['work_created_at'],
+                           'completed_at':rows[v]['completed_at'],
+                           'terms_sha256':'a'*64,'evidence_sha256':'b'*64} for v,*_ in seeded]}
+        path=self.base/'private-review.json'
+        path.write_text(json.dumps(value),encoding='utf-8');path.chmod(0o600)
+        return path
+
+    def first_apply(self, path):
+        with patch('app.result_retention._unlink',side_effect=fixture_unlink):
+            return self.retention.run(execute=True,first_batch=True,review_path=path)
+
+    def cohort_review(self):
+        with self.db.transaction() as c:
+            c.execute('UPDATE gallery_items SET created_at=?,retention_until=?',
+                      ((NOW-timedelta(days=100)).isoformat(), (NOW-timedelta(days=70)).isoformat()))
+            c.execute('UPDATE generation_attempts SET completed_at=?', ((NOW-timedelta(days=90)).isoformat(),))
+            c.execute("INSERT OR IGNORE INTO max_legal_documents(document_type,version,created_at) VALUES('offer','historical-verified',?)",
+                      ((NOW-timedelta(days=150)).isoformat(),))
+            c.execute("INSERT OR REPLACE INTO max_legal_acceptances VALUES('u','offer','historical-verified',?)",
+                      ((NOW-timedelta(days=110)).isoformat(),))
+        digest=self.retention.run(first_batch=True)['inventory_sha256']
+        value={'schema_version':2,'basis':'legacy_expiry_30d_cohort','reviewed_at':NOW.isoformat(),
+               'cohort':{'published_from':(NOW-timedelta(days=150)).isoformat(),
+                         'published_until':NOW.isoformat(), 'offer_version':'historical-verified',
+                         'notice_published_at':(NOW-timedelta(days=40)).isoformat(),
+                         'trash_transition':'expiry_plus_30d_and_notice_plus_30d',
+                         'terms_sha256':'a'*64,'publication_evidence_sha256':'b'*64,
+                         'notice_evidence_sha256':'c'*64,'inventory_sha256':digest}}
+        path=self.base/'cohort.json';path.write_text(json.dumps(value));path.chmod(0o600)
+        return path
+
+    def test_cohort_one_rule_selects_ten_and_replay_cannot_spill(self):
+        seeded=self.seed(14);path=self.cohort_review();before=self.financial()
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['candidate_results'],10)
+        self.assertTrue(dry['cohort_review'])
+        self.assertEqual(self.first_apply(path)['removed_versions'],10)
+        self.assertEqual(self.financial(),before)
+        with self.assertRaises(ValueError):self.first_apply(path)
+        self.assertEqual(sum(all(p.exists() for p in paths) for _,_,paths in seeded),4)
+
+    def test_cohort_unknown_acceptance_and_transition_grace_excluded(self):
+        self.seed(5);path=self.cohort_review()
+        with self.db.transaction() as c:c.execute('DELETE FROM max_legal_acceptances')
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['candidate_results'],0)
+        self.assertEqual(dry['protection_reasons']['legacy_acceptance_unverified'],5)
+        path=self.cohort_review();value=json.loads(path.read_text())
+        value['cohort']['notice_published_at']=(NOW-timedelta(days=29)).isoformat()
+        path.write_text(json.dumps(value));path.chmod(0o600)
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['protection_reasons']['legacy_transition_grace'],5)
+
+    def test_cohort_crash_retry_reconciles_same_ten_not_following_four(self):
+        seeded=self.seed(14);path=self.cohort_review();calls=[]
+        def interrupted(file,root,identity):
+            calls.append(file)
+            if len(calls)>1:raise OSError('synthetic interruption')
+            fixture_unlink(file,root,identity)
+        with patch('app.result_retention._unlink',side_effect=interrupted):
+            with self.assertRaises(OSError):self.first_apply_without_patch(path)
+        self.assertEqual(self.first_apply(path)['candidate_results'],10)
+        self.assertEqual(sum(all(p.exists() for p in paths) for _,_,paths in seeded),4)
+
+    def first_apply_without_patch(self,path):
+        return self.retention.run(execute=True,first_batch=True,review_path=path)
+
+    def test_cohort_does_not_bypass_live_trash_or_pending_payment(self):
+        seeded=self.seed(5);path=self.cohort_review()
+        self.gallery.soft_delete('u',seeded[0][1])
+        # Changing the cohort after review must block, not switch targets.
+        with self.assertRaises(ValueError):self.first_apply(path)
+        path=self.cohort_review()
+        dry=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(dry['protection_reasons']['trash_retention'],1)
+
+    def test_disk_audit_is_readonly_masks_and_counts_each_inode_once(self):
+        from app.storage_audit import audit
+        self.seed(4);self.age_results()
+        self.settings.logs_dir.mkdir(parents=True,exist_ok=True)
+        (self.settings.logs_dir/'secret-customer-name.log').write_text('private-content')
+        self.settings.backup_dir_path.mkdir(parents=True,exist_ok=True)
+        (self.settings.backup_dir_path/'ravuna-recovery-partial.tar.gz.enc').write_bytes(b'enc')
+        before={p.relative_to(self.base):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        report=audit(self.settings)
+        after={p.relative_to(self.base):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        self.assertEqual(before,after)
+        self.assertEqual(report['free_photo_cleanup']['candidate_results'],0)
+        self.assertEqual(report['categories']['logs']['files'],1)
+        text=json.dumps(report)
+        for private in ('secret-customer-name','private-content',str(self.base),'u-v-'):
+            self.assertNotIn(private,text)
+        self.assertIn('source_inputs',report['categories'])
+
+    def test_disk_audit_exact_recovery_comparison_does_not_prune(self):
+        from app.storage_audit import audit
+        from tests.test_recovery_retention import RecoveryRetentionTests
+        root=self.settings.backup_dir_path;root.mkdir(parents=True,exist_ok=True)
+        helper=RecoveryRetentionTests()
+        files=[helper.snapshot(root,i) for i in range(7)]
+        report=audit(self.settings,files[-1].name)
+        comparison=report['recovery_comparison']
+        self.assertEqual(comparison['incremental_7_to_3_logical_bytes'],sum(p.stat().st_size for p in files[:4]))
+        self.assertTrue(comparison['offsite_recheck_required'])
+        self.assertTrue(all(p.exists() for p in files))
+
+    def test_first_batch_unknown_terms_means_zero_and_readonly(self):
+        self.seed(15);self.age_results()
+        before=self.settings.database_path.read_bytes()
+        result=self.retention.run(first_batch=True)
+        self.assertEqual(result['candidate_results'],0)
+        self.assertEqual(result['legacy_expired_results'],15)
+        self.assertEqual(result['protection_reasons']['legacy_terms_unverified'],15)
+        self.assertEqual(self.settings.database_path.read_bytes(),before)
+        self.assertFalse((self.settings.data_dir/'result_retention_last.json').exists())
+        with self.assertRaises(ValueError):self.first_apply(None)
+
+    def test_first_batch_ten_targets_preview_apply_and_replay_do_not_spill(self):
+        seeded=self.seed(25);self.age_results();path=self.legacy_review(seeded[:10])
+        cache=self.settings.temp_dir/'max-contact-sheets';cache.mkdir(parents=True)
+        cached=cache/'synthetic.jpg';cached.write_bytes(b'cache');os.utime(cached,(0,0))
+        before=self.financial()
+        preview=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(preview['candidate_results'],10)
+        self.assertEqual(preview['batch_limit'],10)
+        done=self.first_apply(path)
+        self.assertEqual(done['removed_versions'],10)
+        self.assertEqual(done['review_sha256'],preview['review_sha256'])
+        self.assertEqual(before,self.financial());self.assertTrue(cached.exists())
+        self.assertEqual(self.first_apply(path)['removed_files'],0)
+        for _,_,paths in seeded[10:]:self.assertTrue(all(p.exists() for p in paths))
+
+    def test_first_batch_review_cannot_allow_early_eviction_or_fresh_correction(self):
+        seeded=self.seed(6);path=self.legacy_review(seeded[:3])
+        report=self.retention.run(first_batch=True,review_path=path)
+        self.assertEqual(report['candidate_results'],0)
+        self.assertEqual(report['protection_reasons']['early_eviction_excluded'],3)
+        self.age_results()
+        with self.db.transaction() as c:
+            c.execute('UPDATE generation_attempts SET completed_at=? WHERE id=?',
+                      (NOW.isoformat(),'a-'+seeded[0][0]))
+        path=self.legacy_review(seeded[:1])
+        self.assertEqual(self.first_apply(path)['removed_files'],0)
+
+    def test_first_batch_invalid_or_changed_evidence_fails_closed(self):
+        seeded=self.seed(15);self.age_results()
+        path=self.legacy_review(seeded[:11])
+        with self.assertRaises(ValueError):self.first_apply(path)
+        path=self.legacy_review(seeded[:1])
+        with self.db.transaction() as c:
+            c.execute('UPDATE generation_attempts SET completed_at=? WHERE id=?',
+                      ((NOW-timedelta(days=32)).isoformat(),'a-'+seeded[0][0]))
+        result=self.first_apply(path)
+        self.assertEqual(result['removed_files'],0)
+        self.assertEqual(result['protection_reasons']['legacy_review_target_mismatch'],1)
+        value=json.loads(path.read_text());value['results'][0]['evidence_sha256']=''
+        path.write_text(json.dumps(value));path.chmod(0o600)
+        with self.assertRaises(ValueError):self.first_apply(path)
+
+    def test_first_batch_replans_after_preview_and_preserves_pending_payment(self):
+        seeded=self.seed(5);self.age_results();path=self.legacy_review(seeded[:1])
+        self.assertEqual(self.retention.run(first_batch=True,review_path=path)['candidate_results'],1)
+        with self.db.transaction() as c:
+            c.execute("""INSERT INTO payment_orders(id,public_token,attempt_id,version_id,user_id,
+                provider,merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
+                created_at,updated_at,expires_at) VALUES('late','opaque','legacy',?,'u','robokassa',
+                'synthetic',1,4900,'RUB','expired','synthetic',?,?,?)""",
+                (seeded[0][0],NOW.isoformat(),NOW.isoformat(),NOW.isoformat()))
+        before=self.financial();result=self.first_apply(path)
+        self.assertEqual(result['removed_files'],0);self.assertEqual(before,self.financial())
+        self.assertEqual(result['protection_reasons']['payment_or_delivery_obligation'],1)
+
+    def test_first_batch_old_fully_spent_customer_is_not_free(self):
+        seeded=self.seed(5);self.age_results()
+        with self.db.transaction() as c:
+            c.execute('UPDATE gallery_items SET created_at=?',((NOW-timedelta(days=500)).isoformat(),))
+            c.execute('UPDATE generation_attempts SET completed_at=?',((NOW-timedelta(days=400)).isoformat(),))
+            c.execute("""INSERT INTO payment_orders(id,public_token,attempt_id,version_id,user_id,
+                provider,merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
+                created_at,updated_at,expires_at,paid_at) VALUES('old','opaque','legacy',?,'u','robokassa',
+                'synthetic',1,4900,'RUB','delivered','synthetic',?,?,?,?)""",
+                (seeded[0][0],*((NOW-timedelta(days=400)).isoformat(),)*4))
+        path=self.legacy_review(seeded[:1])
+        result=self.first_apply(path)
+        self.assertEqual(result['removed_files'],0)
+        self.assertEqual(result['protection_reasons']['commerce_history_first_batch'],5)
+
+    def test_first_batch_trash_editing_and_automatic_flag_are_not_bypassed(self):
+        seeded=self.seed(6);self.age_results();path=self.legacy_review(seeded[:2])
+        self.gallery.soft_delete('u',seeded[0][1])
+        store=MaxConversationStore(self.db,lambda:NOW)
+        store.get_or_create('u',None);store.transition('u','waiting_for_correction',force=True,user_id='u',
+                                      current_gallery_item_id=seeded[1][1],current_version_id=seeded[1][0])
+        result=self.first_apply(path)
+        self.assertEqual(result['removed_files'],0)
+        self.assertEqual(result['protection_reasons']['trash_retention'],1)
+        self.assertEqual(result['protection_reasons']['editing_dialog'],1)
+        active=ResultRetention(replace(self.settings,result_retention_enabled=True),self.db,lambda:NOW)
+        with self.assertRaises(ValueError):active.run(execute=True,first_batch=True,review_path=path)
+
+    def test_first_batch_failure_retry_stays_in_reviewed_set(self):
+        seeded=self.seed(13);self.age_results();path=self.legacy_review(seeded[:2]);calls=[]
+        def fail_after_first(path,root,identity):
+            calls.append(path)
+            if len(calls)>1:raise OSError('synthetic interruption')
+            fixture_unlink(path,root,identity)
+        before=self.financial()
+        with patch('app.result_retention._unlink',side_effect=fail_after_first):
+            with self.assertRaises(OSError):self.retention.run(execute=True,first_batch=True,review_path=path)
+        self.first_apply(path)
+        self.assertEqual(before,self.financial())
+        for _,_,paths in seeded[2:]:self.assertTrue(all(p.exists() for p in paths))
+
+    def test_first_batch_wrong_owner_and_changed_review_are_rejected(self):
+        seeded=self.seed(5);self.age_results();path=self.legacy_review(seeded[:1])
+        value=json.loads(path.read_text());value['results'][0]['user_id']='other'
+        path.write_text(json.dumps(value));path.chmod(0o600)
+        result=self.first_apply(path)
+        self.assertEqual(result['removed_files'],0)
+        self.assertEqual(result['protection_reasons']['legacy_review_target_mismatch'],1)
+        path=self.legacy_review(seeded[:1])
+        from app.result_retention import _legacy_review
+        calls=[]
+        def swapped(review,now):
+            calls.append(1)
+            if len(calls)==2:self.legacy_review(seeded[1:2])
+            return _legacy_review(review,now)
+        with patch('app.result_retention._legacy_review',side_effect=swapped):
+            with self.assertRaises(RuntimeError):self.first_apply(path)
+        for _,_,paths in seeded:self.assertTrue(all(p.exists() for p in paths))
+
+    def test_first_batch_cli_rejects_unbounded_execution_before_db_access(self):
+        from app.result_retention import main
+        with patch.object(sys,'argv',['results-cleanup','--execute']), redirect_stderr(io.StringIO()):
+            with patch('app.result_retention.Database') as database:
+                with self.assertRaises(SystemExit) as stopped:main()
+                self.assertEqual(stopped.exception.code,2);database.assert_not_called()
+        with patch.object(sys,'argv',['results-cleanup','--first-batch']), redirect_stdout(io.StringIO()) as output:
+            with patch('app.config.load_settings',return_value=self.settings):self.assertEqual(main(),0)
+        self.assertEqual(json.loads(output.getvalue())['candidate_results'],0)
+
+    def test_first_batch_exact_age_boundary_and_invalid_chronology(self):
+        seeded=self.seed(4);self.age_results()
+        for completion, expected, reason in (
+            (NOW-timedelta(days=30),1,None),
+            (NOW-timedelta(days=30)+timedelta(microseconds=1),0,'early_eviction_excluded'),
+            (NOW-timedelta(days=41),0,'legacy_expiry_unverified'),
+        ):
+            with self.subTest(completion=completion):
+                with self.db.transaction() as c:
+                    c.execute('UPDATE generation_attempts SET completed_at=? WHERE id=?',
+                              (completion.isoformat(),'a-'+seeded[0][0]))
+                path=self.legacy_review(seeded[:1])
+                report=self.retention.run(first_batch=True,review_path=path)
+                self.assertEqual(report['candidate_results'],expected)
+                if reason:self.assertGreater(report['protection_reasons'][reason],0)
+
+    @skipUnless(os.name=='posix','Production private evidence permissions')
+    def test_first_batch_public_or_symlink_review_refused_without_unlink(self):
+        seeded=self.seed(4);self.age_results();path=self.legacy_review(seeded[:1])
+        path.chmod(0o644)
+        with self.assertRaises(ValueError):self.first_apply(path)
+        path.chmod(0o600)
+        link=self.base/'review-link.json';link.symlink_to(path)
+        with self.assertRaises(ValueError):self.first_apply(link)
+        for _,_,paths in seeded:self.assertTrue(all(p.exists() for p in paths))
 
     def test_zero_one_two_three_four_hundred_and_real_deletion(self):
         for n in (0,1,2,3,4,100):

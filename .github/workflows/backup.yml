@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: photo-bot-production
@@ -17,8 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
+      RECOVERY_LOCAL_KEEP: ${{ vars.RECOVERY_LOCAL_KEEP || '7' }}
       BACKUP_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' && secrets.BACKUP_ENCRYPTION_PASSPHRASE != '' }}
     steps:
+      - uses: actions/checkout@v4
+      - name: Validate local recovery count
+        run: |
+          case "$RECOVERY_LOCAL_KEEP" in 7|3) ;; *) echo 'Unsupported local recovery count' >&2; exit 1 ;; esac
       - name: Require backup configuration
         if: env.BACKUP_CONFIGURED != 'true'
         run: |
@@ -112,6 +118,7 @@ jobs:
           printf '%s  %s\n' "$BACKUP_SHA" "artifact/$BACKUP_NAME" | sha256sum -c -
           printf '%s  %s\n' "$RECOVERY_SHA" "artifact/$RECOVERY_NAME" | sha256sum -c -
       - name: Store encrypted off-site artifact
+        id: offsite
         uses: actions/upload-artifact@v4
         with:
           name: ravuna-production-backup-${{ github.run_id }}
@@ -120,16 +127,31 @@ jobs:
           retention-days: 14
       - name: Confirm encrypted off-site copy
         env:
+          GH_TOKEN: ${{ github.token }}
+          OFFSITE_ARTIFACT_ID: ${{ steps.offsite.outputs.artifact-id }}
+          RECOVERY_SHA: ${{ steps.create.outputs.recovery_sha }}
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
           BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
           RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$BACKUP_NAME" "$RECOVERY_NAME" <<'REMOTE'
+          OFFSITE_CHECK='{}'
+          if [ "$RECOVERY_LOCAL_KEEP" = 3 ]; then
+            test -n "$OFFSITE_ARTIFACT_ID"
+            EXPIRES_AT=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$OFFSITE_ARTIFACT_ID" --jq '.expires_at')
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$OFFSITE_ARTIFACT_ID/zip" > offsite-recheck.zip
+            OFFSITE_CHECK=$(python -B scripts/verify_offsite_recovery.py --archive offsite-recheck.zip --name "$RECOVERY_NAME" --sha256 "$RECOVERY_SHA" --expires-at "$EXPIRES_AT")
+          fi
+          OFFSITE_CHECK_B64=$(printf '%s' "$OFFSITE_CHECK" | base64 -w0)
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$BACKUP_NAME" "$RECOVERY_NAME" "$RECOVERY_LOCAL_KEEP" "$OFFSITE_CHECK_B64" <<'REMOTE'
             set -euo pipefail
             cd /opt/photo-bot
             venv/bin/python -m app.main backup-mark-offsite --backup "$1" --provider github-actions >/dev/null
             venv/bin/python -m app.main recovery-mark-offsite --backup "$2" --provider github-actions >/dev/null
-            scripts/ravuna recovery-prune --keep 7 --confirmed-backup "$2" --apply
+            if [ "$3" = 3 ]; then
+              printf '%s' "$4" | base64 --decode | scripts/ravuna recovery-prune --keep 3 --confirmed-backup "$2" --offsite-check-stdin --apply
+            else
+              scripts/ravuna recovery-prune --keep 7 --confirmed-backup "$2" --apply
+            fi
           REMOTE

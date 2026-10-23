@@ -7,9 +7,10 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -315,6 +316,31 @@ def import_legacy_proofs(directory, *, evidence, dry_run=True):
                         for name, _, _, existing in prepared]}
 
 
+def verify_reduced_offsite(directory, confirmed_backup, check, now=None):
+    """Require a fresh hash-verified download and existing successful restore."""
+    if not isinstance(confirmed_backup, str) or not NAME.fullmatch(confirmed_backup):
+        raise RetentionError('Invalid confirmed recovery basename')
+    now = now or datetime.now(timezone.utc)
+    current = artifact(directory / confirmed_backup)
+    receipt = read_json(directory / (confirmed_backup + '.proof.json'))
+    created = validate(receipt, confirmed_backup, current)
+    try:
+        checked = datetime.fromisoformat(check['checked_at'])
+        expires = datetime.fromisoformat(check['expires_at'])
+        if (check.get('status') != 'PASS' or check.get('provider') != 'github-actions'
+                or receipt['offsite']['provider'] != 'github-actions'
+                or check.get('backup_name') != confirmed_backup
+                or check.get('sha256') != current['sha256']
+                or check.get('size_bytes') != current['size_bytes']
+                or not checked.tzinfo or not expires.tzinfo
+                or not now - timedelta(hours=24) <= checked <= now
+                or expires < now + timedelta(days=7)
+                or not now - timedelta(hours=30) <= created <= now):
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise RetentionError('Reduced local retention requires fresh verified off-site recovery') from None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read-only recovery retention plan unless --apply is explicit")
     parser.add_argument("--import-legacy", action="store_true", help="Explicit receipt-only migration")
@@ -322,9 +348,11 @@ def main(argv=None):
     parser.add_argument("--keep", type=int, default=7)
     parser.add_argument("--evidence", type=Path, help="Trusted operator-reviewed legacy per-artifact proofs")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--offsite-check-stdin", action="store_true",
+                        help="Hash-bound proof of a fresh encrypted off-site download; required for keep<7 apply")
     args = parser.parse_args(argv)
     if args.import_legacy:
-        if not args.evidence or args.confirmed_backup or args.keep != 7:
+        if not args.evidence or args.confirmed_backup or args.keep != 7 or args.offsite_check_stdin:
             parser.error("Legacy import requires --evidence; it does not prune")
     elif not args.confirmed_backup:
         parser.error("Pruning requires --confirmed-backup")
@@ -335,8 +363,20 @@ def main(argv=None):
         if args.import_legacy:
             report = import_legacy_proofs(settings.backup_dir_path, evidence=evidence, dry_run=not args.apply)
         else:
+            if args.apply and args.keep < 7:
+                if not args.offsite_check_stdin:
+                    raise RetentionError('Reduced retention needs fresh off-site proof')
+                raw = sys.stdin.read(65537)
+                if len(raw) > 65536:
+                    raise RetentionError('Off-site proof is oversized')
+                check = json.loads(raw)
+                if not isinstance(check, dict):
+                    raise RetentionError('Invalid off-site proof')
+                verify_reduced_offsite(settings.backup_dir_path, args.confirmed_backup, check)
             report = prune(settings.backup_dir_path, confirmed_backup=args.confirmed_backup,
                            keep=args.keep, dry_run=not args.apply, evidence=evidence)
+            if args.keep < 7:
+                report['reduced_local_gate'] = 'verified' if args.apply else 'fresh_offsite_download_required_before_apply'
     except (RetentionError, OSError, ValueError, TypeError):
         failure = {"status": "BLOCKED", "reason": "unproven_or_unsafe"}
         if args.import_legacy:
