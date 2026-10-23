@@ -52,9 +52,14 @@ not authorization to implement.
 ### Content Studio
 
 - Use only rights-cleared Ravuna-owned demonstration assets.
-- Complete the minimum-rights VK user-token authorization for community
-  `ravuna_photo_ai`; VK publishing remains fail-closed until the permission audit
+- Complete the minimum-rights VK user-token authorization for existing community
+  `240763768`; VK publishing remains fail-closed until the permission audit
   confirms wall and video upload rights.
+- Separately approve VK ID HTTPS/authenticated MAX subscription bridge integration,
+  incentive-policy/privacy terms, then controlled +1 reward testing. Prepared bridge
+  remains disconnected/OFF; Content Studio must not gain write access to main DB.
+- Obtain official app-specific VK Clip API eligibility; ordinary vertical videos
+  do not establish Clip publication capability.
 - Review aggregate seven-day funnel results after the first full week and adjust
   content weights without reducing the 20% exploration floor.
 
