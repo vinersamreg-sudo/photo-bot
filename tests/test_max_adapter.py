@@ -110,8 +110,13 @@ class MaxAdapterTests(TestCase):
             [(button.text, button.action) for button in new_source.buttons],
             [(button.text, button.action) for button in upload.buttons],
         )
-        self.assertIn("Хотите ещё 2 обработки бесплатно?", result_actions(4).text)
-        self.assertIn("2 обработки бесплатно", result_actions(0).text)
+        for remaining in (0, 4):
+            text = result_actions(remaining).text
+            self.assertTrue(text.startswith("Готово ✨\nПревью"))
+            self.assertIn("Оригинал — без водяного знака", text)
+            self.assertIn("с баланса или после покупки", text)
+            self.assertLess(text.index("Оригинал"), text.index("Бонусы за приглашение"))
+            self.assertNotIn("Хотите ещё", text)
         self.assertEqual(
             [button.text for button in result_actions(4).buttons],
             [

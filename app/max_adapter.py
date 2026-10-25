@@ -315,17 +315,17 @@ def studio_menu_contract() -> View:
 def result_actions(remaining: int, *, referral_v2_enabled: bool = False, referral_promos_enabled: bool = True) -> View:
     text = (
         "Готово ✨\n"
-        "Хотите ещё 2 обработки бесплатно?\n"
-        "Пригласите друга — бонус начислится после его первой обработки."
+        "Превью — с «ОБРАЗЕЦ». Оригинал — без водяного знака.\n"
+        "Оригинал доступен с баланса или после покупки."
     )
-    if referral_v2_enabled:
-        text = ("Готово ✨\n🎁 Пригласите друга: после его первой успешной обработки "
-                "получите 4 обработки и 2 оригинала.") if referral_promos_enabled else "Готово ✨\nНовые реферальные бонусы временно приостановлены."
-    if not referral_promos_enabled:
-        text = "Готово ✨\nНовые реферальные бонусы временно приостановлены."
+    referral_note = (
+        "Бонусы за приглашение — по кнопке ниже."
+        if referral_promos_enabled
+        else "Новые реферальные бонусы приостановлены."
+    )
     invitation_label = referral_button_text(referral_v2_enabled, referral_promos_enabled)
     if remaining <= 0:
-        text += "\n\n" + PURCHASE_OPTIONS_TEXT
+        text += "\n\n" + PURCHASE_OPTIONS_TEXT + "\n\n" + referral_note
         return View(
             text,
             (
@@ -348,7 +348,7 @@ def result_actions(remaining: int, *, referral_v2_enabled: bool = False, referra
             ),
         )
     return View(
-        text,
+        text + "\nМожно исправить результат или обработать другое фото.\n\n" + referral_note,
         (
             Button("⬇️ Получить оригинал", "result:unlock", 0),
             Button("✏️ Исправить", "result:correct", 1),

@@ -15,6 +15,7 @@ EVENT_TYPES = {
     "prompt_submitted",
     "processing_started",
     "result_delivered",
+    "result_screen_shown",
     "correction_started",
     "repeat_started",
     "feedback_positive",

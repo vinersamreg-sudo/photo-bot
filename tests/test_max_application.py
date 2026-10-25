@@ -42,6 +42,7 @@ from app.max_application import (
     PAYMENT_LINK_TEXT,
     PAYMENT_OFFER_TEXT,
     PHOTO_ACCEPTED_TEXT,
+    POLICY_REJECTION_TEXT,
     PREVIEW_WATERMARK_GUIDANCE_TEXT,
     PROCESSING_TEXT,
     TWO_PHOTOS_ACCEPTED_TEXT,
@@ -753,6 +754,10 @@ class MaxApplicationTests(TestCase):
             self.transport.edits[-1][1],
             "Изображение создано, но не удалось отправить его в MAX. Попытка не списана.",
         )
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM product_events WHERE event_type='result_screen_shown'"
+            ).fetchone()[0], 0)
 
     def test_single_screen_edit_fallback_sends_once_and_deletes_old_bot_message(self) -> None:
         self.enable_single_screen()
@@ -1935,8 +1940,10 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(
             self.transport.images[-1][2],
             "Готово ✨\n"
-            "Хотите ещё 2 обработки бесплатно?\n"
-            "Пригласите друга — бонус начислится после его первой обработки.",
+            "Превью — с «ОБРАЗЕЦ». Оригинал — без водяного знака.\n"
+            "Оригинал доступен с баланса или после покупки.\n"
+            "Можно исправить результат или обработать другое фото.\n\n"
+            "Бонусы за приглашение — по кнопке ниже.",
         )
         self.assertEqual(
             [button.text for button in self.transport.images[-1][3]],
@@ -3637,7 +3644,7 @@ class MaxApplicationTests(TestCase):
             ),
             (
                 PolicyRejectedError("technical"),
-                "Это изображение или запрос нельзя обработать. Попробуйте изменить описание.",
+                POLICY_REJECTION_TEXT,
             ),
             (
                 ProviderInvalidRequestError("technical"),
@@ -3694,6 +3701,127 @@ class MaxApplicationTests(TestCase):
             }
         self.assertNotIn("prompt", columns)
         self.assertTrue(
-            {"start", "photo_uploaded", "prompt_submitted", "processing_started", "result_delivered"}
+            {"start", "photo_uploaded", "prompt_submitted", "processing_started",
+             "result_delivered", "result_screen_shown"}
             <= events
         )
+
+    def test_policy_recovery_preserves_both_sources_and_does_not_repeat_failed_event(self):
+        self.enable_single_screen()
+        self.app.handle(self.event("bot_started"))
+        self.app.handle(self.event(
+            "message_created", image_url="https://iu.oneme.ru/one",
+            image_urls=("https://iu.oneme.ru/one", "https://iu.oneme.ru/two"),
+            image_attachment_count=2,
+        ))
+        before = self.store.get("u1")
+        with self.database.read() as connection:
+            source = connection.execute(
+                "SELECT source_file_path,secondary_source_file_path FROM demo_sessions WHERE id=?",
+                (before.session_id,),
+            ).fetchone()
+        fingerprints = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in source}
+        self.provider.fail = PolicyRejectedError("PRIVATE_PROVIDER_DETAIL")
+        failed = self.event("message_created", text="Сделай фон светлее")
+        self.app.handle(failed)
+        self.assertIn(POLICY_REJECTION_TEXT, [e[1] for e in self.transport.edits])
+        self.assertNotIn("PRIVATE_PROVIDER_DETAIL", POLICY_REJECTION_TEXT)
+        self.assertIn("Обработка не списана", POLICY_REJECTION_TEXT)
+        self.assertEqual(self.store.get("u1").session_id, before.session_id)
+        self.assertEqual(self.store.get("u1").state, "waiting_for_prompt")
+        self.assertEqual(self.demo.commerce.balance(before.user_id).available, 2)
+        calls = self.provider.calls
+        self.assertFalse(self.app.handle(failed))
+        self.assertEqual(self.provider.calls, calls)
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM generation_attempts").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT status FROM generation_credit_reservations").fetchone()[0], "released")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0], 0)
+        self.assertEqual(fingerprints, {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in source})
+        self.provider.fail = None
+        self.clock.advance(2)
+        retry = self.event("message_created", text="Измени цвет фона")
+        self.app.handle(retry)
+        self.assertEqual(self.provider.calls, calls + 1)
+        self.assertEqual(len(self.provider.source_batches[-1]), 2)
+        self.assertEqual(self.demo.commerce.balance(before.user_id).available, 1)
+        self.assertFalse(self.app.handle(retry))
+        with self.database.read() as connection:
+            shown = connection.execute(
+                "SELECT attempt_id,subject_hash FROM product_events WHERE event_type='result_screen_shown'"
+            ).fetchall()
+        self.assertEqual(len(shown), 1)
+        self.assertTrue(shown[0][0])
+        self.assertEqual(shown[0][1], hashlib.sha256(f"pixora-product-subject:{before.user_id}".encode()).hexdigest())
+
+    def test_policy_correction_preserves_previous_result_and_back_navigation(self):
+        self.enable_single_screen()
+        self.generate_first()
+        before = self.store.get("u1")
+        with self.database.read() as connection:
+            path = Path(connection.execute("SELECT original_path FROM gallery_versions WHERE id=?", (before.current_version_id,)).fetchone()[0])
+        fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.callback("result:correct")
+        self.clock.advance(2)
+        self.provider.fail = PolicyRejectedError("private")
+        self.app.handle(self.event("message_created", text="Сделай фон светлее"))
+        self.assertEqual(self.store.get("u1").current_version_id, before.current_version_id)
+        self.assertEqual(self.demo.commerce.balance(before.user_id).available, 1)
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), fingerprint)
+        self.assertEqual(parse_versioned_action(self.transport.edits[-1][2][-1].action)[1], "nav:back:work")
+        calls = self.provider.calls
+        self.callback("nav:back:work")
+        self.assertEqual(self.provider.calls, calls)
+        self.assertEqual(self.store.get("u1").current_version_id, before.current_version_id)
+        self.callback("result:correct")
+        self.provider.fail = None
+        self.clock.advance(2)
+        self.app.handle(self.event("message_created", text="Измени цвет фона"))
+        current = self.store.get("u1")
+        with self.database.read() as connection:
+            parent = connection.execute("SELECT parent_version_id FROM gallery_versions WHERE id=?", (current.current_version_id,)).fetchone()[0]
+        self.assertEqual(parent, before.current_version_id)
+        self.assertEqual(self.demo.commerce.balance(before.user_id).available, 0)
+
+    def test_policy_failure_preserves_all_three_paid_packages_and_callback_idempotency(self):
+        self.onboard_to_prompt()
+        self.app, payments = self.paid_application()
+        account = self.store.get("u1").user_id
+        for package in (SMALL_PACKAGE, MEDIUM_PACKAGE, LARGE_PACKAGE):
+            with self.subTest(product=package.code):
+                before = self.demo.commerce.balance(account).available
+                originals = self.demo.commerce.entitlement_balance(account).available
+                order = payments.create_order(account, None, f"policy-package:{package.code}", account_purchase=True, product_code=package.code)
+                amount = f"{package.price_minor / 100:.2f}"
+                values = {"OutSum": amount, "InvId": str(order.provider_invoice_id), "Shp_order": order.public_token}
+                values["SignatureValue"] = hashlib.sha256(f"{amount}:{order.provider_invoice_id}:two:Shp_order={order.public_token}".encode()).hexdigest()
+                for _ in range(2):
+                    self.assertTrue(payments.process_webhook(values, method="POST", path="/payments/robokassa/result").accepted)
+                expected = before + package.generation_credits
+                self.assertEqual(self.demo.commerce.balance(account).available, expected)
+                self.assertEqual(self.demo.commerce.entitlement_balance(account).available, originals + package.unlock_entitlements)
+                self.provider.fail = PolicyRejectedError("private")
+                self.clock.advance(2)
+                self.app.handle(self.event("message_created", text="Сделай фон светлее"))
+                self.assertEqual(self.demo.commerce.balance(account).available, expected)
+                self.assertEqual(self.demo.commerce.balance(account).reserved, 0)
+                self.assertEqual(self.demo.commerce.entitlement_balance(account).available, originals + package.unlock_entitlements)
+                self.provider.fail = None
+                self.clock.advance(2)
+                self.app.handle(self.event("message_created", text="Измени цвет фона"))
+                self.assertEqual(self.demo.commerce.balance(account).available, expected - 1)
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM continuation_pack_grants").fetchone()[0], 3)
+
+    def test_result_screen_event_is_absent_when_ui_revision_has_moved_on(self):
+        self.enable_single_screen()
+        render = self.app.ui.render
+        def moved_on(*args, **kwargs):
+            if kwargs.get("screen") == "result_ready":
+                return SimpleNamespace(applied=False)
+            return render(*args, **kwargs)
+        with patch.object(self.app.ui, "render", side_effect=moved_on):
+            self.generate_first()
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM product_events WHERE event_type='result_screen_shown'").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM generation_attempts WHERE status='succeeded'").fetchone()[0], 1)

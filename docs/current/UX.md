@@ -109,6 +109,14 @@ pending request; a previous or latest completed work is never used as fallback.
 
 - Send the preview once.
 - Keep copy short: result plus actions.
+- The ready-result caption leads with the received preview and explains that
+  the original is the same version without the watermark, available against the
+  originals balance or after purchase. Positive edit balance offers correction
+  or another photo; zero balance retains the exact three-product purchase copy.
+  Existing original/purchase/correction callbacks and button rows are unchanged.
+  Referral information follows these actions/value copy as a secondary note;
+  its existing button retains V1/V2 and paused-program behavior. No quality
+  guarantee, free original promise or automatic purchase is introduced.
 - Primary action depends on entitlement/allowance state.
 - “Исправить” must explain in one response what to type, with short examples.
 - When no edits remain, do not invite correction; offer the existing package.
@@ -128,6 +136,13 @@ pending request; a previous or latest completed work is never used as fallback.
   originals after a new invitee's first delivered edit. With V2 OFF, existing V1
   remains +2 edits only. “📷 Другое фото” reuses the existing source upload flow.
 - The result screen retains “⭐ Оценить” and the existing 1–5 ratings.
+- A policy refusal explicitly says the edit was not consumed and the input was
+  retained. It invites a new description for the same photo or a permitted
+  alternative such as background/lighting changes, without promising acceptance
+  of every image. The existing ordinary-text retry flow and selected correction
+  parent are preserved; no provider retry runs automatically. Back opens the
+  existing selected work, or main when there is no completed version. Provider
+  restrictions, raw prompt semantics and reservation release are unchanged.
 - A centralized UI shell adds “💬 Поделиться мнением” as a separate
   keyboard row on main/purchase/zero-balance, upload, ready result, works,
   opened work and ideas/category screens. Existing actions and their grouping

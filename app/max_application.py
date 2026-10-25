@@ -130,6 +130,12 @@ PREVIEW_WATERMARK_GUIDANCE_TEXT = (
     "Повторная обработка её не удалит.\n\n"
     "Получите оригинал без водяного знака."
 )
+POLICY_REJECTION_TEXT = (
+    "Изображение или запрос не прошли ограничения ИИ.\n\n"
+    "Обработка не списана. Исходное фото сохранено.\n\n"
+    "Напишите новый запрос для этого фото. Можно выбрать другую разрешённую задачу: "
+    "например, изменить фон или освещение. Не все изображения доступны для обработки."
+)
 _PREVIEW_WATERMARK_REQUESTS = (
     re.compile(
         r"\b(?:убер\w*|удал\w*|стер\w*|сним\w*|избав\w*|без)\b"
@@ -507,7 +513,11 @@ class MaxApplication:
         if isinstance(exc, PolicyRejectedError):
             self._send_error(
                 event.user_id,
-                "Это изображение или запрос нельзя обработать. Попробуйте изменить описание.",
+                POLICY_REJECTION_TEXT,
+                (Button(
+                    "← Назад",
+                    "nav:back:work" if dialog and dialog.current_version_id else "nav:back:main",
+                ),),
             )
             return
         if isinstance(exc, ProviderInvalidRequestError):
@@ -2486,6 +2496,15 @@ class MaxApplication:
             estimated_cost=attempt["estimated_cost"] if attempt else None,
         )
         if preview_delivered:
+            # Server-confirmed result UI delivery, not a MAX read receipt.
+            # Consumers deduplicate by attempt_id, including crash/replay recovery.
+            self._track(
+                "result_screen_shown",
+                session_id=dialog.session_id,
+                attempt_id=result.attempt_id,
+                gallery_item_id=version["gallery_item_id"],
+                subject_user_id=dialog.user_id,
+            )
             self._result_retention_request.user_id = dialog.user_id
         try:
             self.referrals.observe_free_edit_cost(event.user_id)
