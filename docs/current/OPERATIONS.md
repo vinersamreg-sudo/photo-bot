@@ -107,6 +107,42 @@ venv/bin/python -m app.main maintenance-cleanup
 `maintenance-cleanup` and provider/storage cleanup commands are dry-run unless an
 explicit execute/apply flag is supplied.
 
+## Result-to-purchase and policy recovery measurement
+
+`product_events.result_screen_shown` records server-confirmed delivery of the
+ready-result UI, with existing session/attempt/work references and the canonical
+hashed subject. It is emitted only after preview delivery and only when the
+single-screen render was applied. It is NOT a human read/view receipt; MAX does
+not provide that evidence here. Count DISTINCT attempt_id (or users for cohort
+conversion), not raw rows: crash recovery can replay instrumentation. A failed
+or stale render must not count. There is no new table, schema change, prompt,
+image, provider payload, payment token or filesystem path in this event.
+
+Existing observations cover the rest of the experiment:
+
+- `payment_offer_opened` / `continuation_pack_clicked` measure their existing
+  interaction scopes; `payment_audit.payment_link_opened` measures HTTP hits to
+  the checkout link, not bank visits. Merely creating an order is not a click.
+- Confirmed purchases require processed signature-valid ResultURL plus the
+  linked package grant. Deduplicate orders; exclude proven owner/test identities.
+- Policy recovery joins `generation_attempts.status='rejected_policy'` to later
+  attempts/successes of the same user, optionally same session/work. Existing
+  attempt timestamps and consumed/released reservation records distinguish a
+  retried request from a debit or successful delivered result. No raw user text
+  or extra policy-event payload is necessary.
+
+After 2–4 weeks compare first purchase within seven full days after a user's
+first delivered successful generation (succeeded attempt plus consumed credit
+reservation, the same pre/post evidence), with equally aged cohorts and source
+mix visible. Use the new screen event as a post-release delivery diagnostic,
+not an invented pre-release denominator. Track success after refusal within seven full days, repeat policy
+failures/user, no-debit invariant and payment/entitlement anomalies as guardrails.
+Do not call an immature user churned, treat delivery as reading, or attribute a
+change causally from a small uncontrolled before/after sample. Historical
+`result_delivered` can include a result saved to works after UI navigation and
+is not equivalent to the new applied-screen measure; disclose that coverage
+boundary rather than backfilling invented historical screen impressions.
+
 ## Payment journey report (read-only)
 
 ```bash
