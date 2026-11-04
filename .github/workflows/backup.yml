@@ -5,17 +5,62 @@ on:
     # 03:00 Europe/Samara (UTC+4). GitHub schedules are best-effort and may be delayed.
     - cron: '0 23 * * *'
   workflow_dispatch:
+    inputs:
+      readback_only:
+        description: 'Read-only encrypted off-site verification; no SSH or production changes'
+        type: boolean
+        default: false
+      source_run_id:
+        description: 'Existing backup workflow run'
+        type: string
+      artifact_name:
+        description: 'Existing encrypted backup artifact name'
+        type: string
+      recovery_name:
+        description: 'Recovery ciphertext basename from the trusted receipt'
+        type: string
+      recovery_sha256:
+        description: 'Expected ciphertext SHA256 from the trusted receipt'
+        type: string
 
 permissions:
   contents: read
   actions: write
 
 concurrency:
-  group: photo-bot-production
+  group: ${{ inputs.readback_only && format('ravuna-backup-readback-{0}', github.run_id) || 'photo-bot-production' }}
   cancel-in-progress: false
 
 jobs:
+  readback:
+    if: github.event_name == 'workflow_dispatch' && inputs.readback_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download existing encrypted off-site artifact (read-only)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: readback
+      - name: Verify complete ciphertext against trusted receipt
+        env:
+          RECOVERY_NAME: ${{ inputs.recovery_name }}
+          RECOVERY_SHA: ${{ inputs.recovery_sha256 }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.prune_backup_artifacts import verify_readback
+          print(json.dumps(verify_readback(Path('readback'), os.environ['RECOVERY_NAME'], os.environ['RECOVERY_SHA']), sort_keys=True))
+          PY
   backup:
+    if: github.event_name != 'workflow_dispatch' || !inputs.readback_only
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: production

@@ -7,9 +7,13 @@ by their names. This never targets CI artifacts from other workflows.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
+import time
 from datetime import datetime
 
 NAME = re.compile(r"ravuna-production-backup-(\d+)\Z")
@@ -17,6 +21,36 @@ NAME = re.compile(r"ravuna-production-backup-(\d+)\Z")
 
 class PruneBlocked(RuntimeError):
     pass
+
+
+def verify_readback(directory, name, expected_sha):
+    """Read ciphertext only; never decrypt, publish proofs or modify artifacts."""
+    if (not re.fullmatch(r'ravuna-recovery-\d{8}T\d{12}Z\.tar\.gz\.enc', name)
+            or not re.fullmatch(r'[0-9a-f]{64}', expected_sha)
+            or directory.is_symlink()):
+        raise PruneBlocked('Readback metadata is invalid')
+    candidate = directory / name
+    started = time.monotonic()
+    before = candidate.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise PruneBlocked('Readback ciphertext is unsafe')
+    def file_identity(value):
+        return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+    descriptor = os.open(candidate, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    digest = hashlib.sha256()
+    with os.fdopen(descriptor, 'rb') as stream:
+        if file_identity(os.fstat(stream.fileno())) != file_identity(before):
+            raise PruneBlocked('Readback ciphertext changed')
+        for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b''):
+            digest.update(chunk)
+        if file_identity(os.fstat(stream.fileno())) != file_identity(before):
+            raise PruneBlocked('Readback ciphertext changed')
+    if (file_identity(candidate.lstat()) != file_identity(before)
+            or not before.st_size or digest.hexdigest() != expected_sha):
+        raise PruneBlocked('Readback ciphertext checksum mismatch')
+    return {'overall': 'PASS', 'stage': 'full_offsite_readback',
+            'bytes': before.st_size, 'sha256': digest.hexdigest(),
+            'hash_seconds': round(time.monotonic() - started, 3)}
 
 
 def api(repository, path, method="GET"):

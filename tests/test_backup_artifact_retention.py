@@ -1,8 +1,11 @@
 import copy
+import hashlib
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from scripts.prune_backup_artifacts import PruneBlocked, execute, plan, resolve_previous
+from scripts.prune_backup_artifacts import PruneBlocked, execute, plan, resolve_previous, verify_readback
 
 
 class BackupArtifactRetentionTests(unittest.TestCase):
@@ -23,6 +26,32 @@ class BackupArtifactRetentionTests(unittest.TestCase):
         result = plan(artifacts, [3, 4], self.run)
         self.assertEqual([e['id'] for e in result if e['action'] == 'DELETE'], [1, 2])
         self.assertEqual([e['id'] for e in result if e['action'] == 'KEEP'], [3, 4])
+
+    def test_full_ciphertext_readback_is_read_only_and_rejects_bad_hash_and_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = 'ravuna-recovery-20261104T091302549292Z.tar.gz.enc'
+            data = b'synthetic ciphertext'
+            file = root / name
+            file.write_bytes(data)
+            sha = hashlib.sha256(data).hexdigest()
+            before = file.read_bytes(), file.stat().st_mtime_ns
+            report = verify_readback(root, name, sha)
+            self.assertEqual(report['overall'], 'PASS')
+            self.assertEqual(report['bytes'], len(data))
+            self.assertEqual(before, (file.read_bytes(), file.stat().st_mtime_ns))
+            for bad_name, bad_sha in ((name, '0' * 64), ('../' + name, sha), (name, 'invalid')):
+                with self.subTest(name=bad_name), self.assertRaises(PruneBlocked):
+                    verify_readback(root, bad_name, bad_sha)
+
+    def test_readback_workflow_cannot_enter_production_backup_job(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/backup.yml').read_text()
+        readback = workflow.split('  readback:', 1)[1].split('  backup:', 1)[0]
+        self.assertIn('actions: read', readback)
+        self.assertIn('verify_readback', readback)
+        for forbidden in ('secrets.', 'environment: production', 'ssh ', '--apply', 'recovery-create'):
+            self.assertNotIn(forbidden, readback)
+        self.assertIn("if: github.event_name != 'workflow_dispatch' || !inputs.readback_only", workflow)
 
     def test_missing_expired_and_non_distinct_protected_points_block(self):
         original = [self.artifact(i) for i in range(1, 5)]

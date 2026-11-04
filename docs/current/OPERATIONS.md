@@ -346,6 +346,15 @@ indefinite archival storage: prolonged failures require intervention before expi
 Off-site count-prune targets only successful backup-workflow artifacts; unknown,
 held and failed-run artifacts remain preserved and visible for investigation.
 
+For a separately authorized read-only off-site check, dispatch `backup.yml` with
+`readback_only=true`, `source_run_id`, `artifact_name`, `recovery_name` and the
+trusted receipt's `recovery_sha256`. This job has only Actions/contents read
+permissions: no production environment/secrets, SSH, decryption, creation, proof
+publication or pruning. Its separate concurrency group cannot block production
+deployment/backup. It must download the full encrypted artifact and match SHA256;
+HTTP availability or a partial download is not a successful readback. The normal
+backup job is skipped in this mode; the default remains the normal backup path.
+
 Each new recovery has a private atomic `<backup-name>.proof.json` receipt binding
 creation, restore and off-site stages to the encrypted artifact SHA256/size.
 Planning verifies current ciphertext and sorts by creation timestamp/name, not
