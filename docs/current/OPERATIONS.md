@@ -311,17 +311,40 @@ stderr, passphrases, command lines or private filenames. A killed subprocess is
 not evidence of OOM without independent host evidence. Do not rerun a production
 backup or prune existing artifacts without authorization.
 
-### Separate backup retention
+### German VPS: two-point recovery automation
 
 `pixora-*.sqlite3.enc` keeps its existing `BACKUP_RETENTION_DAYS` age-based
 policy (`prune_sqlite_by_age`). Recovery artifacts never enter that policy.
-`ravuna-recovery-*.tar.gz.enc` keeps the **7 latest successful snapshots**, not
-seven days. Creation and restore never prune recovery. The scheduled workflow
+`ravuna-recovery-*.tar.gz.enc` keeps the **2 latest successful snapshots**, not
+two days. Creation and restore never prune recovery. The scheduled workflow
 invokes count-prune only after creation, restore `PASS`, encrypted off-site
 upload/checksum verification and off-site confirmation have all succeeded.
-The workflow fails before creation if the count-retention implementation has not
-yet been deployed; coordinate its reviewed merge/runtime release before the next
-scheduled run. Merging a workflow does not install its runtime module.
+The workflow installs only hash-checked backup tooling under private
+`data/backup-tools/releases/<workflow-SHA>` and runs `scripts/backup_tool.py`.
+It does not synchronize application code, change `.env`, initialize production
+SQLite, restart the bot or advance its deployment marker. The recovery manifest
+records the actual application revision, not the independently released tool SHA.
+
+Schedule: 23:00 UTC / **03:00 Europe/Samara**. GitHub scheduling is best-effort,
+not an exact-time guarantee. Workflow failure uses GitHub Actions notifications;
+operators must keep failed-workflow notifications enabled. A missed trigger is
+not independently monitored by this job. No new systemd timer is installed.
+
+Each trusted-host restore additionally checks foreign keys, commerce fingerprints
+and retained gallery original/preview references. Capacity preflight budgets both
+the ciphertext and extracted proof; extraction reserves free-space headroom.
+Failed plaintext is removed before publishing failure status; atomic private
+receipts preserve the previous status if publication fails.
+
+Both the newly uploaded encrypted artifact and a distinct previous point are
+downloaded from off-site and hash-verified before local or off-site rotation.
+Only encrypted bytes reach GitHub runners. Daily retries reuse an already proven
+same-day point, or resume a valid incomplete candidate, rather than accumulating
+archives; failed/mismatched candidates require review. A point older than 30 hours
+cannot authorize retention. GitHub artifacts have a 90-day expiry backstop, not
+indefinite archival storage: prolonged failures require intervention before expiry.
+Off-site count-prune targets only successful backup-workflow artifacts; unknown,
+held and failed-run artifacts remain preserved and visible for investigation.
 
 Each new recovery has a private atomic `<backup-name>.proof.json` receipt binding
 creation, restore and off-site stages to the encrypted artifact SHA256/size.
@@ -333,7 +356,7 @@ blocks all pruning. The confirmed newest snapshot is always retained.
 Read-only plan (no lock/config/DB/log writes):
 
 ```bash
-scripts/ravuna recovery-prune --keep 7 --confirmed-backup <confirmed-recovery-name>
+venv/bin/python data/backup-tools/releases/<workflow-SHA>/scripts/backup_tool.py --root /opt/photo-bot recovery-prune --keep 2 --confirmed-backup <confirmed-recovery-name>
 ```
 
 Only a separately authorized operation adds `--apply`. Apply serializes with
@@ -372,8 +395,8 @@ Only canonical gate metadata is persisted, not arbitrary external evidence data.
 Import never deletes/recreates backups and is never invoked by the scheduler.
 
 After authorized import, prune runs **without `--evidence`**: 13 proven legacy
-snapshots become 7; the next successfully created/restored/off-site-confirmed
-snapshot joins that same pool, and count-prune removes the oldest, leaving 7
+snapshots become 2; the next successfully created/restored/off-site-confirmed
+snapshot joins that same pool, and count-prune removes the oldest, leaving 2
 again. Verify local-only planning before authorizing the separate cleanup. Do not
 clean up using ephemeral evidence first and leave legacy receipts absent.
 

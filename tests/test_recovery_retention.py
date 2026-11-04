@@ -381,8 +381,39 @@ class RecoveryRetentionTests(TestCase):
                 self.assertEqual(main(['--confirmed-backup', file.name]), 0)
             self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/backup.yml').read_text()
-        prune_at = workflow.index('recovery-prune --keep 7')
+        prune_at = workflow.index('recovery-prune --keep 2')
         for gate in ('recovery-create', 'test "$RESTORE_OVERALL" = PASS',
                      'actions/upload-artifact@v4', 'recovery-mark-offsite'):
             self.assertLess(workflow.index(gate), prune_at)
         self.assertLess(workflow.index('Deploy count-retention implementation'), workflow.index('REPORT=$(printf'))
+
+    def test_two_point_rotation_waits_for_every_gate_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = self.snapshot(root, 1), self.snapshot(root, 2)
+            pending = self.snapshot(root, 3, stages=2)
+            with self.assertRaises(RetentionError):
+                prune(root, confirmed_backup=pending.name, keep=2, dry_run=False)
+            self.assertTrue(first.exists() and second.exists() and pending.exists())
+            receipt = read_json(root / (pending.name + '.proof.json'))
+            write_stage(root, pending.name, 'offsite', {
+                'overall': 'PASS', 'provider': 'synthetic-readback', 'sha256': receipt['sha256'],
+                'copied_at': '2026-01-01T03:02:00+00:00',
+            })
+            report = prune(root, confirmed_backup=pending.name, keep=2, dry_run=False)
+            self.assertEqual(report['removed'], 1)
+            self.assertFalse(first.exists())
+            self.assertTrue(second.exists() and pending.exists())
+            self.assertTrue((root / (first.name + '.proof.json')).exists())
+            self.assertEqual(prune(root, confirmed_backup=pending.name, keep=2, dry_run=False)['removed'], 0)
+
+    def test_scheduler_readbacks_both_points_before_retention_and_does_not_deploy_bot(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/backup.yml').read_text()
+        self.assertIn("cron: '0 23 * * *'", workflow)
+        self.assertIn('actions/download-artifact@v4', workflow)
+        self.assertIn('backup-tools/releases/', workflow)
+        self.assertNotIn('systemctl restart', workflow)
+        self.assertNotIn('ops/deploy_photo_bot', workflow)
+        self.assertLess(workflow.index('Verify previous point before either retention'),
+                        workflow.index('recovery-prune --keep 2'))
+        self.assertLess(workflow.index('Verify new off-site bytes'), workflow.index('recovery-mark-offsite'))

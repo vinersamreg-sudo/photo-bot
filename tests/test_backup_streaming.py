@@ -11,7 +11,10 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
-from app.backup import BackupError, BackupManager, _HashingReader, _openssl_reason
+from app.backup import (
+    BackupError, BackupManager, RESTORE_FREE_SPACE_MARGIN,
+    _HashingReader, _openssl_reason, _write_json,
+)
 from app.database import Database
 
 
@@ -25,6 +28,114 @@ def plain_stream(path, *, passphrase, decrypt=False):
 
 
 class BackupStreamingTests(TestCase):
+    def test_atomic_json_failure_preserves_previous_receipt_without_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            path.write_text('{"previous":"PASS"}')
+            with patch("app.backup.json.dump", side_effect=OSError(errno.ENOSPC, SECRET)):
+                with self.assertRaises(OSError):
+                    _write_json(path, {"overall": "FAIL"})
+            self.assertEqual(path.read_text(), '{"previous":"PASS"}')
+            self.assertEqual([p.name for p in path.parent.iterdir()], [path.name])
+
+    def test_failed_restore_releases_plaintext_before_publishing_failure_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager, _ = self.setup_manager(root)
+            with patch.object(BackupManager, "_openssl_stream", side_effect=plain_stream):
+                created = manager.create_recovery_bundle(SECRET)
+            destination = root / "isolated"
+
+            def exhausted(stream, target):
+                (target / "partial-private-file").write_bytes(b"synthetic")
+                raise BackupError("Recovery archive extraction failed (reason=no_space_left)")
+
+            def receipt_after_cleanup(path, report):
+                self.assertFalse(destination.exists())
+                _write_json(path, report)
+
+            with patch.object(BackupManager, "_openssl_stream", side_effect=plain_stream), \
+                 patch.object(BackupManager, "_extract_recovery_stream", side_effect=exhausted), \
+                 patch("app.backup._write_json", side_effect=receipt_after_cleanup):
+                report = manager.restore_recovery_bundle(
+                    Path(created["recovery_bundle_name"]), SECRET, restore_root=destination,
+                )
+            self.assertEqual(report["overall"], "FAIL")
+            self.assertIn("no_space_left", report["error"])
+            proof = json.loads((manager.backup_dir / (created["recovery_bundle_name"] + ".proof.json")).read_text())
+            self.assertEqual(proof["restore"]["overall"], "FAIL")
+            self.assertNotIn("offsite", proof)
+
+    def test_restore_headroom_guard_stops_before_extracting_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            archive_bytes = io.BytesIO()
+            with tarfile.open(fileobj=archive_bytes, mode="w:gz") as archive:
+                member = tarfile.TarInfo("private_storage/users/synthetic.bin")
+                member.size = 16
+                archive.addfile(member, io.BytesIO(b"x" * member.size))
+            archive_bytes.seek(0)
+            usage = shutil._ntuple_diskusage(10**9, 0, RESTORE_FREE_SPACE_MARGIN + 15)
+            with patch("app.backup.shutil.disk_usage", return_value=usage):
+                with self.assertRaisesRegex(BackupError, "reason=no_space_left"):
+                    BackupManager._extract_recovery_stream(archive_bytes, destination)
+            self.assertEqual(list(destination.iterdir()), [])
+
+    def test_restored_sqlite_with_foreign_key_violation_fails_closed(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "synthetic.sqlite3"
+            connection = sqlite3.connect(database)
+            connection.executescript("""
+                CREATE TABLE schema_migrations(version INTEGER);
+                INSERT INTO schema_migrations VALUES(16);
+                CREATE TABLE parent(id INTEGER PRIMARY KEY);
+                CREATE TABLE child(parent_id INTEGER REFERENCES parent(id));
+                INSERT INTO child VALUES(123);
+            """)
+            connection.close()
+            with self.assertRaisesRegex(BackupError, "foreign key"):
+                BackupManager._validate_sqlite(database)
+
+    def test_recovery_binds_commerce_fingerprints_and_preserves_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager, _ = self.setup_manager(root)
+            source = BackupManager._validate_sqlite(manager.database_path)
+            with patch.object(BackupManager, "_openssl_stream", side_effect=plain_stream):
+                created = manager.create_recovery_bundle(SECRET)
+                restored = manager.restore_recovery_bundle(
+                    Path(created["recovery_bundle_name"]), SECRET, restore_root=root / "restored",
+                )
+            self.assertEqual(restored["overall"], "PASS")
+            self.assertEqual(restored["foreign_key_check"], "ok")
+            self.assertIn("payment_orders", restored["commerce_fingerprints"])
+            self.assertEqual(restored["commerce_fingerprints"], source["commerce_fingerprints"])
+            self.assertEqual(source, BackupManager._validate_sqlite(manager.database_path))
+
+    def test_mismatched_commerce_manifest_fails_restore_without_success_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager, _ = self.setup_manager(root)
+            with patch.object(BackupManager, "_openssl_stream", side_effect=plain_stream):
+                created = manager.create_recovery_bundle(SECRET)
+            original = manager.backup_dir / created["recovery_bundle_name"]
+            altered = manager.backup_dir / "ravuna-recovery-20260101T000000000000Z.tar.gz.enc"
+            with tarfile.open(original, "r:gz") as source, tarfile.open(altered, "w:gz") as target:
+                for member in source:
+                    contents = source.extractfile(member).read() if member.isfile() else None
+                    if member.name == "manifest.json":
+                        manifest = json.loads(contents)
+                        manifest["sqlite"]["commerce_fingerprints"]["payment_orders"]["sha256"] = "0" * 64
+                        contents = json.dumps(manifest).encode()
+                        member.size = len(contents)
+                    target.addfile(member, io.BytesIO(contents) if contents is not None else None)
+            with patch.object(BackupManager, "_openssl_stream", side_effect=plain_stream):
+                result = manager.restore_recovery_bundle(Path(altered.name), SECRET, restore_root=root / "bad")
+            self.assertEqual(result["overall"], "FAIL")
+            self.assertIn("commerce fingerprint", result["error"])
+            self.assertFalse((root / "bad").exists())
+
     def setup_manager(self, root):
         app = root / "app"
         (app / "data/users/synthetic").mkdir(parents=True)
