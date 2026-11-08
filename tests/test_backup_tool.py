@@ -74,7 +74,10 @@ class BackupToolTests(TestCase):
             self.manager(root)
             report = {"successful": 3, "removed": 1, "entries": [{"action": "PRESERVE_UNKNOWN"}]}
             args = ["--root", str(root), "recovery-prune", "--confirmed-backup", "synthetic", "--apply"]
-            with patch.object(BackupManager, "prune_recovery_by_count", return_value=report), +                 patch("builtins.print") as output:
+            with (
+                patch.object(BackupManager, "prune_recovery_by_count", return_value=report),
+                patch("builtins.print") as output,
+            ):
                 self.assertEqual(main(args), 1)
                 self.assertEqual(main(args + ["--report-preserved-legacy"]), 0)
                 self.assertIn("Legacy unverified recovery preserved", output.call_args.args[0])
