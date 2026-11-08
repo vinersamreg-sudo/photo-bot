@@ -16,7 +16,7 @@ import subprocess
 import time
 from datetime import datetime
 
-NAME = re.compile(r"ravuna-production-backup-(\d+)\Z")
+NAME = re.compile(r"ravuna-production-backup-(\d+)(?:-(\d+))?\Z")
 
 
 class PruneBlocked(RuntimeError):
@@ -98,12 +98,14 @@ def resolve_previous(repository, provider, backup_name=None):
         raise PruneBlocked("Previous off-site provider is unknown")
     if artifact.get("expired") or not artifact.get("size_in_bytes"):
         raise PruneBlocked("Previous off-site artifact is unavailable")
-    if artifact["name"] != f"ravuna-production-backup-{run_id}":
+    named = NAME.fullmatch(artifact["name"])
+    if (not named or int(named[1]) != run_id
+            or artifact.get("workflow_run", {}).get("id", run_id) != run_id):
         raise PruneBlocked("Previous artifact provenance mismatch")
     return {"run_id": run_id, "artifact_id": artifact["id"], "name": artifact["name"]}
 
 
-def plan(artifacts, keep_ids, get_run, held_ids=()):
+def plan(artifacts, keep_ids, get_run, held_ids=(), get_attempt=None):
     if len(keep_ids) != 2 or len(set(keep_ids)) != 2:
         raise PruneBlocked("Two distinct verified off-site artifacts are required")
     indexed = {a["id"]: a for a in artifacts}
@@ -132,7 +134,13 @@ def plan(artifacts, keep_ids, get_run, held_ids=()):
         elif action != "KEEP" and int(match[1]) == item.get("workflow_run", {}).get("id"):
             created = datetime.fromisoformat(item["created_at"].replace("Z", "+00:00"))
             if created < cutoff:
-                run = get_run(int(match[1]))
+                # A later successful rerun does not prove a prior attempt's artifact.
+                if match[2] and get_attempt is None:
+                    entries.append({"id": item["id"], "action": action,
+                                    "bytes": item.get("size_in_bytes", 0), "identity": identity(item)})
+                    continue
+                run = (get_attempt(int(match[1]), int(match[2])) if match[2]
+                       else get_run(int(match[1])))
                 if (run.get("path") == ".github/workflows/backup.yml"
                         and run.get("event") in ("schedule", "workflow_dispatch")
                         and run.get("conclusion") == "success"):
@@ -151,7 +159,8 @@ def execute(repository, keep_ids, *, apply=False, held_ids=()):
             break
         page += 1
     entries = plan(artifacts, keep_ids,
-                   lambda run: api(repository, f"actions/runs/{run}"), held_ids)
+                   lambda run: api(repository, f"actions/runs/{run}"), held_ids,
+                   get_attempt=lambda run, attempt: api(repository, f"actions/runs/{run}/attempts/{attempt}"))
     removed = 0
     if apply:
         # Recheck the entire protected/deletion set before the first deletion.

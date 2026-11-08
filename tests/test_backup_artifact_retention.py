@@ -76,6 +76,15 @@ class BackupArtifactRetentionTests(unittest.TestCase):
         self.assertEqual(actions[5], 'PRESERVE_UNKNOWN')
         self.assertNotIn('DELETE', actions.values())
 
+    def test_successful_rerun_does_not_prove_failed_attempt(self):
+        attempts = [dict(self.artifact(1), name="ravuna-production-backup-1-1"),
+                    dict(self.artifact(2), name="ravuna-production-backup-2-2"),
+                    self.artifact(3), self.artifact(4)]
+        result = plan(attempts, [3, 4], self.run,
+                      get_attempt=lambda run, attempt: dict(self.run(run),
+                          conclusion="failure" if attempt == 1 else "success"))
+        self.assertEqual([e['id'] for e in result if e['action'] == 'DELETE'], [2])
+
     def test_dry_run_never_deletes_and_apply_rechecks_every_identity_first(self):
         artifacts = [self.artifact(i) for i in range(1, 5)]
         deleted = []

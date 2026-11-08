@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dotenv import dotenv_values
 from app.backup import BackupError, BackupManager, _os_reason
+from app.backup_daily import DailyRecovery
 from app.recovery_retention import NAME, artifact, read_json, validate, RetentionError
 
 SAMARA = timezone(timedelta(hours=4))
@@ -49,9 +50,9 @@ def prepare_recovery(manager, password):
     return reusable_recovery(manager) or manager.create_recovery_bundle(password)
 
 
-def previous_point(manager):
-    reused = reusable_recovery(manager)
-    excluded = reused['recovery_bundle_name'] if reused else None
+def previous_point(manager, *, daily=False):
+    reused = None if daily else reusable_recovery(manager)
+    excluded = reused["recovery_bundle_name"] if reused else None
     candidates = []
     for file in manager.backup_dir.glob('ravuna-recovery-*.tar.gz.enc'):
         if file.name == excluded:
@@ -75,7 +76,8 @@ def main(argv=None):
         "backup-create", "backup-restore-test", "backup-mark-offsite",
         "recovery-create", "recovery-restore-test", "recovery-mark-offsite",
         "recovery-prune",
-        "previous-point",
+        "previous-point", "daily-previous-point",
+        "daily-create", "daily-accept", "daily-cleanup",
     ))
     parser.add_argument("--backup")
     parser.add_argument("--confirmed-backup")
@@ -84,6 +86,9 @@ def main(argv=None):
     parser.add_argument("--keep", type=int, default=2)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--passphrase-stdin", action="store_true")
+    parser.add_argument("--owner")
+    parser.add_argument("--backup-sha")
+    parser.add_argument("--recovery-sha")
     args = parser.parse_args(argv)
     try:
         root = args.root.resolve(strict=True)
@@ -112,7 +117,17 @@ def main(argv=None):
             raise BackupError("Backup name is required")
         if args.command.endswith("mark-offsite") and not args.provider:
             raise BackupError("Off-site provider is required")
-        if args.command == "backup-create":
+        if args.command == "daily-previous-point":
+            report = previous_point(manager, daily=True)
+        elif args.command.startswith("daily-"):
+            cycle = DailyRecovery(manager, args.owner)
+            if args.command == "daily-create":
+                report = cycle.create(password)
+            elif args.command == "daily-accept":
+                report = cycle.accept(args.provider, args.backup_sha, args.recovery_sha)
+            else:
+                report = cycle.cleanup()
+        elif args.command == "backup-create":
             report = manager.create(password)
         elif args.command == "backup-restore-test":
             report = manager.restore_test(Path(args.backup), password)

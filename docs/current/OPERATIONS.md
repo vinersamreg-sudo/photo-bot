@@ -311,7 +311,7 @@ stderr, passphrases, command lines or private filenames. A killed subprocess is
 not evidence of OOM without independent host evidence. Do not rerun a production
 backup or prune existing artifacts without authorization.
 
-### German VPS: two-point recovery automation
+### German VPS: two-point recovery automation (release candidate)
 
 `pixora-*.sqlite3.enc` keeps its existing `BACKUP_RETENTION_DAYS` age-based
 policy (`prune_sqlite_by_age`). Recovery artifacts never enter that policy.
@@ -327,24 +327,50 @@ records the actual application revision, not the independently released tool SHA
 
 Schedule: 23:00 UTC / **03:00 Europe/Samara**. GitHub scheduling is best-effort,
 not an exact-time guarantee. Workflow failure uses GitHub Actions notifications;
-operators must keep failed-workflow notifications enabled. A missed trigger is
-not independently monitored by this job. No new systemd timer is installed.
+operators must keep failed-workflow notifications enabled. A separate read-only
+watchdog checks every six hours for a successful scheduled run in the last 30
+hours; a manual readback cannot make it green. Both jobs depend on GitHub
+availability; a GitHub-wide outage requires an external alert or manual check.
+No new systemd timer is installed.
 
-Each trusted-host restore additionally checks foreign keys, commerce fingerprints
-and retained gallery original/preview references. Capacity preflight budgets both
-the ciphertext and extracted proof; extraction reserves free-space headroom.
-Failed plaintext is removed before publishing failure status; atomic private
-receipts preserve the previous status if publication fails.
+The scheduled job restores SQLite and materializes/rereads each media file in a
+single private scratch slot. It verifies gzip/crypto completion, all manifest
+hashes, foreign keys, commerce fingerprints, and retained gallery references.
+Its receipt says `bounded_file_restore`; it is not a simultaneous full-tree
+restore drill or a service startup test. Full `recovery-restore-test` is unchanged
+and should be exercised separately on an approved trusted isolated host with
+space for an assembled tree. Do not decrypt on a GitHub-hosted runner.
+
+Preflight leaves 2 GiB free and caps backup-directory high water at 16 GiB. It
+reserves a conservatively sized ciphertext, SQLite scratch and the largest
+media member, not a full extracted tree. A new candidate lives in one private
+run-owned staging directory; on Linux, a file-size ceiling also bounds the
+encryption process if the live source grows. Transfer/restore/checksum failure
+never promotes the candidate or prunes recovery. A workflow cleanup removes
+only that run's stage; a later run can reclaim a stage abandoned for over two
+hours (longer than the 60-minute job limit). Never reclaim a live lease manually.
 
 Both the newly uploaded encrypted artifact and a distinct previous point are
 downloaded from off-site and hash-verified before local or off-site rotation.
-Only encrypted bytes reach GitHub runners. Daily retries reuse an already proven
-same-day point, or resume a valid incomplete candidate, rather than accumulating
-archives; failed/mismatched candidates require review. A point older than 30 hours
-cannot authorize retention. GitHub artifacts have a 90-day expiry backstop, not
+Only encrypted bytes reach GitHub runners. Publication first installs the bound
+proof, then atomically makes the ciphertext name visible, using hard links on
+the same filesystem to avoid another full copy. A retry by the same stage
+owner reuses its ready candidate; a second cycle that day refuses to create
+another after acceptance. Pre-existing failed/mismatched files are not stage
+files and require review. A point older than 30 hours cannot authorize retention.
+GitHub artifacts have a 90-day expiry backstop, not
 indefinite archival storage: prolonged failures require intervention before expiry.
 Off-site count-prune targets only successful backup-workflow artifacts; unknown,
 held and failed-run artifacts remain preserved and visible for investigation.
+
+Transition gate: verify space and both retained off-site downloads before
+switching default-branch workflows. Resolve any legacy unverified archive by
+separate evidence or approved quarantine; do not infer success from its size
+or creation receipt. The failed 8 November archive is not a recovery point.
+For the 8 November source footprint, model 3.83 GiB ciphertext + 0.20 GiB
+scratch + 2 GiB reserve (at least 6.02 GiB free before a run); two recent
+ciphertexts plus observed historical SQLite and this temporary candidate bring
+backup-directory high water to about 11.73 GiB, excluding legacy unknowns.
 
 For a separately authorized read-only off-site check, dispatch `backup.yml` with
 `readback_only=true`, `source_run_id`, `artifact_name`, `recovery_name` and the

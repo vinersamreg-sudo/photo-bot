@@ -382,10 +382,10 @@ class RecoveryRetentionTests(TestCase):
             self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/backup.yml').read_text()
         prune_at = workflow.index('recovery-prune --keep 2')
-        for gate in ('recovery-create', 'test "$RESTORE_OVERALL" = PASS',
-                     'actions/upload-artifact@v4', 'recovery-mark-offsite'):
+        for gate in ('daily-create', 'bounded_file_restore',
+                     'actions/upload-artifact@v4', 'daily-accept'):
             self.assertLess(workflow.index(gate), prune_at)
-        self.assertLess(workflow.index('Deploy count-retention implementation'), workflow.index('REPORT=$(printf'))
+        self.assertLess(workflow.index('Install isolated backup-only tools'), workflow.index('REPORT=$(printf'))
 
     def test_two_point_rotation_waits_for_every_gate_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -416,4 +416,4 @@ class RecoveryRetentionTests(TestCase):
         self.assertNotIn('ops/deploy_photo_bot', workflow)
         self.assertLess(workflow.index('Verify previous point before either retention'),
                         workflow.index('recovery-prune --keep 2'))
-        self.assertLess(workflow.index('Verify new off-site bytes'), workflow.index('recovery-mark-offsite'))
+        self.assertLess(workflow.index('Verify new off-site bytes'), workflow.index('daily-accept'))
