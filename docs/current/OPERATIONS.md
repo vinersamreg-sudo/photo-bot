@@ -364,9 +364,12 @@ Off-site count-prune targets only successful backup-workflow artifacts; unknown,
 held and failed-run artifacts remain preserved and visible for investigation.
 
 Transition gate: verify space and both retained off-site downloads before
-switching default-branch workflows. Resolve any legacy unverified archive by
-separate evidence or approved quarantine; do not infer success from its size
-or creation receipt. The failed 8 November archive is not a recovery point.
+switching default-branch workflows. Preserve any legacy unverified archive
+until separate evidence or approved quarantine; do not infer success from its
+size or creation receipt. The failed 8 November archive is not a recovery
+point. An older unverified archive generates a workflow warning after rotation
+only if exactly two verified points remain. A newer unknown still blocks
+pruning; all unknown bytes count against the budget in either case.
 For the 8 November source footprint, model 3.83 GiB ciphertext + 0.20 GiB
 scratch + 2 GiB reserve (at least 6.02 GiB free before a run); two recent
 ciphertexts plus observed historical SQLite and this temporary candidate bring

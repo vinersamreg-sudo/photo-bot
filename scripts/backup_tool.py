@@ -85,12 +85,17 @@ def main(argv=None):
     parser.add_argument("--restore-root", type=Path)
     parser.add_argument("--keep", type=int, default=2)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--report-preserved-legacy", action="store_true")
     parser.add_argument("--passphrase-stdin", action="store_true")
     parser.add_argument("--owner")
     parser.add_argument("--backup-sha")
     parser.add_argument("--recovery-sha")
     args = parser.parse_args(argv)
     try:
+        if args.report_preserved_legacy and (
+            args.command != "recovery-prune" or not args.apply or args.keep != 2
+        ):
+            raise BackupError("Legacy warning is only available for two-point scheduled rotation")
         root = args.root.resolve(strict=True)
         values = dotenv_values(root / ".env")
         configured_root = values.get("BASE_DIR")
@@ -151,6 +156,11 @@ def main(argv=None):
             )
         print(json.dumps(report, sort_keys=True))
         unproven = any(e.get("action") == "PRESERVE_UNKNOWN" for e in report.get("entries", []))
+        if unproven and args.report_preserved_legacy and report["successful"] - report["removed"] == 2:
+            print("::warning::Legacy unverified recovery preserved outside the two verified points; "
+                  "review it separately. Its bytes still count toward the 16 GiB budget.",
+                  file=sys.stderr)
+            unproven = False
         return 1 if report.get("overall") == "FAIL" or unproven else 0
     except BackupError as exc:
         print(json.dumps({"status": "FAIL", "error": str(exc)}), file=sys.stderr)

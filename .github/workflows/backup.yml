@@ -236,7 +236,7 @@ jobs:
             cd /opt/photo-bot
             BACKUP=(venv/bin/python data/backup-tools/releases/${{ github.sha }}/scripts/backup_tool.py --root /opt/photo-bot)
             "${BACKUP[@]}" daily-accept --owner ${{ github.run_id }}-${{ github.run_attempt }} --backup-sha "$1" --recovery-sha "$3" --provider "github-actions:${{ github.run_id }}:${{ steps.upload.outputs.artifact-id }}"
-            "${BACKUP[@]}" recovery-prune --keep 2 --confirmed-backup "$2" --apply
+            "${BACKUP[@]}" recovery-prune --keep 2 --confirmed-backup "$2" --apply --report-preserved-legacy
           REMOTE
       - name: Retain two independently verified off-site points
         env:

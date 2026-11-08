@@ -68,6 +68,19 @@ class BackupToolTests(TestCase):
             self.assertEqual(list(manager.backup_dir.iterdir()), [])
             self.assertEqual(before, manager.database_path.read_bytes())
 
+    def test_scheduled_rotation_warns_about_legacy_only_with_two_verified_survivors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.manager(root)
+            report = {"successful": 3, "removed": 1, "entries": [{"action": "PRESERVE_UNKNOWN"}]}
+            args = ["--root", str(root), "recovery-prune", "--confirmed-backup", "synthetic", "--apply"]
+            with patch.object(BackupManager, "prune_recovery_by_count", return_value=report), +                 patch("builtins.print") as output:
+                self.assertEqual(main(args), 1)
+                self.assertEqual(main(args + ["--report-preserved-legacy"]), 0)
+                self.assertIn("Legacy unverified recovery preserved", output.call_args.args[0])
+                report["removed"] = 0
+                self.assertEqual(main(args + ["--report-preserved-legacy"]), 1)
+
     def test_daily_repeat_reuses_verified_point_and_previous_is_distinct(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = self.manager(Path(directory))
