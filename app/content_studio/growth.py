@@ -147,9 +147,9 @@ class FullAutoGrowthEngine:
                     ("max", "image", self.settings.max_daily_publish_time)
                 )
             if "vk" in queue_platforms:
-                specs.append(("vk", "video", self.settings.vk_video_publish_time))
-            if "vk" in queue_platforms and planned.weekday() in {0, 2, 4}:
                 specs.append(("vk", "image", self.settings.vk_wall_publish_time))
+                if planned.weekday() in self.settings.vk_video_weekdays:
+                    specs.append(("vk", "video", self.settings.vk_video_publish_time))
             for platform, media_kind, clock in specs:
                 scheduled = datetime.combine(
                     planned,
@@ -304,7 +304,7 @@ class FullAutoGrowthEngine:
                 continue
             daily_clock = (
                 self.settings.max_daily_publish_time if platform == "max"
-                else self.settings.vk_video_publish_time
+                else self.settings.vk_wall_publish_time
             )
             today_daily = datetime.combine(
                 moment.date(), datetime.strptime(daily_clock, "%H:%M").time(),
@@ -316,8 +316,8 @@ class FullAutoGrowthEngine:
             for offset in range(required_days):
                 day = start + timedelta(days=offset)
                 clocks = [daily_clock]
-                if platform == "vk" and day.weekday() in {0, 2, 4}:
-                    clocks.append(self.settings.vk_wall_publish_time)
+                if platform == "vk" and day.weekday() in self.settings.vk_video_weekdays:
+                    clocks.append(self.settings.vk_video_publish_time)
                 day_ready = True
                 for clock in clocks:
                     slot = datetime.combine(
@@ -453,7 +453,7 @@ class FullAutoGrowthEngine:
         snapshots = 0
         failures = 0
         for post in posts:
-            engagement = {"views": 0, "reactions": 0, "comments": 0}
+            engagement = {} if post["platform"] == "vk" else {"views": 0, "reactions": 0, "comments": 0}
             publisher = self.service.publishers.get(post["platform"])
             transport = getattr(publisher, "transport", None)
             metrics = getattr(transport, "metrics", None)
@@ -462,6 +462,13 @@ class FullAutoGrowthEngine:
                     engagement = metrics(post["published_external_id"])
                 except Exception:
                     failures += 1
+            if post["platform"] == "vk":
+                if apply:
+                    self.repository.record_platform_metrics(post["id"], engagement if callable(metrics) else {})
+                    snapshots += 1
+                # Missing VK measurements must never masquerade as zero in the
+                # legacy all-integer MAX analytics table.
+                continue
             counts = funnel.get(str(post["source_code"])[4:], {})
             if apply:
                 self.service.record_analytics(
@@ -551,7 +558,7 @@ class FullAutoGrowthEngine:
             "days": days,
             "posts_max": sum(row["platform"] == "max" for row in recent),
             "posts_vk": sum(row["platform"] == "vk" for row in recent),
-            "video_count": sum(str(row["id"]).startswith("vk-clip-") for row in recent),
+            "video_count": sum(str(row["id"]).startswith(("vk-video-", "vk-clip-")) for row in recent),
             "bot_starts": totals["starts"],
             "photo_uploads": totals["photos"],
             "results": totals["results"],
@@ -568,7 +575,14 @@ class FullAutoGrowthEngine:
             "top_content": [row["id"] for row in top],
             "failed_publications": failed,
             "privacy": "aggregate_only",
+            "vk": self.vk_report(days=days),
         }
+
+    def vk_report(self, *, days: int = 7) -> dict[str, object]:
+        from .vk_report import build_vk_report
+        return build_vk_report(
+            self.settings, self.repository, days=days,
+        )
 
     def _ensure_post(
         self,
@@ -580,7 +594,7 @@ class FullAutoGrowthEngine:
         clock: str,
         apply: bool,
     ) -> str | None:
-        prefix = "vk-clip" if platform == "vk" and media_kind == "video" else "vk-post" if platform == "vk" else "max"
+        prefix = "vk-video" if platform == "vk" and media_kind == "video" else "vk-post" if platform == "vk" else "max"
         post_id = f"{prefix}-{planned.isoformat()}-{asset.id}"
         if self.repository.post_exists(post_id):
             return None
@@ -620,6 +634,7 @@ class FullAutoGrowthEngine:
                         output=output,
                         hook=asset.hook,
                         prompt_text=f"Запрос: {asset.prompt_example}",
+                        cta="Обработайте 2 фото бесплатно",
                     )
                 )
                 video_checks = self.quality.assess_video(

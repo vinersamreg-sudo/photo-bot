@@ -45,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--days", type=int, default=7)
     _add_format(dashboard)
 
+    vk_report = actions.add_parser("vk-report", help="Read-only VK weekly attribution and ledger report")
+    vk_report.add_argument("--days", type=int, default=7)
+    _add_format(vk_report)
+
     permissions = actions.add_parser("permissions")
     _add_format(permissions)
 
@@ -134,8 +138,12 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(PROJECT_ROOT / ".env", override=False)
     try:
         settings = ContentStudioSettings.from_environment(PROJECT_ROOT)
-        service = ContentStudioService(settings)
-        result = _run_content(service, args)
+        if args.content_command == "vk-report":
+            from .vk_report import build_vk_report
+            result = build_vk_report(settings, None, days=args.days)
+        else:
+            service = ContentStudioService(settings)
+            result = _run_content(service, args)
     except (ValueError, LookupError, OSError, RuntimeError, sqlite3.Error) as error:
         LOGGER.error("Content Studio command failed: %s", error)
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False))

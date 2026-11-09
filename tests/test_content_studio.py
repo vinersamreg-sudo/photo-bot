@@ -246,7 +246,7 @@ class ContentStudioTests(unittest.TestCase):
         status = self.service.status()
         self.assertEqual(status["quick_check"], "ok")
         self.assertEqual(status["published_posts"], 0)
-        self.assertEqual(status["schema_version"], 5)
+        self.assertEqual(status["schema_version"], 6)
         self.assertFalse(status["publishing_enabled"])
         self.assertEqual(status["external_ai_requests"], 0)
 

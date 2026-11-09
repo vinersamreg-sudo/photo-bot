@@ -33,6 +33,30 @@ class FakeMaxClient:
         return {"views": 0, "reactions": 0, "comments": 0}
 
 
+class MemoryDeliveries:
+    """In-memory transport contract; repository durability tested separately."""
+    def __init__(self):
+        self.rows = {}
+
+    def vk_delivery(self, post_id):
+        return self.rows.get(post_id)
+
+    def prepare_vk_delivery(self, post_id, destination, attachment):
+        self.rows.setdefault(post_id, dict(destination=destination, attachment=attachment, state="prepared", external_id=None))
+
+    def begin_vk_send(self, post_id):
+        if self.rows[post_id]["state"] != "prepared":
+            return False
+        self.rows[post_id]["state"] = "sending"
+        return True
+
+    def reset_vk_send(self, post_id):
+        self.rows[post_id]["state"] = "prepared"
+
+    def confirm_vk_send(self, post_id, external_id):
+        self.rows[post_id].update(state="confirmed", external_id=external_id)
+
+
 class ContentStudioTransportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -85,6 +109,8 @@ class ContentStudioTransportTests(unittest.TestCase):
         def api_handler(request: httpx.Request) -> httpx.Response:
             api_calls.append(request)
             method = request.url.path.rsplit("/", 1)[-1]
+            if method == "account.getAppPermissions":
+                return httpx.Response(200, json={"response": 8212})
             if method == "photos.getWallUploadServer":
                 return httpx.Response(
                     200,
@@ -128,11 +154,13 @@ class ContentStudioTransportTests(unittest.TestCase):
             Path(self.temp.name),
             api_client=api_client,
             upload_client=upload_client,
+            delivery_repository=MemoryDeliveries(),
         )
         self.assertEqual(transport.publish(self.payload("vk")), "wall:77")
         self.assertEqual(
             [request.url.path.rsplit("/", 1)[-1] for request in api_calls],
             [
+                "account.getAppPermissions",
                 "groups.getById",
                 "wall.get",
                 "photos.getWallUploadServer",
@@ -147,6 +175,7 @@ class ContentStudioTransportTests(unittest.TestCase):
             Path(self.temp.name),
             api_client=api_client,
             upload_client=upload_client,
+            delivery_repository=MemoryDeliveries(),
         )
         second_transport.publish(self.payload("vk"))
         self.assertEqual(first_wall_body, api_calls[-1].content)
@@ -289,6 +318,8 @@ class ContentStudioTransportTests(unittest.TestCase):
         def api_handler(request: httpx.Request) -> httpx.Response:
             method = request.url.path.rsplit("/", 1)[-1]
             methods.append(method)
+            if method == "account.getAppPermissions":
+                return httpx.Response(200, json={"response": 8212})
             if method == "groups.getById":
                 return httpx.Response(
                     200,
@@ -323,6 +354,7 @@ class ContentStudioTransportTests(unittest.TestCase):
             "test-token",
             "123",
             Path(self.temp.name),
+            delivery_repository=MemoryDeliveries(),
             api_client=httpx.Client(
                 base_url="https://api.vk.com/method/",
                 transport=httpx.MockTransport(api_handler),
@@ -338,7 +370,7 @@ class ContentStudioTransportTests(unittest.TestCase):
         payload = self.payload("vk")
         payload["media_path"] = str(video)
         self.assertEqual(transport.publish(payload), "wall:77;video:9")
-        self.assertEqual(methods, ["groups.getById", "wall.get", "video.save", "wall.post"])
+        self.assertEqual(methods, ["account.getAppPermissions", "groups.getById", "wall.get", "video.save", "wall.post"])
 
     def test_settings_are_fail_closed_and_do_not_repr_tokens(self) -> None:
         root = Path(self.temp.name)

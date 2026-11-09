@@ -38,6 +38,8 @@ class ContentStudioSettings:
     max_daily_publish_time: str = "19:00"
     vk_video_publish_time: str = "20:00"
     vk_wall_publish_time: str = "18:30"
+    vk_video_weekdays: tuple[int, ...] = (0, 2, 4)
+    excluded_max_user_ids: tuple[str, ...] = field(default=(), repr=False)
     exploration_rate: float = 0.20
     daily_publish_time: str = "19:00"
     daily_publish_timezone: str = "Europe/Samara"
@@ -168,6 +170,11 @@ class ContentStudioSettings:
             max_daily_publish_time=max_publish_time,
             vk_video_publish_time=vk_video_time,
             vk_wall_publish_time=vk_wall_time,
+            vk_video_weekdays=_weekdays(values.get("CONTENT_STUDIO_VK_VIDEO_WEEKDAYS", "0,2,4")),
+            excluded_max_user_ids=tuple(
+                value.strip() for value in values.get("MAX_OWNER_USER_IDS", "").split(",")
+                if value.strip()
+            ),
             exploration_rate=exploration_rate,
             daily_publish_time=daily_publish_time,
             daily_publish_timezone=values.get(
@@ -184,6 +191,16 @@ def _boolean(raw: str, name: str) -> bool:
     if value in {"", "0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be a boolean")
+
+
+def _weekdays(raw: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(value.strip()) for value in raw.split(","))
+    except ValueError:
+        raise ValueError("CONTENT_STUDIO_VK_VIDEO_WEEKDAYS must use weekday numbers 0..6") from None
+    if len(values) != 3 or len(set(values)) != 3 or any(value not in range(7) for value in values):
+        raise ValueError("CONTENT_STUDIO_VK_VIDEO_WEEKDAYS must contain three distinct weekdays")
+    return values
 
 
 def _inside(candidate: Path, root: Path) -> bool:

@@ -62,7 +62,7 @@ class ContentStudioService:
             else:
                 from .transports import build_publishers
 
-                publishers = build_publishers(settings)
+                publishers = build_publishers(settings, self.repository)
         self.publishers = dict(publishers)
 
     def add_asset(
@@ -410,7 +410,7 @@ class ContentStudioService:
                     mode.value,
                     "failed",
                     {"post_id": post_id, "platform": post["platform"]},
-                    error_safe=type(error).__name__,
+                    error_safe=(error.diagnostic() if hasattr(error, "diagnostic") else type(error).__name__),
                 )
             raise
         if mode in {PublicationMode.PREVIEW, PublicationMode.DRY_RUN}:

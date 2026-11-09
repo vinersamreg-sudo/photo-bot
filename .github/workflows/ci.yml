@@ -44,7 +44,12 @@ jobs:
             --volume "$GITHUB_WORKSPACE/site/nginx/ravuna.ru.conf:/etc/nginx/conf.d/ravuna.conf:ro" \
             --volume "$CERT_DIR:/etc/letsencrypt/live/ravuna.ru:ro" \
             nginx:1.27-alpine nginx -t
-      - name: Run release-sensitive profiles
+      - name: Install isolated FFmpeg test runtime
+        # Local Windows can skip media rendering; the release gate must exercise
+        # the actual FFmpeg before/after path on its isolated Linux runner.
+        run: |
+          command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+      - name: Run release-sensitive profiles and isolated media tests
         run: |
           python scripts/test_fast.py payments
           python scripts/test_fast.py max

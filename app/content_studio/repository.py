@@ -180,6 +180,20 @@ CREATE TABLE IF NOT EXISTS content_analytics (
 );
 CREATE INDEX IF NOT EXISTS idx_content_analytics_post
     ON content_analytics(post_id, observed_at DESC);
+CREATE TABLE IF NOT EXISTS content_vk_deliveries (
+    post_id TEXT PRIMARY KEY REFERENCES demo_posts(id) ON DELETE RESTRICT,
+    destination TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('prepared','sending','confirmed')),
+    attachment TEXT NOT NULL,
+    external_id TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS content_platform_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id TEXT NOT NULL REFERENCES demo_posts(id) ON DELETE RESTRICT,
+    observed_at TEXT NOT NULL,
+    metrics_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS content_plan_entries (
     id TEXT PRIMARY KEY,
     planned_date TEXT NOT NULL,
@@ -288,6 +302,10 @@ class ContentStudioRepository:
             connection.execute(
                 "INSERT OR IGNORE INTO content_schema_migrations(version,name,applied_at) VALUES(5,?,?)",
                 ("content_publication_novelty_history", utc_now()),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO content_schema_migrations(version,name,applied_at) VALUES(6,?,?)",
+                ("vk_durable_delivery_and_metrics", utc_now()),
             )
             slot_columns = {
                 row[1]
@@ -682,7 +700,8 @@ class ContentStudioRepository:
             updated = connection.execute(
                 """UPDATE content_publication_slots
                    SET claim_token=?,claimed_at=?
-                   WHERE post_id=? AND claim_token IS NULL""",
+                   WHERE post_id=? AND (claim_token IS NULL OR
+                       (platform='vk' AND julianday(claimed_at)<julianday('now','-15 minutes')))""",
                 (claim_token, utc_now(), post_id),
             )
             return updated.rowcount == 1
@@ -1308,6 +1327,53 @@ class ContentStudioRepository:
                     payments,
                     _json(utm),
                 ),
+            )
+
+    def vk_delivery(self, post_id: str) -> dict[str, Any] | None:
+        connection = self.connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM content_vk_deliveries WHERE post_id=?", (post_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            connection.close()
+
+    def prepare_vk_delivery(self, post_id: str, destination: str, attachment: str) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO content_vk_deliveries
+                   (post_id,destination,state,attachment,updated_at)
+                   VALUES(?,?,'prepared',?,?)""",
+                (post_id, destination, attachment, utc_now()),
+            )
+
+    def begin_vk_send(self, post_id: str) -> bool:
+        with self.transaction() as connection:
+            return connection.execute(
+                """UPDATE content_vk_deliveries SET state='sending',updated_at=?
+                   WHERE post_id=? AND state='prepared'""", (utc_now(), post_id)
+            ).rowcount == 1
+
+    def reset_vk_send(self, post_id: str) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                "UPDATE content_vk_deliveries SET state='prepared',updated_at=? WHERE post_id=? AND state='sending'",
+                (utc_now(), post_id),
+            )
+
+    def confirm_vk_send(self, post_id: str, external_id: str) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                "UPDATE content_vk_deliveries SET state='confirmed',external_id=?,updated_at=? WHERE post_id=?",
+                (external_id, utc_now(), post_id),
+            )
+
+    def record_platform_metrics(self, post_id: str, metrics: dict[str, Any]) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO content_platform_metrics(post_id,observed_at,metrics_json) VALUES(?,?,?)",
+                (post_id, utc_now(), _json(metrics)),
             )
 
     def analytics_summary(self, post_id: str | None = None) -> dict[str, Any]:

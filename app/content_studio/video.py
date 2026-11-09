@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -141,8 +142,8 @@ class VerticalVideoGenerator:
             raise ValueError("vertical video output must stay inside Content Studio storage")
         if not 8 <= spec.duration_seconds <= 15:
             raise ValueError("vertical video duration must be between 8 and 15 seconds")
-        hook = _drawtext(spec.hook, 90)
-        prompt = _drawtext(spec.prompt_text, 110)
+        hook = _drawtext(_caption(spec.hook, width=32, lines=2), 90)
+        prompt = _drawtext(_caption(spec.prompt_text, width=38, lines=4), 160)
         cta = _drawtext(spec.cta, 90)
         font = str(self.font_file).replace("\\", "/").replace(":", "\\:")
         filter_graph = (
@@ -236,15 +237,27 @@ def _inside(candidate: Path, root: Path) -> bool:
 
 
 def _drawtext(value: str, maximum: int) -> str:
-    clean = " ".join(value.strip().split())
+    clean = "\n".join(" ".join(line.split()) for line in value.strip().splitlines())
     if not clean or len(clean) > maximum:
         raise ValueError(f"video caption must contain 1..{maximum} characters")
     return (
         clean.replace("\\", "\\\\")
-        .replace("'", "\\'")
+        .replace("'", "’")
         .replace(":", "\\:")
         .replace("%", "\\%")
     )
+
+
+def _caption(value: str, *, width: int, lines: int) -> str:
+    """Bound visible task text to the screen, retaining full text in the post."""
+    clean = " ".join(value.split())
+    if not clean:
+        raise ValueError("video task must not be empty")
+    wrapped = textwrap.wrap(clean, width=width)
+    if len(wrapped) > lines:
+        wrapped = wrapped[:lines]
+        wrapped[-1] = wrapped[-1].rstrip(" .,;:") + "…"
+    return "\n".join(wrapped)
 
 
 def command_preview(command: Sequence[str]) -> str:

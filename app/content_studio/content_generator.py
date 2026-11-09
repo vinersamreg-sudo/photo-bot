@@ -200,6 +200,14 @@ class ContentGenerator:
             f"{result_lines[variant]}"
         )
         cta = f"{CTA_LEAD}:\n{utm_url}"
+        if platform == "vk":
+            generated_title = f"До → после: {title}"[:120]
+            body = (
+                f"Задача на фото: «{prompt_example.strip()}»\n\n"
+                "Посмотрите на сравнение до и после. Для своей фотографии "
+                "достаточно написать, что вы хотите изменить — без сложных редакторов."
+            )
+            cta = f"Обработайте 2 фотографии бесплатно\nОткрыть Ravuna в MAX: {utm_url}"
         internal_prompt = (
             "Create one factual Russian hook/task/result demo variant for "
             f"'{transformation_type.value}'. Never invent a customer story or testimonial. "
@@ -224,6 +232,8 @@ def build_source_code(platform: str, content: str) -> str:
         raise ValueError("unsupported attribution platform")
     if platform == "vk" and content.startswith("vk-clip-"):
         platform_code = "vk-clip"
+    elif platform == "vk" and content.startswith("vk-video-"):
+        platform_code = "vk-video"
     elif platform == "vk" and content.startswith("vk-post-"):
         platform_code = "vk-post"
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:10]

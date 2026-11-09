@@ -113,7 +113,7 @@ class PlatformPublisher:
             )
 
     def _payload(self, post: dict[str, Any], media_path: str) -> dict[str, Any]:
-        if self.platform == "max":
+        if self.platform in {"max", "vk"}:
             validate_customer_copy(str(post["title"]), str(post["body"]))
         disclosure = str(post.get("disclosure") or "")
         return {
