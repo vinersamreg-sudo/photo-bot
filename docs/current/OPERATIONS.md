@@ -311,17 +311,78 @@ stderr, passphrases, command lines or private filenames. A killed subprocess is
 not evidence of OOM without independent host evidence. Do not rerun a production
 backup or prune existing artifacts without authorization.
 
-### Separate backup retention
+### German VPS: two-point recovery automation (release candidate)
 
 `pixora-*.sqlite3.enc` keeps its existing `BACKUP_RETENTION_DAYS` age-based
 policy (`prune_sqlite_by_age`). Recovery artifacts never enter that policy.
-`ravuna-recovery-*.tar.gz.enc` keeps the **7 latest successful snapshots**, not
-seven days. Creation and restore never prune recovery. The scheduled workflow
+`ravuna-recovery-*.tar.gz.enc` keeps the **2 latest successful snapshots**, not
+two days. Creation and restore never prune recovery. The scheduled workflow
 invokes count-prune only after creation, restore `PASS`, encrypted off-site
 upload/checksum verification and off-site confirmation have all succeeded.
-The workflow fails before creation if the count-retention implementation has not
-yet been deployed; coordinate its reviewed merge/runtime release before the next
-scheduled run. Merging a workflow does not install its runtime module.
+The workflow installs only hash-checked backup tooling under private
+`data/backup-tools/releases/<workflow-SHA>` and runs `scripts/backup_tool.py`.
+It does not synchronize application code, change `.env`, initialize production
+SQLite, restart the bot or advance its deployment marker. The recovery manifest
+records the actual application revision, not the independently released tool SHA.
+
+Schedule: 23:00 UTC / **03:00 Europe/Samara**. GitHub scheduling is best-effort,
+not an exact-time guarantee. Workflow failure uses GitHub Actions notifications;
+operators must keep failed-workflow notifications enabled. A separate read-only
+watchdog checks every six hours for a successful scheduled run in the last 30
+hours; a manual readback cannot make it green. Both jobs depend on GitHub
+availability; a GitHub-wide outage requires an external alert or manual check.
+No new systemd timer is installed.
+
+The scheduled job restores SQLite and materializes/rereads each media file in a
+single private scratch slot. It verifies gzip/crypto completion, all manifest
+hashes, foreign keys, commerce fingerprints, and retained gallery references.
+Its receipt says `bounded_file_restore`; it is not a simultaneous full-tree
+restore drill or a service startup test. Full `recovery-restore-test` is unchanged
+and should be exercised separately on an approved trusted isolated host with
+space for an assembled tree. Do not decrypt on a GitHub-hosted runner.
+
+Preflight leaves 2 GiB free and caps backup-directory high water at 16 GiB. It
+reserves a conservatively sized ciphertext, SQLite scratch and the largest
+media member, not a full extracted tree. A new candidate lives in one private
+run-owned staging directory; on Linux, a file-size ceiling also bounds the
+encryption process if the live source grows. Transfer/restore/checksum failure
+never promotes the candidate or prunes recovery. A workflow cleanup removes
+only that run's stage; a later run can reclaim a stage abandoned for over two
+hours (longer than the 60-minute job limit). Never reclaim a live lease manually.
+
+Both the newly uploaded encrypted artifact and a distinct previous point are
+downloaded from off-site and hash-verified before local or off-site rotation.
+Only encrypted bytes reach GitHub runners. Publication first installs the bound
+proof, then atomically makes the ciphertext name visible, using hard links on
+the same filesystem to avoid another full copy. A retry by the same stage
+owner reuses its ready candidate; a second cycle that day refuses to create
+another after acceptance. Pre-existing failed/mismatched files are not stage
+files and require review. A point older than 30 hours cannot authorize retention.
+GitHub artifacts have a 90-day expiry backstop, not
+indefinite archival storage: prolonged failures require intervention before expiry.
+Off-site count-prune targets only successful backup-workflow artifacts; unknown,
+held and failed-run artifacts remain preserved and visible for investigation.
+
+Transition gate: verify space and both retained off-site downloads before
+switching default-branch workflows. Preserve any legacy unverified archive
+until separate evidence or approved quarantine; do not infer success from its
+size or creation receipt. The failed 8 November archive is not a recovery
+point. An older unverified archive generates a workflow warning after rotation
+only if exactly two verified points remain. A newer unknown still blocks
+pruning; all unknown bytes count against the budget in either case.
+For the 8 November source footprint, model 3.83 GiB ciphertext + 0.20 GiB
+scratch + 2 GiB reserve (at least 6.02 GiB free before a run); two recent
+ciphertexts plus observed historical SQLite and this temporary candidate bring
+backup-directory high water to about 11.73 GiB, excluding legacy unknowns.
+
+For a separately authorized read-only off-site check, dispatch `backup.yml` with
+`readback_only=true`, `source_run_id`, `artifact_name`, `recovery_name` and the
+trusted receipt's `recovery_sha256`. This job has only Actions/contents read
+permissions: no production environment/secrets, SSH, decryption, creation, proof
+publication or pruning. Its separate concurrency group cannot block production
+deployment/backup. It must download the full encrypted artifact and match SHA256;
+HTTP availability or a partial download is not a successful readback. The normal
+backup job is skipped in this mode; the default remains the normal backup path.
 
 Each new recovery has a private atomic `<backup-name>.proof.json` receipt binding
 creation, restore and off-site stages to the encrypted artifact SHA256/size.
@@ -333,7 +394,7 @@ blocks all pruning. The confirmed newest snapshot is always retained.
 Read-only plan (no lock/config/DB/log writes):
 
 ```bash
-scripts/ravuna recovery-prune --keep 7 --confirmed-backup <confirmed-recovery-name>
+venv/bin/python data/backup-tools/releases/<workflow-SHA>/scripts/backup_tool.py --root /opt/photo-bot recovery-prune --keep 2 --confirmed-backup <confirmed-recovery-name>
 ```
 
 Only a separately authorized operation adds `--apply`. Apply serializes with
@@ -372,8 +433,8 @@ Only canonical gate metadata is persisted, not arbitrary external evidence data.
 Import never deletes/recreates backups and is never invoked by the scheduler.
 
 After authorized import, prune runs **without `--evidence`**: 13 proven legacy
-snapshots become 7; the next successfully created/restored/off-site-confirmed
-snapshot joins that same pool, and count-prune removes the oldest, leaving 7
+snapshots become 2; the next successfully created/restored/off-site-confirmed
+snapshot joins that same pool, and count-prune removes the oldest, leaving 2
 again. Verify local-only planning before authorizing the separate cleanup. Do not
 clean up using ephemeral evidence first and leave legacy receipts absent.
 

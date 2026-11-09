@@ -530,34 +530,32 @@ class BackupMaintenanceOperationsTests(TestCase):
             Path(__file__).resolve().parents[1] / ".github" / "workflows" / "backup.yml"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("backup-create --passphrase-stdin", workflow)
+        self.assertIn("daily-create --owner", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
-        self.assertIn("backup-mark-offsite", workflow)
+        self.assertIn("daily-accept --owner", workflow)
         self.assertIn("sha256sum -c -", workflow)
-        self.assertIn("backup-restore-test", workflow)
-        self.assertIn("recovery-restore-test", workflow)
-        self.assertIn("--restore-root \"$RESTORE_ROOT\"", workflow)
-        self.assertIn("/var/tmp/ravuna-recovery-proof.", workflow)
+        self.assertIn("bounded_file_restore", workflow)
+        self.assertNotIn("--restore-root", workflow)
+        self.assertNotIn("/var/tmp/ravuna-recovery-proof.", workflow)
         self.assertLess(
             workflow.index("ssh -p \"$SSH_PORT\""),
-            workflow.index("backup-restore-test"),
+            workflow.index("daily-create"),
         )
         self.assertLess(
             workflow.index("ssh -p \"$SSH_PORT\""),
-            workflow.index("recovery-restore-test"),
+            workflow.index("daily-accept"),
         )
         self.assertNotIn("openssl enc", workflow)
         self.assertNotIn("maintenance-cleanup --execute", workflow)
         self.assertNotIn('--passphrase "$PASSPHRASE"', workflow)
-        self.assertIn("recovery-create --passphrase-stdin", workflow)
-        self.assertIn("recovery-mark-offsite", workflow)
+        self.assertIn("--passphrase-stdin", workflow)
+        self.assertIn("daily-cleanup --owner", workflow)
         self.assertIn("artifact/*.enc", workflow)
         self.assertIn("CURRENT_SCHEMA_VERSION", workflow)
-        self.assertIn('test "$SQLITE_MIGRATION" = "$EXPECTED_SCHEMA"', workflow)
-        self.assertIn('test "$RESTORE_MIGRATION" = "$EXPECTED_SCHEMA"', workflow)
+        self.assertIn('== int(sys.argv[1])', workflow)
         self.assertNotIn('test "$SQLITE_MIGRATION" = 13', workflow)
         self.assertNotIn('test "$RESTORE_MIGRATION" = 13', workflow)
 
         uploaded = workflow.index("actions/upload-artifact@v4")
-        confirmed = workflow.index("backup-mark-offsite")
+        confirmed = workflow.index("daily-accept")
         self.assertLess(uploaded, confirmed)

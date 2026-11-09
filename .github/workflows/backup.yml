@@ -2,23 +2,72 @@ name: Ravuna encrypted production backup
 
 on:
   schedule:
-    - cron: '17 1 * * *'
+    # 03:00 Europe/Samara (UTC+4). GitHub schedules are best-effort and may be delayed.
+    - cron: '0 23 * * *'
   workflow_dispatch:
+    inputs:
+      readback_only:
+        description: 'Read-only encrypted off-site verification; no SSH or production changes'
+        type: boolean
+        default: false
+      source_run_id:
+        description: 'Existing backup workflow run'
+        type: string
+      artifact_name:
+        description: 'Existing encrypted backup artifact name'
+        type: string
+      recovery_name:
+        description: 'Recovery ciphertext basename from the trusted receipt'
+        type: string
+      recovery_sha256:
+        description: 'Expected ciphertext SHA256 from the trusted receipt'
+        type: string
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
-  group: photo-bot-production
+  group: ${{ inputs.readback_only && format('ravuna-backup-readback-{0}', github.run_id) || 'photo-bot-production' }}
   cancel-in-progress: false
 
 jobs:
-  backup:
+  readback:
+    if: github.event_name == 'workflow_dispatch' && inputs.readback_only
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download existing encrypted off-site artifact (read-only)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: readback
+      - name: Verify complete ciphertext against trusted receipt
+        env:
+          RECOVERY_NAME: ${{ inputs.recovery_name }}
+          RECOVERY_SHA: ${{ inputs.recovery_sha256 }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.prune_backup_artifacts import verify_readback
+          print(json.dumps(verify_readback(Path('readback'), os.environ['RECOVERY_NAME'], os.environ['RECOVERY_SHA']), sort_keys=True))
+          PY
+  backup:
+    if: github.event_name != 'workflow_dispatch' || !inputs.readback_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: production
     env:
       BACKUP_CONFIGURED: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_PRIVATE_KEY != '' && secrets.HETZNER_SSH_PORT != '' && secrets.BACKUP_ENCRYPTION_PASSPHRASE != '' }}
     steps:
+      - uses: actions/checkout@v4
       - name: Require backup configuration
         if: env.BACKUP_CONFIGURED != 'true'
         run: |
@@ -34,6 +83,37 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+      - name: Install isolated backup-only tools (no bot restart)
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          tar -czf backup-tool.tar.gz app/__init__.py app/backup.py app/backup_daily.py app/recovery_retention.py scripts/backup_tool.py
+          TOOL_SHA=$(sha256sum backup-tool.tar.gz | cut -d' ' -f1)
+          TOOL_ROOT="/opt/photo-bot/data/backup-tools/releases/${GITHUB_SHA}"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "umask 077; mkdir -p '$TOOL_ROOT'"
+          scp -P "$SSH_PORT" backup-tool.tar.gz "$SSH_USER@$SSH_HOST:$TOOL_ROOT/bundle.tar.gz"
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "set -eu; cd '$TOOL_ROOT'; printf '%s  %s\n' '$TOOL_SHA' bundle.tar.gz | sha256sum -c -; tar -xzf bundle.tar.gz; PYTHONDONTWRITEBYTECODE=1 /opt/photo-bot/venv/bin/python scripts/backup_tool.py --help >/dev/null"
+      - name: Identify previous fully verified off-site point
+        id: previous
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'cd /opt/photo-bot && PYTHONDONTWRITEBYTECODE=1 venv/bin/python -B data/backup-tools/releases/${{ github.sha }}/scripts/backup_tool.py --root /opt/photo-bot daily-previous-point' > previous.json
+          python - <<'PY'
+          import json, os
+          from scripts.prune_backup_artifacts import resolve_previous
+          with open('previous.json') as stream: previous = json.load(stream)
+          resolved = resolve_previous(os.environ['GITHUB_REPOSITORY'], previous['provider'], previous['backup_name'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              for key, value in resolved.items(): print(f'{key}={value}', file=out)
+              print('backup_name=' + previous['backup_name'], file=out)
+              print('backup_sha=' + previous['sha256'], file=out)
+          PY
       - name: Create encrypted server backups
         id: create
         env:
@@ -44,43 +124,13 @@ jobs:
         run: |
           BACKUP_NAMES=$(printf '%s\n' "$PASSPHRASE" | \
             ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'set -euo pipefail
+              export PYTHONDONTWRITEBYTECODE=1
               IFS= read -r PASSPHRASE
               cd /opt/photo-bot
-              venv/bin/python -B -c "from app.backup import BackupManager; assert callable(getattr(BackupManager,\"prune_recovery_by_count\",None)), \"Deploy count-retention implementation before running this workflow\""
+              BACKUP=(venv/bin/python data/backup-tools/releases/${{ github.sha }}/scripts/backup_tool.py --root /opt/photo-bot)
               EXPECTED_SCHEMA=$(venv/bin/python -c "import sqlite3,tempfile; from pathlib import Path; import app.database as d; t=tempfile.TemporaryDirectory(); p=Path(t.name)/\"schema.sqlite3\"; d.Database(p); c=sqlite3.connect(p); actual=int(c.execute(\"SELECT COALESCE(MAX(version),0) FROM schema_migrations\").fetchone()[0]); c.close(); declared=int(getattr(d,\"CURRENT_SCHEMA_VERSION\",actual)); assert actual==declared; print(declared); t.cleanup()")
-              REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-create --passphrase-stdin)
-              NAME=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"backup_name\"])")
-              SHA=$(printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
-              SQLITE_RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main backup-restore-test --backup "$NAME" --passphrase-stdin)
-              SQLITE_RESTORE_OK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"restore_ok\"])")
-              SQLITE_QUICK_CHECK=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"quick_check\"])")
-              SQLITE_MIGRATION=$(printf "%s" "$SQLITE_RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
-              test "$SQLITE_RESTORE_OK" = True
-              test "$SQLITE_QUICK_CHECK" = ok
-              test "$SQLITE_MIGRATION" = "$EXPECTED_SCHEMA"
-              RECOVERY_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-create --passphrase-stdin)
-              RECOVERY_NAME=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"recovery_bundle_name\"])")
-              RECOVERY_SHA=$(printf "%s" "$RECOVERY_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sha256\"])")
-              RESTORE_ROOT=$(mktemp -d /var/tmp/ravuna-recovery-proof.XXXXXX)
-              cleanup_restore_root() {
-                case "$RESTORE_ROOT" in
-                  /var/tmp/ravuna-recovery-proof.*) rm -rf -- "$RESTORE_ROOT" ;;
-                  *) return 1 ;;
-                esac
-              }
-              trap cleanup_restore_root EXIT
-              RESTORE_REPORT=$(printf "%s\n" "$PASSPHRASE" | venv/bin/python -m app.main recovery-restore-test --backup "$RECOVERY_NAME" --restore-root "$RESTORE_ROOT" --passphrase-stdin)
-              RESTORE_OVERALL=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"overall\"])")
-              RESTORE_ARTIFACT=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"artifact_status\"])")
-              RESTORE_SQLITE=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"sqlite_status\"])")
-              RESTORE_MIGRATION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"migration\"])")
-              RESTORE_REVISION=$(printf "%s" "$RESTORE_REPORT" | venv/bin/python -c "import json,sys; print(json.load(sys.stdin)[\"source_revision\"])")
-              test "$RESTORE_OVERALL" = PASS
-              test "$RESTORE_ARTIFACT" = PASS
-              test "$RESTORE_SQLITE" = PASS
-              test "$RESTORE_MIGRATION" = "$EXPECTED_SCHEMA"
-              test "$RESTORE_REVISION" = "$(cat .deploy-sha)"
-              printf "%s\t%s\t%s\t%s\n" "$NAME" "$SHA" "$RECOVERY_NAME" "$RECOVERY_SHA"')
+              REPORT=$(printf "%s\n" "$PASSPHRASE" | "${BACKUP[@]}" daily-create --owner ${{ github.run_id }}-${{ github.run_attempt }} --passphrase-stdin)
+              printf "%s" "$REPORT" | venv/bin/python -c "import json,sys; d=json.load(sys.stdin); assert d[\"migration\"] == int(sys.argv[1]); assert d[\"restore_method\"] == \"bounded_file_restore\"; print(chr(9).join(d[k] for k in (\"backup_name\",\"backup_sha\",\"recovery_name\",\"recovery_sha\")))" "$EXPECTED_SCHEMA"')
           IFS=$'\t' read -r BACKUP_NAME BACKUP_SHA RECOVERY_NAME RECOVERY_SHA <<< "$BACKUP_NAMES"
           test -n "$BACKUP_NAME"
           test "$BACKUP_SHA" != ""
@@ -107,29 +157,102 @@ jobs:
           RECOVERY_SHA: ${{ steps.create.outputs.recovery_sha }}
         run: |
           install -d artifact
-          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/$BACKUP_NAME" "artifact/$BACKUP_NAME"
-          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/$RECOVERY_NAME" "artifact/$RECOVERY_NAME"
+          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/.daily-recovery-pending-v1/$BACKUP_NAME" "artifact/$BACKUP_NAME"
+          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:/opt/photo-bot/data/backups/.daily-recovery-pending-v1/$RECOVERY_NAME" "artifact/$RECOVERY_NAME"
           printf '%s  %s\n' "$BACKUP_SHA" "artifact/$BACKUP_NAME" | sha256sum -c -
           printf '%s  %s\n' "$RECOVERY_SHA" "artifact/$RECOVERY_NAME" | sha256sum -c -
       - name: Store encrypted off-site artifact
+        id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: ravuna-production-backup-${{ github.run_id }}
+          name: ravuna-production-backup-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifact/*.enc
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
+          compression-level: 0
+      - name: Read back newly stored encrypted artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ravuna-production-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified-offsite
+      - name: Verify new off-site bytes and release runner staging
+        env:
+          BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
+          RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
+          BACKUP_SHA: ${{ steps.create.outputs.backup_sha }}
+          RECOVERY_SHA: ${{ steps.create.outputs.recovery_sha }}
+        run: |
+          printf '%s  %s\n' "$BACKUP_SHA" "verified-offsite/$BACKUP_NAME" | sha256sum -c -
+          printf '%s  %s\n' "$RECOVERY_SHA" "verified-offsite/$RECOVERY_NAME" | sha256sum -c -
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          for directory in ('artifact', 'verified-offsite'):
+              for key in ('BACKUP_NAME', 'RECOVERY_NAME'):
+                  name = os.environ[key]
+                  assert Path(name).name == name and name.endswith('.enc')
+                  file = Path(directory) / name
+                  assert file.is_file() and not file.is_symlink()
+                  file.unlink()  # Runner ciphertext staging only, never VPS/customer files.
+          PY
+      - name: Read back previous verified recovery
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.previous.outputs.name }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: previous-offsite
+      - name: Verify previous point before either retention
+        env:
+          PREVIOUS_NAME: ${{ steps.previous.outputs.backup_name }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.backup_sha }}
+          RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
+        run: |
+          test "$RECOVERY_NAME" != "$PREVIOUS_NAME"
+          printf '%s  %s\n' "$PREVIOUS_SHA" "previous-offsite/$PREVIOUS_NAME" | sha256sum -c -
+      - name: Require a fresh recovery point before retention
+        env:
+          RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, timezone, timedelta
+          name = os.environ['RECOVERY_NAME']
+          created = datetime.strptime(name.removeprefix('ravuna-recovery-').removesuffix('.tar.gz.enc'), '%Y%m%dT%H%M%S%fZ').replace(tzinfo=timezone.utc)
+          assert timedelta(0) <= datetime.now(timezone.utc) - created <= timedelta(hours=30), 'Recovery is stale; preserved points are not a fresh backup'
+          PY
       - name: Confirm encrypted off-site copy
         env:
           SSH_HOST: ${{ secrets.HETZNER_HOST }}
           SSH_USER: ${{ secrets.HETZNER_USER }}
           SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
-          BACKUP_NAME: ${{ steps.create.outputs.backup_name }}
+          BACKUP_SHA: ${{ steps.create.outputs.backup_sha }}
           RECOVERY_NAME: ${{ steps.create.outputs.recovery_name }}
+          RECOVERY_SHA: ${{ steps.create.outputs.recovery_sha }}
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$BACKUP_NAME" "$RECOVERY_NAME" <<'REMOTE'
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' -- "$BACKUP_SHA" "$RECOVERY_NAME" "$RECOVERY_SHA" <<'REMOTE'
             set -euo pipefail
+            export PYTHONDONTWRITEBYTECODE=1
             cd /opt/photo-bot
-            venv/bin/python -m app.main backup-mark-offsite --backup "$1" --provider github-actions >/dev/null
-            venv/bin/python -m app.main recovery-mark-offsite --backup "$2" --provider github-actions >/dev/null
-            scripts/ravuna recovery-prune --keep 7 --confirmed-backup "$2" --apply
+            BACKUP=(venv/bin/python data/backup-tools/releases/${{ github.sha }}/scripts/backup_tool.py --root /opt/photo-bot)
+            "${BACKUP[@]}" daily-accept --owner ${{ github.run_id }}-${{ github.run_attempt }} --backup-sha "$1" --recovery-sha "$3" --provider "github-actions:${{ github.run_id }}:${{ steps.upload.outputs.artifact-id }}"
+            "${BACKUP[@]}" recovery-prune --keep 2 --confirmed-backup "$2" --apply --report-preserved-legacy
           REMOTE
+      - name: Retain two independently verified off-site points
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/prune_backup_artifacts.py --repository "$GITHUB_REPOSITORY" --keep-artifact-id '${{ steps.upload.outputs.artifact-id }}' --keep-artifact-id '${{ steps.previous.outputs.artifact_id }}' --apply
+      - name: Surface backup failure
+        if: failure()
+        run: |
+          echo '::error::Encrypted recovery did not complete all gates. Investigate before the last verified off-site point expires; never delete unverified artifacts.'
+          printf '## Recovery FAILED\n\nA backup gate failed. Consult the failed step; do not infer that creation alone proves recovery. Failed-workflow notifications must remain enabled.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Release this run's pending staging
+        if: always() && steps.create.outcome != 'skipped'
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'cd /opt/photo-bot && venv/bin/python -B data/backup-tools/releases/${{ github.sha }}/scripts/backup_tool.py --root /opt/photo-bot daily-cleanup --owner ${{ github.run_id }}-${{ github.run_attempt }}'

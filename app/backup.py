@@ -24,7 +24,7 @@ import zlib
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator
+from typing import Any, BinaryIO, Callable, Iterator
 
 from app.recovery_retention import (
     RetentionError, artifact, read_json, validate, write_stage, prune as recovery_prune,
@@ -32,9 +32,17 @@ from app.recovery_retention import (
 
 
 RECOVERY_BUNDLE_VERSION = 1
+RESTORE_FREE_SPACE_MARGIN = 64 * 1024 * 1024
+DAILY_FREE_SPACE_MARGIN = 2 * 1024**3
+DAILY_BACKUP_BUDGET = 16 * 1024**3
 RECOVERY_COMPONENTS = (
     "database/photo_bot.sqlite3",
     "private_storage/users",
+)
+COMMERCE_TABLES = (
+    "payment_orders", "user_credit_accounts", "generation_credit_lots",
+    "generation_credit_reservations", "credit_ledger", "unlock_entitlements",
+    "continuation_pack_grants", "referral_bonus_grants",
 )
 
 
@@ -91,13 +99,18 @@ def _now() -> datetime:
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix="." + path.name + ".", suffix=".tmp", dir=path.parent,
+    )
+    temporary = Path(temporary_name)
     try:
-        temporary.chmod(0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class BackupManager:
@@ -250,13 +263,32 @@ class BackupManager:
                 migration = connection.execute(
                     "SELECT COALESCE(MAX(version),0) FROM schema_migrations"
                 ).fetchone()
+                foreign_key_violation = connection.execute("PRAGMA foreign_key_check").fetchone()
+                tables = {row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )}
+                commerce = {}
+                for table in COMMERCE_TABLES:
+                    if table not in tables:  # Legacy schemas remain restorable.
+                        continue
+                    digest, count = hashlib.sha256(), 0
+                    for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid'):
+                        encoded = json.dumps(list(row), ensure_ascii=False, default=str,
+                                             separators=(",", ":")).encode("utf-8")
+                        digest.update(len(encoded).to_bytes(8, "big"))
+                        digest.update(encoded)
+                        count += 1
+                    commerce[table] = {"count": count, "sha256": digest.hexdigest()}
             finally:
                 connection.close()
         except sqlite3.Error as exc:
             raise BackupError("Restored SQLite database could not be opened") from exc
         if not quick_check or quick_check[0] != "ok":
             raise BackupError("Restored SQLite integrity check failed")
-        return {"quick_check": "ok", "migration": int(migration[0])}
+        if foreign_key_violation is not None:
+            raise BackupError("Restored SQLite foreign key check failed")
+        return {"quick_check": "ok", "foreign_key_check": "ok",
+                "migration": int(migration[0]), "commerce_fingerprints": commerce}
 
     @staticmethod
     def _sha256(path: Path) -> str:
@@ -265,6 +297,47 @@ class BackupManager:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    def _validate_gallery_files(
+        self, database: Path, restored_users: Path,
+        verified: set[str] | None = None,
+    ) -> dict[str, int]:
+        """Check retained originals/previews without selecting customer text."""
+        counts = {"originals": 0, "previews": 0}
+        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if not {"gallery_versions", "gallery_items"} <= tables:
+                return counts
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(gallery_items)")}
+            predicate = "WHERE i.purged_at IS NULL" if "purged_at" in columns else ""
+            rows = connection.execute(
+                "SELECT v.original_path,v.preview_watermarked_path FROM gallery_versions v "
+                "JOIN gallery_items i ON i.id=v.gallery_item_id " + predicate
+            )
+            for row in rows:
+                for key, stored in zip(counts, row):
+                    if not stored:
+                        continue
+                    source = Path(stored)
+                    try:
+                        relative = source.relative_to(self.users_dir)
+                    except ValueError:
+                        raise BackupError("Gallery file reference is outside private storage") from None
+                    candidate = restored_users / relative
+                    if ".." in relative.parts or (
+                        relative.as_posix() not in verified if verified is not None else
+                        not candidate.is_file() or candidate.is_symlink()
+                        or not candidate.resolve().is_relative_to(restored_users.resolve())
+                    ):
+                        raise BackupError("Retained gallery file is missing or unsafe in recovery")
+                    counts[key] += 1
+            return counts
+        finally:
+            connection.close()
 
     def _sqlite_snapshot(self, destination: Path) -> dict[str, Any]:
         source = sqlite3.connect(self.database_path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -347,7 +420,37 @@ class BackupManager:
         self.prune_sqlite_by_age(created_at)
         return metadata
 
-    def create_recovery_bundle(self, passphrase: str) -> dict[str, Any]:
+    def daily_capacity(self, total_backup_bytes: int) -> dict[str, int]:
+        """Bound the daily cycle without reserving space for a full plaintext tree."""
+        db = self.database_path.stat().st_size
+        # Account for SQLite growth from a concurrent WAL plus modest headroom.
+        wal = self.database_path.with_name(self.database_path.name + "-wal")
+        db += (wal.stat().st_size if wal.exists() else 0) + 16 * 1024**2
+        archive, largest = db + 1024**2, db
+        if self.users_dir.is_symlink():
+            raise BackupError("Private storage contains an unsupported symlink")
+        for path in self.users_dir.rglob("*"):
+            entry = path.lstat()
+            if not (stat.S_ISREG(entry.st_mode) or stat.S_ISDIR(entry.st_mode)):
+                raise BackupError("Private storage contains an unsupported entry")
+            if stat.S_ISREG(entry.st_mode):
+                largest = max(largest, entry.st_size)
+                archive += entry.st_size
+            # tar/PAX headers, padding and manifest entries.
+            archive += 8192 + 4 * len(os.fsencode(path))
+        archive += archive // 100
+        scratch = 2 * db + largest + 16 * 1024**2
+        required = archive + scratch + DAILY_FREE_SPACE_MARGIN
+        if total_backup_bytes + archive + scratch > DAILY_BACKUP_BUDGET:
+            raise BackupError("Daily recovery capacity preflight failed (reason=backup_budget)")
+        if shutil.disk_usage(self.backup_dir).free < required:
+            raise BackupError("Daily recovery capacity preflight failed (reason=no_space_left)")
+        return {"ciphertext_limit": archive, "scratch_limit": scratch,
+                "member_limit": max(largest, 16 * 1024**2), "required_free": required}
+
+    def create_recovery_bundle(
+        self, passphrase: str, *, daily_ciphertext_limit: int | None = None,
+    ) -> dict[str, Any]:
         """Create an encrypted DB + private-storage bundle without secrets."""
 
         self._require_passphrase(passphrase)
@@ -356,6 +459,23 @@ class BackupManager:
         source_revision = self._source_revision()
         if source_revision is None:
             raise BackupError("Deployed source revision is unavailable")
+        # Manual workflows still reserve for an assembled full restore.
+        logical_bytes = self.database_path.stat().st_size
+        try:
+            if self.users_dir.is_symlink():
+                raise BackupError("Private storage contains an unsupported symlink")
+            for path in self.users_dir.rglob("*"):
+                entry = path.lstat()
+                if stat.S_ISLNK(entry.st_mode):
+                    raise BackupError("Private storage contains an unsupported symlink")
+                logical_bytes += 4096 + (entry.st_size if stat.S_ISREG(entry.st_mode) else 0)
+            required = (2 * (logical_bytes + logical_bytes // 100) + RESTORE_FREE_SPACE_MARGIN
+                        if daily_ciphertext_limit is None else
+                        daily_ciphertext_limit + DAILY_FREE_SPACE_MARGIN)
+            if shutil.disk_usage(self.backup_dir).free < required:
+                raise BackupError("Recovery capacity preflight failed (reason=no_space_left)")
+        except OSError as exc:
+            raise BackupError(f"Recovery capacity preflight failed (reason={_os_reason(exc)})") from None
         created_at = _now()
         name = f"ravuna-recovery-{created_at.strftime('%Y%m%dT%H%M%S%fZ')}.tar.gz.enc"
         encrypted = self.backup_dir / name
@@ -374,6 +494,8 @@ class BackupManager:
                     self._write_recovery_archive(
                         stream, snapshot, sqlite_status, created_at, source_revision,
                     )
+                if daily_ciphertext_limit is not None and partial.stat().st_size > daily_ciphertext_limit:
+                    raise BackupError("Daily recovery ciphertext exceeded its budget")
                 # Publish only a complete encrypted artifact. Failure leaves no
                 # plaintext archive, copied media or discoverable partial bundle.
                 partial.replace(encrypted)
@@ -496,6 +618,13 @@ class BackupManager:
                             or not (member.isfile() or member.isdir())
                         ):
                             raise BackupError("Recovery archive contains an unsafe member")
+                        if member.isfile() and shutil.disk_usage(destination).free < (
+                            member.size + RESTORE_FREE_SPACE_MARGIN
+                        ):
+                            # Leave space for the failure receipt and the live
+                            # application; an unsuccessful restore must not fill
+                            # the filesystem before its diagnostics are persisted.
+                            raise BackupError("Recovery archive extraction failed (reason=no_space_left)")
                         archive.extract(member, destination, filter="data")
                 while expanded.read(1024 * 1024):
                     pass  # Require gzip trailer/CRC validation, not just tar EOF.
@@ -522,12 +651,71 @@ class BackupManager:
         except (tarfile.TarError, OSError) as exc:
             raise BackupError("Recovery archive integrity check failed") from exc
 
+    @classmethod
+    def _restore_one_at_a_time(
+        cls, stream: BinaryIO, destination: Path, member_limit: int,
+    ) -> dict[str, str]:
+        """Materialize and reread every file, retaining only the SQLite and manifest."""
+        hashes: dict[str, str] = {}
+        seen: set[str] = set()
+        scratch = destination / ".media-restore"
+        manifest = "manifest.json"
+        database, users = RECOVERY_COMPONENTS
+        try:
+            with gzip.GzipFile(fileobj=stream, mode="rb") as expanded:
+                with tarfile.open(fileobj=expanded, mode="r|") as archive:
+                    for member in archive:
+                        name = member.name
+                        parts = name.split("/")
+                        if (name in seen or any(p in {"", ".", ".."} for p in parts)
+                                or "\\" in name or ":" in name
+                                or not (member.isfile() or member.isdir())):
+                            raise BackupError("Recovery archive contains an unsafe member")
+                        seen.add(name)
+                        if member.isdir():
+                            if name not in {"private_storage", users} and not name.startswith(users + "/"):
+                                raise BackupError("Recovery archive contains an unexpected directory")
+                            continue
+                        if name not in {manifest, database} and not name.startswith(users + "/"):
+                            raise BackupError("Recovery archive contains an unexpected file")
+                        if (member.size > member_limit
+                                or (name == manifest and member.size > 64 * 1024**2)
+                                or shutil.disk_usage(destination).free < member.size + DAILY_FREE_SPACE_MARGIN):
+                            raise BackupError("Daily recovery restore exceeded its scratch budget")
+                        path = destination / name if name in {database, manifest} else scratch
+                        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                        source = archive.extractfile(member)
+                        if source is None:
+                            raise BackupError("Recovery member is unreadable")
+                        try:
+                            with source, path.open("xb") as output:
+                                shutil.copyfileobj(source, output, length=1024**2)
+                            if name != manifest:
+                                hashes[name] = cls._sha256(path)
+                        finally:
+                            if path == scratch:
+                                scratch.unlink(missing_ok=True)
+                while expanded.read(1024**2):
+                    pass
+            if not {"private_storage", users, database, manifest} <= seen:
+                raise BackupError("Recovery bundle is missing required components")
+            # Detect incompatible tree layouts even though media use one scratch file.
+            if any("/".join(name.split("/")[:i]) in hashes
+                   for name in seen for i in range(1, len(name.split("/")))):
+                raise BackupError("Recovery archive has incompatible paths")
+            return hashes
+        except (tarfile.TarError, OSError, EOFError, zlib.error) as exc:
+            reason = _os_reason(exc) if isinstance(exc, OSError) else "archive_integrity"
+            raise BackupError(f"Daily recovery restore failed (reason={reason})") from None
+
     def restore_recovery_bundle(
         self,
         backup: Path,
         passphrase: str,
         *,
         restore_root: Path | None = None,
+        _bounded_member_limit: int | None = None,
+        _scratch_parent: Path | None = None,
     ) -> dict[str, Any]:
         """Restore and validate a recovery bundle outside the application root."""
 
@@ -544,7 +732,7 @@ class BackupManager:
 
         temporary_context: tempfile.TemporaryDirectory[str] | None = None
         if restore_root is None:
-            temporary_context = tempfile.TemporaryDirectory()
+            temporary_context = tempfile.TemporaryDirectory(dir=_scratch_parent)
             destination = Path(temporary_context.name) / "restore"
         else:
             destination = self._safe_restore_root(restore_root)
@@ -556,11 +744,19 @@ class BackupManager:
         restore_passed = False
         try:
             try:
+                restored_hashes = None
                 with self._openssl_stream(candidate, passphrase=passphrase, decrypt=True) as stream:
-                    self._extract_recovery_stream(stream, destination)
+                    if _bounded_member_limit is None:
+                        self._extract_recovery_stream(stream, destination)
+                    else:
+                        restored_hashes = self._restore_one_at_a_time(
+                            stream, destination, _bounded_member_limit,
+                        )
 
                 manifest_path = destination / "manifest.json"
                 for relative in ("manifest.json", *RECOVERY_COMPONENTS):
+                    if relative == RECOVERY_COMPONENTS[1] and restored_hashes is not None:
+                        continue
                     if not (destination / relative).exists():
                         missing.append(relative)
                 if missing:
@@ -578,7 +774,9 @@ class BackupManager:
                 expected_hashes = manifest.get("sha256")
                 if not isinstance(expected_hashes, dict):
                     raise BackupError("Recovery manifest hashes are invalid")
-                for relative, expected in expected_hashes.items():
+                if restored_hashes is not None and restored_hashes != expected_hashes:
+                    raise BackupError("Recovery component integrity check failed")
+                for relative, expected in (expected_hashes.items() if restored_hashes is None else ()):
                     path = destination / str(relative)
                     if not path.is_file() or not isinstance(expected, str):
                         raise BackupError("Recovery component is missing")
@@ -588,14 +786,33 @@ class BackupManager:
                 sqlite_status = self._validate_sqlite(
                     destination / "database" / "photo_bot.sqlite3"
                 )
+                manifest_sqlite = manifest.get("sqlite")
+                if not isinstance(manifest_sqlite, dict):
+                    raise BackupError("Recovery SQLite manifest is invalid")
+                expected_commerce = manifest_sqlite.get("commerce_fingerprints")
+                if (expected_commerce is not None
+                        and expected_commerce != sqlite_status["commerce_fingerprints"]):
+                    raise BackupError("Restored SQLite commerce fingerprint check failed")
+                gallery_files = self._validate_gallery_files(
+                    destination / "database" / "photo_bot.sqlite3",
+                    destination / "private_storage" / "users",
+                    None if restored_hashes is None else {
+                        name.removeprefix(RECOVERY_COMPONENTS[1] + "/")
+                        for name in restored_hashes if name.startswith(RECOVERY_COMPONENTS[1] + "/")
+                    },
+                )
                 sqlite_report_status = "PASS"
                 report = {
                     "backup_timestamp": backup_timestamp,
                     "artifact_status": artifact_status,
                     "sqlite_status": sqlite_report_status,
                     "migration": sqlite_status["migration"],
+                    "foreign_key_check": sqlite_status["foreign_key_check"],
+                    "commerce_fingerprints": sqlite_status["commerce_fingerprints"],
+                    "gallery_files": gallery_files,
                     "source_revision": manifest.get("source_revision"),
                     "restore_status": "PASS",
+                    "restore_method": "assembled_tree" if restored_hashes is None else "bounded_file_restore",
                     "missing_components": [],
                     "overall": "PASS",
                     "backup_name": candidate.name,
@@ -621,6 +838,10 @@ class BackupManager:
                     "tested_at": _now().isoformat(),
                     "error": str(exc),
                 }
+                # In particular on ENOSPC, release isolated plaintext BEFORE
+                # writing the FAIL receipt. Otherwise even the diagnostic write
+                # can fail, leaving yesterday's PASS and no per-artifact proof.
+                shutil.rmtree(destination)
             _write_json(self.backup_dir / "recovery_restore_status.json", report)
             self._recovery_stage(candidate.name, "restore", report)
             restore_passed = report.get("overall") == "PASS"
@@ -628,7 +849,7 @@ class BackupManager:
         finally:
             if temporary_context is not None:
                 temporary_context.cleanup()
-            elif not restore_passed:
+            elif not restore_passed and destination.exists():
                 # The caller explicitly supplied an initially empty isolated
                 # restore root, checked above. Never retain failed plaintext.
                 shutil.rmtree(destination)
