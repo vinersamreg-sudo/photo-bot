@@ -15,6 +15,7 @@ from pathlib import Path
 import stat
 import sqlite3
 
+from app import gallery_retention_terms
 from app.database import Database, ReadOnlyDatabase
 from app.media_guard import media_guard
 
@@ -35,6 +36,7 @@ Succeeded is the existing delivery/debit commit contract; legacy gallery-only
 rows retain their explicit succeeded status. Opening/favouriting is not a clock.
     """
     return connection.execute("""SELECT v.*,i.user_id,i.deleted,i.retention_until,i.purge_after,
+        i.created_at AS item_created_at,
         COALESCE(a.completed_at,v.created_at) AS completed_at
         FROM gallery_versions v JOIN gallery_items i ON i.id=v.gallery_item_id
         LEFT JOIN generation_attempts a ON a.id=v.attempt_id
@@ -59,9 +61,12 @@ def result_keys(connection,user_id=None):
         ) ORDER BY julianday(completed_at) DESC,result_key DESC""",(user_id,user_id,user_id,user_id)).fetchall()
 
 
-def visible_results(connection, user_id):
+def visible_results(connection, user_id, *, all_results=False):
     # Deleted results still occupy their chronological slot: no history revival.
     if not user_id:return []
+    if all_results:
+        return [r for r in successful_results(connection,user_id)
+                if not r['deleted'] and r['preview_watermarked_path']]
     rows={r['id']:r for r in successful_results(connection,user_id)}
     return [rows[k['version_id']] for k in result_keys(connection,user_id)[:LIMIT]
             if k['version_id'] in rows and not rows[k['version_id']]['deleted']]
@@ -132,6 +137,7 @@ class ResultRetention:
 
     def _plan(self,c,user_id=None,*,batch_limit=None):
         now=self.clock();rows=successful_results(c,user_id);keys=result_keys(c,user_id);counts=Counter();latest=set()
+        versioned=gallery_retention_terms.applies(c,self.settings,now)
         for r in keys:
             counts[r['user_id']]+=1
             if counts[r['user_id']]<=LIMIT:latest.add(r['version_id'])
@@ -155,9 +161,10 @@ class ResultRetention:
         context_items={r[0] for r in c.execute("""SELECT gallery_item_id FROM provider_contexts
             WHERE status='active' AND julianday(expires_at)>julianday(?)""",(now.isoformat(),))}
         orders=defaultdict(list)
-        for r in c.execute("""SELECT COALESCE(o.version_id,i.version_id) version_id,o.status,o.payment_purpose
+        for r in c.execute("""SELECT o.version_id,i.version_id intent_version_id,o.status,o.payment_purpose
             FROM payment_orders o LEFT JOIN payment_intents i ON i.id=o.intent_id"""):
-            if r['version_id']:orders[r['version_id']].append(r)
+            for version_id in {r['version_id'],r['intent_version_id']} - {None}:
+                orders[version_id].append(r)
         legacy_pending={r[0] for r in c.execute("""SELECT version_id FROM payment_intents WHERE version_id IS NOT NULL
             AND status IN ('pending','paid') AND NOT EXISTS(SELECT 1 FROM payment_orders o WHERE o.intent_id=payment_intents.id)
             AND (status='pending' OR NOT EXISTS(SELECT 1 FROM gallery_versions v WHERE v.id=version_id AND v.delivery_count>0))""")}
@@ -165,15 +172,24 @@ class ResultRetention:
         for r in rows:
             if not any(r[k] for k in PATHS['gallery_versions']):
                 retired+=1;continue
-            expired=(_time(r['retention_until']) or now+timedelta(days=1))<=now
-            if r['id'] in latest and not expired:continue
+            if versioned:
+                deadline=gallery_retention_terms.deadline(c,r)
+                if deadline is None:
+                    protected['retention_terms_unverified']+=1
+                    continue
+                if now < deadline:
+                    protected['versioned_retention_term']+=1
+                    continue
+            else:
+                expired=(_time(r['retention_until']) or now+timedelta(days=1))<=now
+                if r['id'] in latest and not expired:continue
             reason=None
             complete=_time(r['completed_at'])
             paid_anchor=paid.get(r['user_id'])
             unlocked_anchor=_time(r['last_delivered_at']) or _time(r['unlocked_at'])
             anchor=max([t for t in (complete,paid_anchor,unlocked_anchor) if t],default=None)
             if not complete:reason='completion_time_unverified'
-            elif r['user_id'] in unknown_paid_users:reason='payment_time_unverified'
+            elif not versioned and r['user_id'] in unknown_paid_users:reason='payment_time_unverified'
             elif r['unlock_status']=='unlocked' and not unlocked_anchor:reason='original_retention_unverified'
             elif busy:reason='in_flight_operations'
             elif r['deleted'] and (_time(r['purge_after']) or now+timedelta(days=1))>now:
@@ -187,7 +203,7 @@ class ResultRetention:
             elif any(o['status'] not in ('paid','delivered','partially_refunded','refunded') or
                      (o['payment_purpose']=='original_download' and o['status']!='delivered') for o in orders[r['id']]):
                 reason='payment_or_delivery_obligation'
-            elif (paid_anchor or unlocked_anchor or r['unlock_status']=='unlocked') and (
+            elif not versioned and (paid_anchor or unlocked_anchor or r['unlock_status']=='unlocked') and (
                     not anchor or now < anchor+timedelta(days=self.settings.paid_retention_days)):
                 reason='paid_retention'
             if reason:protected[reason]+=1
@@ -240,6 +256,7 @@ class ResultRetention:
                 except (OSError,ValueError):anomalies+=1
         deletable=sum(bool(r['attempt_id']) and not self._referenced(c,'gallery_versions',r['id']) for r in targets)
         report={'mode':'dry-run','completed_at':now.isoformat(),'limit':LIMIT,'successful_results':len(keys),
+                'policy':'versioned' if versioned else 'legacy',
                 'gallery_results_present':len(rows),'retired_metadata_results':retired,
                 'over_limit_results':sum(max(0,n-LIMIT) for n in counts.values()),
                 'eligible_results_total':eligible_total,'batch_limit':batch_limit,
@@ -266,15 +283,17 @@ class ResultRetention:
         return False
 
     def _apply(self,c,user_id):
-        report,targets,attempts,items,sessions,files=self._plan(c,user_id,batch_limit=100)
+        versioned=gallery_retention_terms.applies(c,self.settings,self.clock())
+        if versioned and not (
+            self.settings.result_retention_enabled and gallery_retention_terms.active(self.settings,self.clock())
+        ):
+            raise RuntimeError('Versioned cleanup is not enabled')
+        report,targets,attempts,items,sessions,files=self._plan(c,user_id,batch_limit=10 if versioned else 100)
         report.update(mode='execute',database_access='BEGIN IMMEDIATE; revalidated plan')
         if report['busy_operations']:
             report['mode']='busy'
             return report
         if report['path_anomaly_count']:raise RuntimeError('Result cleanup refused: unsafe path')
-        for path,root,identity in files:
-            _unlink(path,root,identity)
-            report['removed_files']+=1;report['removed_bytes']+=identity[2]
         for r in targets:
             c.execute("UPDATE gallery_versions SET source_path='',secondary_source_path=NULL,preview_watermarked_path=NULL,original_path=NULL WHERE id=?",(r['id'],))
             if r['attempt_id'] and not self._referenced(c,'gallery_versions',r['id']):
@@ -296,6 +315,11 @@ class ResultRetention:
         for user in sorted({r['user_id'] for r in targets}):
             c.execute('DELETE FROM tags WHERE user_id=? AND NOT EXISTS(SELECT 1 FROM gallery_item_tags t WHERE t.tag_id=tags.id)',(user,))
         if c.execute('PRAGMA foreign_key_check').fetchone():raise RuntimeError('Result cleanup integrity check failed')
+        # Check the planned DB state before the first irreversible unlink.
+        # The writer lock excludes changes while the DB transaction is open.
+        for path,root,identity in files:
+            _unlink(path,root,identity)
+            report['removed_files']+=1;report['removed_bytes']+=identity[2]
         return report
 
     def run(self,*,execute=False,user_id=None):

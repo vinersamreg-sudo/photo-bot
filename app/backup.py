@@ -305,6 +305,7 @@ class BackupManager:
         """Check retained originals/previews without selecting customer text."""
         counts = {"originals": 0, "previews": 0}
         connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        rows = None
         try:
             connection.execute("PRAGMA query_only=ON")
             tables = {row[0] for row in connection.execute(
@@ -337,6 +338,10 @@ class BackupManager:
                     counts[key] += 1
             return counts
         finally:
+            # An early validation error leaves a live cursor in its traceback.
+            # Finalize it before cleaning the decrypted scratch DB on Windows.
+            if rows is not None:
+                rows.close()
             connection.close()
 
     def _sqlite_snapshot(self, destination: Path) -> dict[str, Any]:

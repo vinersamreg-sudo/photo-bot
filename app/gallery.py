@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 from uuid import uuid4
 
+from app import gallery_retention_terms
 from app.config import Settings
 from app.database import Database
 from app.domain import InvalidInputError
@@ -166,6 +167,7 @@ class GalleryService:
                 ),
             )
             row = connection.execute("SELECT * FROM gallery_items WHERE id=?", (item_id,)).fetchone()
+            gallery_retention_terms.pin(connection, item_id, self.settings, now)
         return self._item(row)
 
     def create_linked_demo_item(
@@ -196,6 +198,7 @@ class GalleryService:
         connection.execute(
             "UPDATE demo_sessions SET gallery_item_id=? WHERE id=?", (item_id, session_id)
         )
+        gallery_retention_terms.pin(connection, item_id, self.settings, now)
         return item_id
 
     def compose_prompt(
@@ -670,8 +673,11 @@ class GalleryService:
         return [row["id"] for row in rows]
 
     def purge_item(self, item_id: str) -> None:
-        if self.settings.result_retention_enabled:
-            raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
+        with self.database.read() as connection:
+            if self.settings.result_retention_enabled or gallery_retention_terms.applies(
+                connection, self.settings, self.clock()
+            ):
+                raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
         if (
             self.provider_context_service is not None
             and self.settings.openai_context_delete_on_gallery_delete
@@ -719,8 +725,11 @@ class GalleryService:
             )
 
     def purge_due(self, execute: bool = False) -> list[str]:
-        if self.settings.result_retention_enabled:
-            raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
+        with self.database.read() as connection:
+            if self.settings.result_retention_enabled or gallery_retention_terms.applies(
+                connection, self.settings, self.clock()
+            ):
+                raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
         due = self.due_for_cleanup()
         if execute:
             for item_id in due:

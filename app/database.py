@@ -10,7 +10,7 @@ from typing import Iterator
 from uuid import NAMESPACE_URL, uuid5
 
 
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 
 
 class UnsupportedSchemaVersionError(RuntimeError):
@@ -1321,6 +1321,27 @@ class Database:
                             connection.execute(f"ALTER TABLE referral_relationships ADD COLUMN {name} {declaration}")
                     connection.execute("INSERT INTO schema_migrations(version,name,applied_at) VALUES(16,?,?)",
                         ("referral_v2_typed_promotion_ledgers", datetime.now(timezone.utc).isoformat()))
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+            if schema_version(connection) == 16:
+                # No backfill: an old or restored work has no proof of new terms.
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    if schema_version(connection) == 16:
+                        connection.execute("""CREATE TABLE IF NOT EXISTS gallery_retention_terms (
+                            gallery_item_id TEXT PRIMARY KEY REFERENCES gallery_items(id) ON DELETE CASCADE,
+                            policy_version INTEGER NOT NULL,
+                            effective_at TEXT NOT NULL
+                        )""")
+                        connection.execute("""CREATE TABLE IF NOT EXISTS payment_retention_terms (
+                            payment_order_id TEXT PRIMARY KEY REFERENCES payment_orders(id) ON DELETE CASCADE,
+                            policy_version INTEGER NOT NULL,
+                            effective_at TEXT NOT NULL
+                        )""")
+                        connection.execute("INSERT INTO schema_migrations(version,name,applied_at) VALUES(17,?,?)",
+                            ("versioned_gallery_retention_terms", datetime.now(timezone.utc).isoformat()))
                     connection.commit()
                 except Exception:
                     connection.rollback()

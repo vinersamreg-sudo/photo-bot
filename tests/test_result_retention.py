@@ -111,6 +111,140 @@ class ResultRetentionTests(TestCase):
                 self.assertEqual(before,self.financial())
                 self.assertEqual(self.apply()['removed_files'],0)
 
+    def start_versioned(self):
+        self.settings = replace(
+            self.settings, result_retention_enabled=True,
+            result_retention_policy_effective_at=(NOW - timedelta(days=1)).isoformat(),
+        )
+        self.gallery = GalleryService(self.db, self.storage, self.settings, lambda: NOW)
+        self.retention = ResultRetention(self.settings, self.db, lambda: NOW)
+
+    def consume_fixture(self, *versions, source=None):
+        with self.db.transaction() as c:
+            lot = c.execute("SELECT id FROM generation_credit_lots WHERE user_id='u' AND source_type='initial_free'").fetchone()[0]
+            if source:
+                c.execute("""INSERT INTO generation_credit_lots(id,user_id,source_type,source_payment_order_id,
+                    granted_credits,available_credits,consumed_credits,created_at,updated_at)
+                    VALUES('paid-lot','u','continuation_pack',?,1,0,1,?,?)""", (source, NOW.isoformat(), NOW.isoformat()))
+                lot = 'paid-lot'
+            for version in versions:
+                c.execute("""INSERT INTO generation_credit_reservations(
+                    id,user_id,lot_id,attempt_id,idempotency_key,status,reserved_at,updated_at,consumed_at)
+                    VALUES(?,'u',?,?,?,'consumed',?,?,?)""",
+                    (version, lot, 'a-' + version, 'consume-' + version, *(NOW.isoformat(),) * 3))
+
+    def payment_fixture(self, order, *, when=NOW, status='paid', version='', stamp=True):
+        from app.gallery_retention_terms import pin_order
+        with self.db.transaction() as c:
+            c.execute("""INSERT INTO payment_orders(id,public_token,attempt_id,version_id,user_id,
+                provider,merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
+                created_at,updated_at,expires_at,paid_at,payment_purpose)
+                VALUES(?,?,'',?,'u','synthetic','digest',?,4900,'RUB',?,'test',?,?,?,?,'continuation_pack')""",
+                (order, order, version, len(order), status, when.isoformat(), when.isoformat(),
+                 (when + timedelta(hours=1)).isoformat(), when.isoformat() if status == 'paid' else None))
+            if stamp:
+                pin_order(c, order, self.settings, when)
+
+    def test_versioned_fourth_result_paginates_and_free_expires_without_touching_legacy(self):
+        legacy = self.seed(1)[0]
+        self.start_versioned()
+        work = self.seed(4, start=1)
+        self.consume_fixture(*(v for v, _i, _p in work))
+        self.retention.clock = lambda: NOW + timedelta(days=14, seconds=3)
+        self.assertEqual(self.retention.run()['candidate_results'], 3)
+        gallery = WorkGallery(self.db, self.settings.temp_dir)
+        self.assertEqual(len(gallery.works('u', 1, all_results=True).entries), 3)
+        self.assertEqual(len(gallery.works('u', 2, all_results=True).entries), 2)
+        self.retention.clock = lambda: NOW + timedelta(days=14, seconds=4)
+        self.assertEqual(self.retention.run()['candidate_results'], 4)
+        # Already-missing media must not make cleanup affect another work.
+        work[0][2][0].unlink()
+        self.assertGreater(self.retention.run()['already_missing_files'], 0)
+        before = self.financial()
+        self.apply()
+        self.assertTrue(all(p.exists() for p in legacy[2]))
+        self.assertTrue(all(not p.exists() for _, _, paths in work for p in paths))
+        self.assertEqual(self.financial(), before)
+        with self.assertRaises(InvalidInputError):
+            self.gallery.purge_due(execute=True)
+
+    def test_paid_sixty_days_and_future_purchase_does_not_extend_another_work(self):
+        self.start_versioned()
+        paid, free, pending = self.seed(3)
+        self.payment_fixture("paid-order")
+        self.payment_fixture("unrelated-future-order", when=NOW + timedelta(days=50))
+        self.payment_fixture("pending-order", status="pending", version=pending[0])
+        self.consume_fixture(paid[0], source="paid-order")
+        # Use the initial-free lot for these explicit fixtures.
+        self.consume_fixture(free[0], pending[0])
+        self.retention.clock = lambda: NOW + timedelta(days=60) - timedelta(seconds=1)
+        self.assertEqual(self.retention.run()['candidate_results'], 1)
+        self.retention.clock = lambda: NOW + timedelta(days=60)
+        self.assertEqual(self.retention.run()['candidate_results'], 2)
+        before = self.financial()
+        self.apply()
+        self.assertTrue(all(p.exists() for p in pending[2]))
+        self.assertEqual(self.financial(), before)
+
+    def test_legacy_order_replayed_after_cutoff_is_not_assigned_shorter_terms(self):
+        self.start_versioned()
+        work = self.seed(1)[0]
+        self.payment_fixture("legacy-order", when=NOW - timedelta(days=5), stamp=False)
+        self.consume_fixture(work[0], source="legacy-order")
+        with self.db.transaction() as c:
+            c.execute("UPDATE payment_orders SET paid_at=? WHERE id='legacy-order'", (NOW.isoformat(),))
+        self.retention.clock = lambda: NOW + timedelta(days=500)
+        self.assertEqual(self.retention.run()['protection_reasons'], {'retention_terms_unverified': 1})
+        self.assertEqual(self.apply()['removed_files'], 0)
+
+    def test_first_original_delivery_extends_to_paid_term_but_redownload_does_not(self):
+        self.start_versioned()
+        work = self.seed(1)[0]
+        self.consume_fixture(work[0])
+        self.payment_fixture("original-pack")
+        with self.db.transaction() as c:
+            self.commerce.grant_continuation_pack(c, user_id='u', payment_order_id='original-pack',
+                                                 payment_intent_id=None)
+        first = NOW + timedelta(days=5)
+        self.commerce.clock = lambda: first
+        reservation = self.commerce.reserve_unlock_delivery('u', work[0])
+        self.commerce.commit_unlock_delivery('u', work[0], reservation.entitlement_id)
+        with self.db.transaction() as c:
+            c.execute("UPDATE gallery_versions SET delivery_count=2,last_delivered_at=? WHERE id=?",
+                      ((first + timedelta(days=20)).isoformat(), work[0]))
+        self.retention.clock = lambda: first + timedelta(days=60) - timedelta(seconds=1)
+        self.assertEqual(self.retention.run()['candidate_results'], 0)
+        self.retention.clock = lambda: first + timedelta(days=60)
+        self.assertEqual(self.retention.run()['candidate_results'], 1)
+
+    def test_trash_and_inflight_protection_stay_in_force_after_new_deadline(self):
+        self.start_versioned()
+        first, second = self.seed(2)
+        self.consume_fixture(first[0], second[0])
+        with self.db.transaction() as c:
+            c.execute("UPDATE gallery_items SET deleted=1,purge_after=? WHERE id=?",
+                      ((NOW + timedelta(days=30)).isoformat(), first[1]))
+            c.execute("UPDATE generation_attempts SET status='processing' WHERE id=?", ('a-' + second[0],))
+        self.retention.clock = lambda: NOW + timedelta(days=20)
+        self.assertEqual(self.retention.run()['candidate_results'], 0)
+        with self.db.transaction() as c:
+            c.execute("UPDATE generation_attempts SET status='succeeded' WHERE id=?", ('a-' + second[0],))
+        self.assertEqual(self.retention.run()['protection_reasons'], {'trash_retention': 1})
+
+    def test_fk_anomaly_blocks_before_unlink(self):
+        self.start_versioned()
+        work, untouched = self.seed(2)
+        self.consume_fixture(work[0])
+        self.retention.clock = lambda: NOW + timedelta(days=15)
+        with sqlite3.connect(self.settings.database_path) as raw:
+            raw.execute("PRAGMA foreign_keys=OFF")
+            raw.execute("UPDATE gallery_versions SET parent_version_id='missing' WHERE id=?", (untouched[0],))
+        raw.close()
+        with patch('app.result_retention._unlink') as unlink, self.assertRaises(RuntimeError):
+            self.retention.run(execute=True)
+        unlink.assert_not_called()
+        self.assertTrue(all(path.exists() for path in work[2]))
+
     def test_corrections_each_occupy_one_slot_and_order_uses_completion(self):
         seeded=self.seed(8,same_item=True)
         with self.db.read() as c:self.assertEqual([r['id'] for r in visible_results(c,'u')],[r[0] for r in reversed(seeded[-3:])])

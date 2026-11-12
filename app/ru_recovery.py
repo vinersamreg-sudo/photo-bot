@@ -10,7 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -21,7 +21,10 @@ from app.payment_admin import payment_reconciliation_summary
 from app.recovery_retention import artifact
 
 SAMARA = timezone(timedelta(hours=4))
-SLOTS = ("a", "b", "c")
+DAILY_POINTS = 4
+WEEKLY_POINTS = 2
+MIN_POINTS = 2
+SLOTS = tuple("abcdefg")
 MIN_FREE = 16 * 1024**3
 CAP = 8 * 1024**3
 DB_REL = "data/photo_bot.sqlite3"
@@ -52,10 +55,13 @@ def _restore(manager, filename, passphrase, dest, expected_hash):
     if artifact(manager.backup_dir / filename)["sha256"] != expected_hash:
         raise BackupError("Ciphertext hash mismatch")
     report = manager.restore_recovery_bundle(Path(filename), passphrase, restore_root=dest)
-    if report.get("overall") != "PASS" or report.get("migration") != CURRENT_SCHEMA_VERSION:
+    if report.get("overall") != "PASS" or not 16 <= (report.get("migration") or 0) <= CURRENT_SCHEMA_VERSION:
         raise BackupError("Restore or expected schema verification failed")
     encoded = json.dumps(report["commerce_fingerprints"], sort_keys=True).encode()
-    return {**_proof(dest, expected_hash), "commerce_sha256": hashlib.sha256(encoded).hexdigest()}
+    manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    state = json.dumps(manifest["sha256"], sort_keys=True, separators=(",", ":")).encode()
+    return {**_proof(dest, expected_hash), "commerce_sha256": hashlib.sha256(encoded).hexdigest(),
+            "state_sha256": hashlib.sha256(state).hexdigest(), "source_schema": report["migration"]}
 
 
 def _state(root, scratch, *, existing=True):
@@ -104,13 +110,16 @@ def export_migration(root, scratch, passphrase):
 class S3:
     """Dedicated private bucket; no signed URLs or credentials in arguments."""
 
-    def __init__(self, endpoint: str, bucket: str, region: str):
+    def __init__(self, endpoint: str, bucket: str, region: str, *, checkpoints=False):
         url = urlsplit(endpoint)
         if (url.scheme != "https" or not url.hostname or url.username is not None
                 or url.query or url.fragment or url.path not in {"", "/"}
                 or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket)):
             raise BackupError("Invalid independent S3 endpoint")
         self.bucket = bucket
+        self.prefix = "ravuna/db" if checkpoints else "ravuna"
+        self.slots = SLOTS[:3] if checkpoints else SLOTS
+        self.checkpoints = checkpoints
         self.cli = ["aws", "--endpoint-url", endpoint, "--region", region, "--output", "json", "--no-cli-pager"]
 
     def _run(self, *args):
@@ -124,7 +133,7 @@ class S3:
         return json.loads(raw) if raw.strip() else {}
 
     def ensure_bounded(self):
-        # Versioning (even suspended) may keep more than the three fixed slots.
+        # Versioning (even suspended) may keep more than the fixed slots.
         if self._api("get-bucket-versioning", "--bucket", self.bucket).get("Status"):
             raise BackupError("Dedicated recovery bucket versioning must never have been enabled")
         lifecycle = self._api("get-bucket-lifecycle-configuration", "--bucket", self.bucket)
@@ -133,44 +142,49 @@ class S3:
                 continue
             if any(key in rule for key in ("Expiration", "NoncurrentVersionExpiration", "Transitions")):
                 raise BackupError("Automatic expiry/transition of completed objects is not allowed")
+        allowed_prefixes = {"", "ravuna/", f"{self.prefix}/", f"{self.prefix}/slots/"}
         if not any(
             rule.get("Status") == "Enabled"
             and 1 <= rule.get("AbortIncompleteMultipartUpload", {}).get("DaysAfterInitiation", 0) <= 2
-            and (rule.get("Filter", {}) in ({}, {"Prefix": ""}, {"Prefix": "ravuna/"}, {"Prefix": "ravuna/slots/"})
-                 and rule.get("Prefix", "") in {"", "ravuna/", "ravuna/slots/"})
+            and (not rule.get("Filter") or rule["Filter"] in [{"Prefix": p} for p in allowed_prefixes])
+            and rule.get("Prefix", "") in allowed_prefixes
             for rule in lifecycle.get("Rules", [])
         ):
             raise BackupError("A bounded incomplete upload lifecycle is required")
 
     def get_catalog(self, work):
-        listing = self._api("list-objects-v2", "--bucket", self.bucket, "--prefix", "ravuna/catalog.json")
-        items = [item for item in listing.get("Contents", []) if item["Key"] == "ravuna/catalog.json"]
+        key = f"{self.prefix}/catalog.json"
+        listing = self._api("list-objects-v2", "--bucket", self.bucket, "--prefix", key)
+        items = [item for item in listing.get("Contents", []) if item["Key"] == key]
         if not items:
-            return {"points": [], "scheduled_day": None}, None
+            return ({"version": 1, "points": []} if self.checkpoints else
+                    {"points": [], "scheduled_day": None}), None
         if items[0]["Size"] > 8192:
             raise BackupError("Catalog exceeds bounds")
         path = work / "catalog.read.json"
-        info = self._api("get-object", "--bucket", self.bucket, "--key", "ravuna/catalog.json", path)
+        info = self._api("get-object", "--bucket", self.bucket, "--key", key, path)
+        if path.stat().st_size > 8192:
+            raise BackupError("Catalog exceeds bounds")
         return json.loads(path.read_bytes()), info["ETag"]
 
     def put_catalog(self, catalog, etag, work):
         path = work / "catalog.write.json"
         path.write_text(json.dumps(catalog, separators=(",", ":")), encoding="utf-8")
         condition = ("--if-match", etag) if etag else ("--if-none-match", "*")
-        self._api("put-object", "--bucket", self.bucket, "--key", "ravuna/catalog.json",
+        self._api("put-object", "--bucket", self.bucket, "--key", f"{self.prefix}/catalog.json",
                   "--body", path, "--content-type", "application/json", *condition)
 
     def _uri(self, slot):
-        if slot not in SLOTS:
+        if slot not in self.slots:
             raise BackupError("Unknown recovery slot")
-        return f"s3://{self.bucket}/ravuna/slots/{slot}.enc"
+        return f"s3://{self.bucket}/{self.prefix}/slots/{slot}.enc"
 
     def put(self, slot, path):
         self._run("s3", "cp", path, self._uri(slot), "--only-show-errors")
 
     def get(self, slot, path, expected_size):
         self._uri(slot)
-        info = self._api("head-object", "--bucket", self.bucket, "--key", f"ravuna/slots/{slot}.enc")
+        info = self._api("head-object", "--bucket", self.bucket, "--key", f"{self.prefix}/slots/{slot}.enc")
         if info["ContentLength"] != expected_size:
             raise BackupError("External recovery size mismatch")
         self._run("s3", "cp", self._uri(slot), path, "--only-show-errors")
@@ -179,30 +193,86 @@ class S3:
         self._run("s3", "rm", self._uri(slot), "--only-show-errors")
 
 
+def _day(value):
+    day = date.fromisoformat(value)
+    if day.isoformat() != value:
+        raise BackupError("Noncanonical recovery day")
+    return day
+
+
 def _catalog(value):
-    if not isinstance(value, dict) or set(value) != {"points", "scheduled_day"}:
+    if not isinstance(value, dict):
+        raise BackupError("Invalid recovery catalog")
+    legacy = set(value) == {"points", "scheduled_day"}
+    if not legacy and (set(value) != {"version", "points", "scheduled_days"} or value["version"] != 2):
         raise BackupError("Invalid recovery catalog")
     points = value["points"]
-    if not isinstance(points, list) or len(points) > 2:
+    if not isinstance(points, list) or len(points) > (2 if legacy else DAILY_POINTS + WEEKLY_POINTS):
         raise BackupError("Invalid recovery catalog count")
-    if value["scheduled_day"] is not None:
-        datetime.strptime(value["scheduled_day"], "%Y-%m-%d")
+    if legacy and value["scheduled_day"] is not None:
+        _day(value["scheduled_day"])
     seen = set()
+    states = set()
     for point in points:
-        if (not isinstance(point, dict) or set(point) != {"slot", "sha256", "size", "verified_at"}
-                or point["slot"] not in SLOTS or point["slot"] in seen
+        fields = {"slot", "sha256", "size", "verified_at"}
+        if not legacy:
+            fields.add("state_sha256")
+        if (not isinstance(point, dict) or set(point) != fields
+                or point["slot"] not in (SLOTS[:3] if legacy else SLOTS) or point["slot"] in seen
                 or not re.fullmatch(r"[0-9a-f]{64}", point["sha256"])
                 or type(point["size"]) is not int or not 0 < point["size"] <= CAP):
             raise BackupError("Invalid recovery point")
         if datetime.fromisoformat(point["verified_at"]).tzinfo is None:
             raise BackupError("Invalid recovery point timestamp")
+        state = point.get("state_sha256")
+        if state is not None:
+            if not re.fullmatch(r"[0-9a-f]{64}", state) or state in states:
+                raise BackupError("Invalid or duplicate recovery state")
+            states.add(state)
         seen.add(point["slot"])
-    return points
+    if legacy:
+        # An old global date could have been followed by a manual run. Preserve
+        # both archives, but do not invent which one proves that schedule.
+        return [{**p, "state_sha256": None} for p in points], {}
+    days = value["scheduled_days"]
+    if not isinstance(days, dict) or len(days) > DAILY_POINTS + WEEKLY_POINTS:
+        raise BackupError("Invalid recovery schedule history")
+    for label, slot in days.items():
+        _day(label)
+        if slot not in seen:
+            raise BackupError("Recovery date points to an absent slot")
+    return points, days
+
+
+def _select_days(days, current_day):
+    labels = sorted(days, reverse=True)
+    selected = set(labels[:DAILY_POINTS])
+    week_start = current_day - timedelta(days=current_day.weekday())
+    for weeks_ago in range(1, WEEKLY_POINTS + 1):
+        start = week_start - timedelta(weeks=weeks_ago)
+        choice = next((label for label in labels if start <= _day(label) < start + timedelta(days=7)), None)
+        if choice:
+            selected.add(choice)
+    return {label: days[label] for label in sorted(selected, reverse=True)}
+
+
+def _read_point(store, point, destination, inspect=artifact):
+    store.get(point["slot"], destination, point["size"])
+    received = inspect(destination)
+    if received["sha256"] != point["sha256"] or received["size_bytes"] != point["size"]:
+        raise BackupError("Recovery readback failed integrity verification")
 
 
 def promote(store, work, archive, verify, scheduled=False, now=_utcnow):
     current, etag = store.get_catalog(work)
-    points = _catalog(current)
+    points, days = _catalog(current)
+    start_day = scheduled if isinstance(scheduled, str) else None
+    if start_day:
+        day = _day(start_day)
+        if days and start_day <= max(days):
+            raise BackupError("A scheduled recovery is already recorded for this or a later day")
+    elif len(points) >= MIN_POINTS:
+        raise BackupError("Manual recovery cannot rotate an established schedule")
     candidate = next(slot for slot in SLOTS if slot not in {p["slot"] for p in points})
     initial = artifact(archive)
     if not 0 < initial["size_bytes"] <= CAP:
@@ -212,10 +282,7 @@ def promote(store, work, archive, verify, scheduled=False, now=_utcnow):
         previous_root = work / "previous"
         previous_root.mkdir(exist_ok=True)
         previous = previous_root / READBACK
-        store.get(points[0]["slot"], previous, points[0]["size"])
-        identity = artifact(previous)
-        if identity["sha256"] != points[0]["sha256"] or identity["size_bytes"] != points[0]["size"]:
-            raise BackupError("Previous recovery failed full readback")
+        _read_point(store, points[0], previous)
         previous.unlink()
     store.put(candidate, archive)
     archive.unlink()
@@ -223,35 +290,59 @@ def promote(store, work, archive, verify, scheduled=False, now=_utcnow):
     received = artifact(archive)
     if any(received[key] != initial[key] for key in ("sha256", "size_bytes")):
         raise BackupError("New recovery failed full readback")
-    verify(initial["sha256"])
-    date = now()
-    start_day = scheduled if isinstance(scheduled, str) else None
+    proof = verify(initial["sha256"])
+    state = proof.get("state_sha256") if isinstance(proof, dict) else None
+    if not isinstance(state, str) or not re.fullmatch(r"[0-9a-f]{64}", state):
+        raise BackupError("Recovery has no verified content identity")
+    timestamp = now()
     new = {"slot": candidate, "size": initial["size_bytes"],
-           "sha256": initial["sha256"], "verified_at": date.isoformat()}
-    store.put_catalog({"points": [new, *points[:1]],
-                       "scheduled_day": start_day or current["scheduled_day"]}, etag, work)
-    # No deletion before catalog publication. On failure there are at most
-    # three slots; next execution reuses the unreferenced slot.
-    if len(points) == 2:
-        store.discard(points[1]["slot"])
-    return {"verified_points": min(len(points) + 1, 2), "scheduled_day": start_day}
+           "sha256": initial["sha256"], "verified_at": timestamp.isoformat(), "state_sha256": state}
+    duplicate = next((p for p in points if p["state_sha256"] == state), None)
+    if duplicate and duplicate == points[0] and len(points) >= MIN_POINTS:
+        # The newest kept payload was already verified; check a *distinct*
+        # fallback too before repointing any schedule labels to the duplicate.
+        _read_point(store, points[1], previous)
+        previous.unlink()
+    if duplicate:
+        days = {label: candidate if slot == duplicate["slot"] else slot for label, slot in days.items()}
+    if start_day:
+        days = _select_days({**days, start_day: candidate}, day)
+    kept = [new] + [p for p in points if p != duplicate and p["slot"] in set(days.values())]
+    # Keep a distinct fallback while bringing an empty/legacy catalog up to
+    # date. An identical payload never counts as a second recovery point.
+    for old in points:
+        if len(kept) >= MIN_POINTS:
+            break
+        if old != duplicate and old not in kept:
+            kept.append(old)
+    updated = {"version": 2, "points": kept, "scheduled_days": days}
+    _catalog(updated)
+    store.put_catalog(updated, etag, work)
+    # No retirement before durable CAS. Failure leaves at most seven fixed
+    # names. The next single writer overwrites unreferenced slots safely.
+    live = {p["slot"] for p in kept}
+    for old in points:
+        if old["slot"] not in live:
+            store.discard(old["slot"])
+    return {"verified_points": len(kept), "scheduled_day": start_day}
 
 
-def watchdog(store, work, now=None):
+def watchdog(store, work, verify, now=None):
     now = now or _utcnow()
     catalog, _etag = store.get_catalog(work)
-    points = _catalog(catalog)
+    points, days = _catalog(catalog)
     samara = now.astimezone(SAMARA)
     expected = samara.date() if samara.hour >= 6 else samara.date() - timedelta(days=1)
-    if (len(points) != 2 or catalog["scheduled_day"] != expected.isoformat()
-            or not timedelta() <= now - datetime.fromisoformat(points[0]["verified_at"]) <= timedelta(hours=27)):
+    point = next((p for p in points if p["slot"] == days.get(expected.isoformat())), None)
+    if (len(points) < MIN_POINTS or not point
+            or not timedelta() <= now - datetime.fromisoformat(point["verified_at"]) <= timedelta(hours=27)):
         raise BackupError("Scheduled RU recovery is missing, stale or incomplete")
-    for point in points:
-        scratch = work / READBACK
-        store.get(point["slot"], scratch, point["size"])
-        if artifact(scratch)["sha256"] != point["sha256"]:
-            raise BackupError("RU watchdog found an unreadable point")
-        scratch.unlink()
+    scratch = work / READBACK
+    _read_point(store, point, scratch)
+    proof = verify(point["sha256"])
+    if not isinstance(proof, dict) or proof.get("state_sha256") != point["state_sha256"]:
+        raise BackupError("Independent restore did not match the scheduled state")
+    return {"verified_points": len(points), "independent_restore": "PASS", "scheduled_day": expected.isoformat()}
 
 
 def _scheduled_day(start):
@@ -291,7 +382,7 @@ def main(argv=None):
     try:
         root, scratch = args.root.absolute(), args.scratch.absolute()
         db = _state(root, scratch, existing=args.command not in {"restore", "watchdog"})
-        if not args.passphrase_file and args.command != "watchdog":
+        if not args.passphrase_file:
             raise BackupError("Passphrase file is required")
         phrase = args.passphrase_file.read_text(encoding="utf-8").rstrip("\r\n") if args.passphrase_file else ""
         if args.command == "export":
@@ -324,10 +415,13 @@ def main(argv=None):
                 with tempfile.TemporaryDirectory(dir=scratch) as work:
                     work = Path(work)
                     if args.command == "watchdog":
-                        watchdog(store, work)
-                        result = {"verified_points": 2}
+                        manager = BackupManager(db, work, 14)
+                        result = watchdog(store, work, lambda h: _restore(
+                            manager, READBACK, phrase, work / "restore", h))
                     else:
                         scheduled = _scheduled_day(_utcnow()) if args.scheduled else None
+                        if args.scheduled and not scheduled:
+                            raise BackupError("A scheduled recovery needs a verified timer trigger")
                         manager = BackupManager(db, work / "archive", 14)
                         metadata = manager.create_recovery_bundle(phrase, daily_ciphertext_limit=CAP)
                         filename = metadata["recovery_bundle_name"]

@@ -347,3 +347,12 @@ never reuse a `pending` order whose `expires_at` has passed.
 Run `python scripts/test_fast.py max` for scoped MAX changes. Add named application
 tests for exact callback/state behavior. Real MAX walkthrough is T4 and requires
 explicit authorization.
+
+## Prepared 14/60 retention UI (not live)
+
+After publication and the explicit effective timestamp, disclose the new
+free/paid terms in the main menu, upload and package offer. "Мои работы"
+opens with the three most recent available results; navigation reaches the
+older available results. The page size is not a storage cap. Existing work
+and purchases retain their own terms. See the
+[unpublished coordinated copy](RETENTION_POLICY_DRAFT.md).

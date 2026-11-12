@@ -1,7 +1,8 @@
 # Ravuna RU cutover runbook — prepared, not deployed
 
-Use an independent Ravuna VPS, not TripDay. Initial size: 2 vCPU / 4 GB /
-100 GB NVMe and stable Russian public IPv4. No infrastructure purchase, route
+Use an independent Ravuna VPS, not TripDay. Pilot candidate: Selectel VDS
+4-8-80, Moscow ru-2c, 4 vCPU / 8 GB / 80 GB local NVMe with public IPv4.
+Minimum 2/4/50 only if the tested restore scratch/headroom fits. No purchase, route
 switch, data movement or production job is implied. Keep Hetzner backup and
 OpenAI Image settings unchanged; exclude personal VPN and other services.
 
@@ -53,25 +54,99 @@ credentials and a private HTTPS alert receiver. Verify conditional catalog PUT
 and multipart abort support; set lifecycle only for incomplete multipart
 uploads (one or two days), not expiry of completed objects. Do not share writer credentials
 between hosts. Verify region, contracts, cost and privileges on the chosen store.
+Install the isolated CLI config from `ops/ru/aws-recovery.config` as
+`/etc/ravuna/ru-s3-cli.conf` on both hosts. 64 MiB multipart chunks keep routine
+write requests below Yandex's allowance at the modeled load; verify real
+request counts, especially if SQLite reaches the multipart threshold.
 
-The 03:00 Europe/Samara timer publishes only after full remote readback, SHA256,
-restore, foreign-key checks and commerce verification. Scheduled evidence also
-requires a recent systemd timer trigger in its start window. Manual runs omit
-the scheduled flag. The 06:05 watchdog checks the scheduled proof and reads back both
-verified points. For production put this one daily watchdog on an independent
-RU runner, with read-only credentials and its own alert delivery, to detect
-total VPS loss without double daily watchdog traffic. The backup
-retains two catalog entries and uses one fixed candidate slot; a failure cannot
-delete either currently published point. Only after conditional catalog commit
-can the retired slot be removed. Keep encryption at rest for local scratch and
-restore storage, with >=16 GiB free and an 8 GiB candidate limit. Preserve
-all existing Hetzner recovery points until separately authorized.
+The 03:00 Europe/Samara timer publishes only after full remote readback,
+SHA256, restore, FK checks and commerce verification. Scheduled evidence needs
+a recent timer trigger. Manual bootstrap can fill at most two distinct fallback
+points and cannot advance the schedule. Keep the last four successful daily
+labels and the latest successful label in each of the two completed Samara
+calendar weeks (Monday–Sunday). Overlap is one object; equal verified DB/media
+content is one object even if ciphertext differs. Six published slots plus
+one fixed candidate bound storage. At least two distinct verified points are
+required for healthy recovery; a brand-new bucket cannot report PASS for the
+independent watchdog before this. A failed upload, readback, restore or CAS
+never removes a published point. A verified replacement and durable CAS
+precede retiring old slots. Use a single writer host and separate reader.
+Never reinitialize a failed/unknown catalog. Reconcile obsolete slots and
+alerts on the pilot; do not apply object-expiry rules to complete objects.
+
+On an independent RU runner, the 06:05 watchdog reads the actual scheduled
+ciphertext, validates SHA256, decrypts and restores all required files and SQLite,
+checks FK and commerce, and compares verified content identity. It needs its own
+read-only S3 credentials, separately provisioned recovery passphrase, encrypted
+private scratch and alert receiver. The writer additionally rechecks the newest
+previous point (a second fallback read may be needed if content is identical).
+Minimum scratch free space 16 GiB and ciphertext cap 8 GiB remain unchanged.
+For exports/restores, schema 16 and 17 archives use their original schema for
+verification; older formats are not implicitly imported. Verify an isolated
+copy before migrating its schema, never overwrite live data. Preserve all
+existing Hetzner recovery points until separately authorized.
+
+### SQLite between full recoveries
+
+Proposed separate 15-minute unit: use SQLite online backup API (committed WAL
+pages included without copying live WAL/SHM), encrypt, upload, fully read back,
+verify SQLite/FKs/commerce and conditionally promote under `ravuna/db/`.
+Two verified slots plus one candidate, separate writer credential, separate
+passphrase, 128 MiB ciphertext cap. Neither catalog controls the other.
+Use the independent read-only `ravuna-ru-db-watchdog.timer` every 15 min
+(stale after 30 min), with separate reader credentials, and prove actual
+alert delivery. A `restore` is into a new private
+scratch file, never the production SQLite path. Goals, not guarantees:
+DB RPO <=15 min plus completion, media RPO <=24 h plus completion, full RTO <=4 h.
+A newer DB is not automatically safe with older media. Recover corresponding
+later media or prove all references before promotion; otherwise stop, use a
+coherent full point and reconcile.
+
+Before reopening after a crash, fence both runtimes, reconcile all provider
+invoices since the oldest candidate snapshot plus overlap, including orders
+created after the last checkpoint. Compare payment statuses, receipts, one
+grant per invoice, consumption, reversals and balances. Recover original
+checkout/order mapping and use the existing verified idempotent ResultURL
+path when possible. If mapping is missing or an acknowledged payment cannot
+be reconstructed, keep sales closed; no improvised grants. A 15-minute copy
+is not zero-loss payment recovery. Validate independent acquisition of order
+mapping/provider records; consider a separately approved durable event journal
+if that gate cannot be met.
+
+### Cost at observed archive size
+
+[12 November off-site run](https://github.com/vinersamreg-sudo/photo-bot/actions/runs/43149493291)
+published a 3,883,894,882-byte artifact (3.617 GiB). This is artifact size, a
+sizing proxy for its encrypted media payload; no new production copy or private
+download. At that size: 21.70 GiB steady for six unique archives, up to 25.32
+GiB at seven slots. Three full reads/day (candidate, previous, independent
+restore) give ~325.54 GiB in 30 days. At observed SQLite size 44.53 MiB,
+96 checkpoints/day give another ~125.24 GiB of readback, plus up to 0.13 GiB
+storage, excluding occasional repeats and growth. [Yandex Standard](https://yandex.cloud/ru/docs/storage/pricing):
+~437 ₽/mo for full points alone, ~647 ₽ with checkpoints, ~1,747 ₽ with 1,100 ₽
+VPS (or ~2,347 ₽ including 600 ₽ assumed independent runner). Budget includes
+7 full slots and 3 checkpoint slots, and does not count snapshot copies on VPS.
+[FirstVDS S3](https://firstvds.ru/services/s3) advertises 250 ₽/mo for 100 GB
+without traffic charges; use only after confirming conditional catalog writes,
+multipart abort, scoped reader, legal RU location and complete restore. Then
+VPS+S3 ≈1,350 ₽/mo before the runner. Recalculate from actual monthly bytes after
+the pilot; do not count avoided storage before historic obligations are resolved.
+
+Consider incrementals only after the full scheme passes: independently
+encrypted, content-addressed media chunks plus a self-contained manifest and a
+full SQLite snapshot at each point. Measure compressed unique bytes and read
+cost on synthetic data. Reference-count manifests, protect the last two
+verified manifests and their complete transitive object sets, rehearse missing
+chunks, key rotation and full restore before approving garbage collection.
+Do not replace full copies with a fragile delta chain or enable this now.
 
 Acceptance: two consecutive plan-triggered runs, full S3 readback and restore,
 and a missed schedule with a successful manual run still producing a delivered
-alert. Targets, not proven: full RPO <=24 h plus completion, RTO <=4 h. Two
-daily copies do not give zero-loss commerce. Before GO, prove an independent
-way to recover acknowledged payments, grants, and post-snapshot consumption.
+alert. In addition simulate at least two calendar-week transitions, checkpoint
+corruption, stale monitoring and repeated payment callbacks. Before GO, prove
+an independent way to recover acknowledged payments, grants, and post-snapshot
+consumption. Reapply verified deletion/expiry records before exposing any
+restored gallery, especially older archives.
 
 ## Data export and cutover
 
