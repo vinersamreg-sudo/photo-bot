@@ -34,6 +34,18 @@ def select_image_provider(
     """Build exactly the configured provider or fail before any request."""
 
     selected = (provider_name or settings.image_provider).strip().lower()
+    if settings.ai_gateway_url:
+        if (
+            selected != "openai" or not settings.openai_image_model
+            or settings.app_env not in {"staging", "test"}
+            or settings.max_public_access_enabled or settings.payments_enabled
+            or settings.openai_responses_image_enabled or settings.openai_api_key
+            or settings.robokassa_mode != "sandbox" or settings.payment_webhook_enabled
+        ):
+            raise OpenAIConfigurationError("AI gateway is restricted to a closed mock stand")
+        from app.ai_gateway import RemoteImageProvider
+
+        return ProviderSelection(RemoteImageProvider(settings), None)
     if selected == "fake":
         return ProviderSelection(FakeImageProvider(), None)
     if selected == "openai":

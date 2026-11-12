@@ -33,6 +33,52 @@ _RECIPIENT_DELIVERY_STAGES = {
 }
 
 
+def run_webhook(settings: Settings, stop_event: threading.Event) -> int:
+    """Run one durable consumer, reusing polling's application and lock."""
+    from app.max_webhook import MaxInbox, MaxWebhookServer, valid_secret
+
+    if (
+        not valid_secret(settings.max_webhook_secret)
+        or not 1 <= settings.max_webhook_port <= 65535
+        or settings.max_poll_observe_only
+        or not settings.max_bot_token
+    ):
+        raise MaxTransportError("Webhook configuration incomplete", kind="configuration_missing")
+    with SingleInstanceLock(settings.max_poll_lock_path):
+        application, client, _store = build_max_application(settings)
+        listener = payment = None
+        try:
+            database = application.database
+            inbox = MaxInbox(database)
+            database.recover_interrupted_runtime()
+            application.recover_interrupted_processing()
+            inbox.recover()
+            listener = MaxWebhookServer(inbox, settings.max_webhook_port, settings.max_webhook_secret)
+            if settings.payment_webhook_listener_enabled:
+                payment = PaymentWebhookServer(
+                    application.payments, settings.payment_webhook_host,
+                    settings.payment_webhook_port, settings.payment_webhook_path,
+                    accepting_callbacks=settings.payment_webhook_enabled,
+                    verify_duplicate_callback=settings.robokassa_sandbox_duplicate_probe,
+                    on_paid=application.notify_continuation_pack_paid,
+                )
+                payment.start()
+            listener.start()
+            LOGGER.info("MAX webhook started (loopback ingress)")
+            while not stop_event.is_set():
+                if not listener.thread.is_alive():
+                    raise RuntimeError("MAX webhook listener stopped")
+                if not inbox.handle_next(application):
+                    stop_event.wait(0.5)
+        finally:
+            if listener is not None:
+                listener.stop()
+            if payment is not None:
+                payment.stop()
+            client.close()
+    return 0
+
+
 def _is_permanent_recipient_failure(exc: MaxTransportError) -> bool:
     """Return true only when retrying the same recipient cannot succeed."""
 

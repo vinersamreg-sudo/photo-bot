@@ -234,6 +234,11 @@ For migrations, storage layout, retention or original delivery changes:
 
 ## Rollback
 
+For an infrastructure cutover (not an ordinary release), follow the
+[RU migration runbook](RU_MIGRATION.md). The existing production deployment
+workflow remains polling-only; it must not activate a new RU webhook or
+rewrite the production environment.
+
 Rollback code only after preserving evidence and confirming database compatibility.
 Never `git reset --hard` production state. Restore source from a known artifact/SHA,
 retain `.env` and mutable data, restart the single service and run the same health

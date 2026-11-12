@@ -1,0 +1,16 @@
+[Unit]
+Description=Send generic alert for Ravuna RU unit failure
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=photoapp
+Group=photoapp
+WorkingDirectory=/opt/photo-bot
+LoadCredential=alert.url:/etc/ravuna/credentials/alert.url
+ExecStart=/opt/photo-bot/venv/bin/python -m app.ru_monitor alert --credential ${CREDENTIALS_DIRECTORY}/alert.url --unit %i
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

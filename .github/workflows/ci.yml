@@ -42,8 +42,15 @@ jobs:
             -subj '/CN=ravuna.ru' >/dev/null 2>&1
           docker run --rm \
             --volume "$GITHUB_WORKSPACE/site/nginx/ravuna.ru.conf:/etc/nginx/conf.d/ravuna.conf:ro" \
+            --volume "$GITHUB_WORKSPACE/ops/ru/max-webhook.conf:/etc/nginx/conf.d/max-webhook.conf:ro" \
             --volume "$CERT_DIR:/etc/letsencrypt/live/ravuna.ru:ro" \
+            --volume "$CERT_DIR:/etc/letsencrypt/live/max-webhook.ravuna.ru:ro" \
             nginx:1.27-alpine nginx -t
+      - name: Validate RU systemd calendar syntax
+        run: |
+          systemd-analyze calendar '*-*-* 03:00:00 Europe/Samara'
+          systemd-analyze calendar '*-*-* 06:05:00 Europe/Samara'
+          systemd-analyze calendar '*-*-* *:00/5:00'
       - name: Run release-sensitive profiles
         run: |
           python scripts/test_fast.py payments

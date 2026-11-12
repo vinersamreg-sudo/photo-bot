@@ -141,6 +141,7 @@ def configure_logging(settings: Settings) -> None:
             settings.openai_api_key,
             settings.gemini_api_key,
             settings.max_bot_token,
+            settings.max_webhook_secret,
             settings.robokassa_merchant_login,
             settings.robokassa_password1,
             settings.robokassa_password2,
@@ -190,6 +191,16 @@ def health_errors(settings: Settings) -> List[str]:
             LOGGER.info("Directory check passed: %s (%s)", name, path)
     if settings.max_transport_mode == "polling":
         errors.extend(_polling_health_errors(settings))
+    elif settings.max_transport_mode == "webhook":
+        from urllib.request import ProxyHandler, build_opener
+
+        try:
+            opener = build_opener(ProxyHandler({}))
+            with opener.open(f"http://127.0.0.1:{settings.max_webhook_port}/readyz", timeout=3) as response:
+                if response.status != 200:
+                    errors.append("MAX webhook inbox is not ready")
+        except (OSError, ValueError):
+            errors.append("MAX webhook inbox is not ready")
     return errors
 
 
@@ -314,15 +325,11 @@ def run_process(settings: Settings) -> int:
             "MAX transport is disabled; refusing to keep an idle production process"
         )
         return 2
-    if settings.max_transport_mode == "webhook":
-        LOGGER.error(
-            "Webhook runtime requires the pending HTTPS:443 endpoint configuration"
-        )
-        return 2
-    from app.max_runtime import run_polling
-    LOGGER.info("photo-bot MAX polling process starting (pid=%s)", os.getpid())
+    from app.max_runtime import run_polling, run_webhook
+    runner = run_webhook if settings.max_transport_mode == "webhook" else run_polling
+    LOGGER.info("photo-bot MAX %s process starting (pid=%s)", settings.max_transport_mode, os.getpid())
     try:
-        return run_polling(settings, stop_event)
+        return runner(settings, stop_event)
     except Exception as exc:
         from app.max_transport import MaxTransportError
         if isinstance(exc, MaxTransportError):

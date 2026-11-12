@@ -104,31 +104,52 @@ class OpenAIImageProvider:
         if not 1 <= len(source_paths) <= 2:
             raise ValueError("OpenAI provider accepts one or two source images")
         started = time.monotonic()
+        with ExitStack() as stack:
+            sources = [stack.enter_context(path.open("rb")) for path in source_paths]
+            return self._edit_open_files(sources, prompt, self.resolve_size(source_paths[0]), started)
+
+    def edit_bytes(self, source_images: tuple[bytes, ...], prompt: str) -> ProviderResult:
+        """Use the same provider contract without staging images on disk."""
+        _validate_provider_prompt(prompt)
+        if not 1 <= len(source_images) <= 2:
+            raise ValueError("OpenAI provider accepts one or two source images")
+        started = time.monotonic()
+        with ExitStack() as stack:
+            sources = []
+            for data in source_images:
+                source = stack.enter_context(io.BytesIO(data))
+                with Image.open(io.BytesIO(data)) as opened:
+                    ext = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}.get(opened.format)
+                if not ext:
+                    raise ValueError("Unsupported gateway image format")
+                source.name = f"image.{ext}"
+                sources.append(source)
+            size = _resolve_output_size(self.size, io.BytesIO(source_images[0]))
+            return self._edit_open_files(sources, prompt, size, started)
+
+    def _edit_open_files(self, sources, prompt: str, resolved_size: str, started: float) -> ProviderResult:
         http_status = None
         try:
-            with ExitStack() as stack:
-                sources = [stack.enter_context(path.open("rb")) for path in source_paths]
-                request: dict[str, Any] = dict(
-                    model=self.model,
-                    image=sources[0] if len(sources) == 1 else sources,
-                    prompt=prompt,
-                    quality=self.quality,
-                    size=self.resolve_size(source_paths[0]),
-                    output_format=self.output_format,
-                )
-                # GPT Image 2 always uses high input fidelity and rejects attempts
-                # to override it. Older compatible models may accept low/high.
-                if not self.model.startswith("gpt-image-2") and self.input_fidelity != "auto":
-                    request["input_fidelity"] = self.input_fidelity
-                raw_api = getattr(self.client.images, "with_raw_response", None)
-                if raw_api is not None:
-                    raw_response = raw_api.edit(**request)
-                    response = raw_response.parse()
-                    retries = int(getattr(raw_response, "retries_taken", 0) or 0)
-                    http_status = getattr(raw_response, "status_code", None)
-                else:
-                    response = self.client.images.edit(**request)
-                    retries = 0
+            request: dict[str, Any] = dict(
+                model=self.model,
+                image=sources[0] if len(sources) == 1 else sources,
+                prompt=prompt,
+                quality=self.quality,
+                size=resolved_size,
+                output_format=self.output_format,
+            )
+            # GPT Image 2 rejects attempts to override input fidelity.
+            if not self.model.startswith("gpt-image-2") and self.input_fidelity != "auto":
+                request["input_fidelity"] = self.input_fidelity
+            raw_api = getattr(self.client.images, "with_raw_response", None)
+            if raw_api is not None:
+                raw_response = raw_api.edit(**request)
+                response = raw_response.parse()
+                retries = int(getattr(raw_response, "retries_taken", 0) or 0)
+                http_status = getattr(raw_response, "status_code", None)
+            else:
+                response = self.client.images.edit(**request)
+                retries = 0
         except APITimeoutError as exc:
             raise ProviderTimeoutError("Image provider timed out") from exc
         except APIConnectionError as exc:
