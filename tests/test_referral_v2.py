@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from app.commerce import CommerceService, SMALL_PACKAGE, LARGE_PACKAGE, MAX_ACCOUNT_BALANCE, MAX_SQLITE_INTEGER
 from app.domain import InvalidInputError
-from app.database import Database, schema_version
+from app.database import CURRENT_SCHEMA_VERSION, Database, schema_version
 from app.feedback_report import ReportUnavailable
 from app.max_adapter import REFERRAL_V2_BUTTON, main_menu, result_actions, gallery_item_actions
 from app.max_application import MaxApplication
@@ -327,17 +327,21 @@ referrals.reward_first_success(sys.argv[2])
                 c.execute(f"DROP TABLE {table}")
             for column in ("first_success_attempt_id", "first_success_at", "registered_at", "program_version"):
                 c.execute(f"ALTER TABLE referral_relationships DROP COLUMN {column}")
-            c.execute("DELETE FROM schema_migrations WHERE version=16")
+            c.execute("DROP TABLE gallery_retention_terms")
+            c.execute("DROP TABLE payment_retention_terms")
+            c.execute("DROP TABLE retention_holds")
+            c.execute("DELETE FROM schema_migrations WHERE version>=16")
         before = hashlib.sha256(self.path.read_bytes()).hexdigest()
         copy = Path(self.temp.name) / "migration-copy.sqlite3"
-        from scripts.check_migration_copy import verify_migration_copy
-        proof = verify_migration_copy(self.path, copy)
-        self.assertEqual((proof["status"], proof["source_schema"], proof["target_schema"]), ("PASS", 15, 16))
+        # Two-version-old files are not valid deploy inputs; this exercises
+        # historical referral migration on an isolated copy only.
+        from shutil import copyfile
+        copyfile(self.path, copy)
         migrated = Database(copy)
         for _ in range(2):
             migrated.initialize()
         with migrated.read() as c:
-            self.assertEqual(schema_version(c), 16)
+            self.assertEqual(schema_version(c), CURRENT_SCHEMA_VERSION)
             self.assertEqual(c.execute("PRAGMA quick_check").fetchone()[0], "ok")
             self.assertEqual(c.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual([tuple(r) for r in c.execute("SELECT * FROM user_credit_accounts ORDER BY user_id")], balances)

@@ -411,6 +411,9 @@ def run_demo_stats(settings: Settings) -> int:
 
 
 def run_gallery_cleanup(settings: Settings, execute: bool) -> int:
+    if execute:
+        print(json.dumps({"mode": "refused", "reason": "legacy_gallery_cleanup_disabled"}))
+        return 2
     database = Database(settings.database_path)
     service = GalleryService(
         database,
@@ -775,7 +778,7 @@ def run_recovery_mark_offsite(
 def run_maintenance_command(settings: Settings, execute: bool) -> int:
     try:
         report = run_maintenance(settings, execute=execute)
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, RuntimeError, sqlite3.Error) as exc:
         LOGGER.error("Maintenance failed safely (error_type=%s)", type(exc).__name__)
         return 1
     print(json.dumps(report, sort_keys=True))

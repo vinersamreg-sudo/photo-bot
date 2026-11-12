@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.database import Database
+from app.database import Database, ReadOnlyDatabase
 from app.gallery import GalleryService
 from app.storage import PrivateStorage
 from app.openai_client import create_openai_client
@@ -127,22 +126,14 @@ def _write_report(settings: Settings, report: dict[str, Any]) -> None:
 
 
 def run_maintenance(settings: Settings, *, execute: bool) -> dict[str, Any]:
-    if settings.result_retention_enabled:
-        # The existing independent timer is reused; no second publisher/runtime.
-        # Do not run the legacy whole-item rmtree path alongside result retention.
+    if execute:
+        raise RuntimeError("Legacy maintenance execution is not enabled; use results-cleanup")
+    if settings.result_retention_policy_effective_at:
         from app.result_retention import ResultRetention
-        report = ResultRetention(settings).run(execute=execute)
-        if execute and report['mode']=='execute':
-            # Preserve the existing independent provider-context expiry policy;
-            # never invoke a provider from the new read-only planner.
-            database = Database(settings.database_path)
-            gateway = (OpenAIProviderContextGateway(create_openai_client(settings))
-                       if settings.openai_api_key else None)
-            contexts = ProviderContextService(settings,database,gateway)
-            report['provider_context_due_count'] = len(contexts.cleanup_due(execute=True))
-            _write_report(settings,report)
-        return report
-    database = Database(settings.database_path)
+        return ResultRetention(settings).run()
+    # Preserve the old inventory for diagnostics only. It grants no execution
+    # authority and does not initialize the database or write a receipt.
+    database = ReadOnlyDatabase(settings.database_path)
     storage = PrivateStorage(
         settings.users_dir, settings.max_source_file_size_mb * 1024 * 1024
     )
@@ -230,7 +221,7 @@ def run_maintenance(settings: Settings, *, execute: bool) -> dict[str, Any]:
     candidate_bytes = gallery_bytes + temp_bytes + orphan_bytes
     context_due = provider_contexts.cleanup_due(execute=False)
     report = {
-        "mode": "execute" if execute else "dry-run",
+        "mode": "dry-run",
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "gallery_due_count": len(due),
         "gallery_candidate_file_count": gallery_file_count,
@@ -252,46 +243,5 @@ def run_maintenance(settings: Settings, *, execute: bool) -> dict[str, Any]:
         "removed_file_count": 0,
         "removed_bytes": 0,
     }
-    if path_anomaly_count:
-        if execute:
-            report["mode"] = "refused"
-        _write_report(settings, report)
-        if execute:
-            raise RuntimeError("Retention cleanup refused because a path anomaly was detected")
-        return report
-
-    if execute:
-        provider_contexts.cleanup_due(execute=True)
-        purged = gallery.purge_due(execute=True)
-        for candidate in temp_candidates:
-            if candidate.is_dir():
-                shutil.rmtree(candidate)
-            else:
-                candidate.unlink(missing_ok=True)
-        for candidate in orphan_candidates:
-            candidate.unlink(missing_ok=True)
-        for directory in sorted(
-            (path for path in settings.users_dir.rglob("*") if path.is_dir()),
-            key=lambda path: len(path.parts),
-            reverse=True,
-        ) if settings.users_dir.is_dir() else ():
-            try:
-                directory.rmdir()
-            except OSError:
-                pass
-        report.update(
-            {
-                "remaining_gallery_count": 0,
-                "remaining_orphan_count": 0,
-                "remaining_temp_count": 0,
-                "removed_gallery_count": len(purged),
-                "removed_temp_entry_count": len(temp_candidates),
-                "removed_orphan_file_count": len(orphan_candidates),
-                "removed_file_count": gallery_file_count
-                + temp_file_count
-                + len(orphan_candidates),
-                "removed_bytes": candidate_bytes,
-            }
-        )
-    _write_report(settings, report)
+    report["legacy_inventory_only"] = True
     return report

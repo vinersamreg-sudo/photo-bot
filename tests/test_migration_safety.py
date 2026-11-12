@@ -66,6 +66,9 @@ class MigrationSafetyTests(TestCase):
                 DROP TABLE continuation_pack_grants_new;
                 DROP TABLE unlock_entitlements_new;
                 DROP TABLE IF EXISTS service_feedback;
+                DROP TABLE IF EXISTS gallery_retention_terms;
+                DROP TABLE IF EXISTS payment_retention_terms;
+                DROP TABLE IF EXISTS retention_holds;
                 DELETE FROM schema_migrations WHERE version>=14;
                 COMMIT;
                 """
@@ -129,13 +132,16 @@ class MigrationSafetyTests(TestCase):
             database = Database(source)
             self._seed_paid_small_package(database)
             with database.transaction() as connection:
-                connection.execute("DELETE FROM schema_migrations WHERE version>=16")
+                connection.execute("DROP TABLE gallery_retention_terms")
+                connection.execute("DROP TABLE payment_retention_terms")
+                connection.execute("DROP TABLE retention_holds")
+                connection.execute("DELETE FROM schema_migrations WHERE version>=17")
             source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
 
             report = verify_migration_copy(source, migrated)
 
             self.assertEqual(report["status"], "PASS")
-            self.assertEqual(report["source_schema"], 15)
+            self.assertEqual(report["source_schema"], 16)
             self.assertEqual(report["target_schema"], CURRENT_SCHEMA_VERSION)
             self.assertEqual(report["quick_check"], "ok")
             self.assertEqual(report["counts"]["paid_orders"], 1)
@@ -143,7 +149,7 @@ class MigrationSafetyTests(TestCase):
             self.assertTrue(report["small_49_grants_preserved"])
             self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), source_sha)
             with closing(sqlite3.connect(source)) as connection:
-                self.assertEqual(schema_version(connection), 15)
+                self.assertEqual(schema_version(connection), 16)
             with closing(sqlite3.connect(migrated)) as connection:
                 self.assertEqual(schema_version(connection), CURRENT_SCHEMA_VERSION)
                 self.assertEqual(
