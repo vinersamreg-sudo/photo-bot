@@ -3308,6 +3308,7 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
+        displayed_page = self._show_works_page(event, dialog, page)
         self.store.transition(
             event.user_id,
             "gallery",
@@ -3315,10 +3316,9 @@ class MaxApplication:
             force=True,
             pending_prompt=None,
             pending_action=NAV_WORKS,
-            gallery_cursor=max(1, page),
+            gallery_cursor=displayed_page,
             status_message_id=None,
         )
-        self._show_works_page(event, dialog, page)
 
     def _versioned_works(self, connection=None) -> bool:
         if connection is not None:
@@ -3328,7 +3328,7 @@ class MaxApplication:
 
     def _show_works_page(
         self, event: MaxIncomingEvent, dialog: MaxDialog, page: int
-    ) -> None:
+    ) -> int:
         if not dialog.user_id:
             self._send_message(
                 event.user_id,
@@ -3336,7 +3336,7 @@ class MaxApplication:
                 (Button("← Назад", "nav:back:main"),),
                 screen="works_empty",
             )
-            return
+            return 1
         versioned = self._versioned_works()
         gallery_page = self.work_gallery.works(dialog.user_id, page, all_results=versioned)
         if not gallery_page.entries:
@@ -3346,7 +3346,7 @@ class MaxApplication:
                 (Button("← Назад", "nav:back:main"),),
                 screen="works_empty",
             )
-            return
+            return 1
         current = self.ui.current(event.user_id)
         sheet = self.work_gallery.contact_sheet(
             f"works:{dialog.user_id}:{event.chat_id or event.user_id}",
@@ -3372,7 +3372,7 @@ class MaxApplication:
         )
         if not message_id:
             raise MaxTransportError("MAX gallery page delivery failed")
-        self.store.update(event.user_id, gallery_cursor=gallery_page.page)
+        return gallery_page.page
 
     @staticmethod
     def _gallery_page_buttons(
