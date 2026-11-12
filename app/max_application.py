@@ -48,6 +48,7 @@ from app.domain import (
     StorageFailureError,
 )
 from app.gallery import GalleryService, GalleryVersion
+from app import gallery_retention_terms
 from app.feedback import FeedbackService, MAX_FEEDBACK_MESSAGE_LENGTH
 from app.edit_intent import parse_edit_intent
 from app.max_adapter import (
@@ -332,7 +333,8 @@ class MaxApplication:
         self._result_retention_request.user_id = None
         if user_id and self.settings.result_retention_enabled:
             try:
-                ResultRetention(self.settings,self.database,clock=self.demo.clock).run(execute=True,user_id=user_id)
+                if not self._versioned_works():
+                    ResultRetention(self.settings,self.database,clock=self.demo.clock).run(execute=True,user_id=user_id)
             except Exception as error:
                 LOGGER.error('Result cleanup deferred (error_type=%s)',type(error).__name__)
 
@@ -1239,9 +1241,12 @@ class MaxApplication:
         )
 
     def _main_view(self, balance, originals, payment_url=None, payment_status_action=None):
-        return main_menu(balance, originals, payment_url, payment_status_action,
+        view = main_menu(balance, originals, payment_url, payment_status_action,
             referral_v2_enabled=self.settings.referral_v2_enabled,
             referral_promos_enabled=self.settings.referral_promo_grants_enabled)
+        if gallery_retention_terms.active(self.settings, self.demo.clock()):
+            return View(f"{view.text}\n\n{gallery_retention_terms.NOTICE}", view.buttons)
+        return view
 
     def _reset_dialog_to_main(self, user_id: str, event_key: str) -> None:
         self.store.transition(
@@ -1267,7 +1272,10 @@ class MaxApplication:
                 self._show_main(user_id, dialog, event_key)
             return
         self._reset_dialog_to_upload(user_id, event_key)
-        self._send_view(user_id, view or upload_view())
+        upload = view or upload_view()
+        if gallery_retention_terms.active(self.settings, self.demo.clock()):
+            upload = View(f"{upload.text}\n\n{gallery_retention_terms.NOTICE}", upload.buttons)
+        self._send_view(user_id, upload)
 
     def _reset_dialog_to_upload(self, user_id: str, event_key: str) -> None:
         self.store.transition(
@@ -2872,6 +2880,8 @@ class MaxApplication:
             Button("← Назад", "nav:back:work"),
         )
         offer_text = _package_offer_text(product_code)
+        if gallery_retention_terms.active(self.settings, self.demo.clock()):
+            offer_text = f"{offer_text}\n\n{gallery_retention_terms.NOTICE}"
         if intro_text:
             offer_text = f"{intro_text}\n\n{offer_text}"
         if self.settings.max_single_screen_ui_enabled and dialog.current_version_id:
@@ -3298,7 +3308,6 @@ class MaxApplication:
             session_id=dialog.session_id,
             gallery_item_id=dialog.current_gallery_item_id,
         )
-        self._show_works_page(event, dialog, 1)
         self.store.transition(
             event.user_id,
             "gallery",
@@ -3306,9 +3315,16 @@ class MaxApplication:
             force=True,
             pending_prompt=None,
             pending_action=NAV_WORKS,
-            gallery_cursor=1,
+            gallery_cursor=max(1, page),
             status_message_id=None,
         )
+        self._show_works_page(event, dialog, page)
+
+    def _versioned_works(self, connection=None) -> bool:
+        if connection is not None:
+            return gallery_retention_terms.applies(connection, self.settings, self.demo.clock())
+        with self.database.read() as conn:
+            return self._versioned_works(conn)
 
     def _show_works_page(
         self, event: MaxIncomingEvent, dialog: MaxDialog, page: int
@@ -3321,7 +3337,8 @@ class MaxApplication:
                 screen="works_empty",
             )
             return
-        gallery_page = self.work_gallery.works(dialog.user_id, page)
+        versioned = self._versioned_works()
+        gallery_page = self.work_gallery.works(dialog.user_id, page, all_results=versioned)
         if not gallery_page.entries:
             self._send_message(
                 event.user_id,
@@ -3337,10 +3354,17 @@ class MaxApplication:
             (current.revision if current else 0) + 1,
         )
         buttons = self._gallery_page_buttons(gallery_page)
+        caption = "📂 Мои работы\n\nДо 3 последних готовых результатов. Выберите фотографию."
+        if versioned:
+            caption = (
+                f"📂 Мои работы · {gallery_page.page}/{gallery_page.pages}\n\n"
+                "На первой странице — последние три работы. "
+                "Остальные доступны на следующих страницах в пределах своих сроков."
+            )
         message_id = self._send_image(
             event.user_id,
             sheet,
-            "📂 Мои работы\n\nДо 3 последних готовых результатов. Выберите фотографию.",
+            caption,
             buttons,
             screen="works_gallery",
             context={"page": gallery_page.page},
@@ -3367,14 +3391,19 @@ class MaxApplication:
             "nav:back:main",
             1,
         )
-        return buttons + (back,)
+        navigation = ()
+        if page.page > 1:
+            navigation += (Button("← Новее", f"works:page:{page.page - 1}", 1),)
+        if page.page < page.pages:
+            navigation += (Button("Ранее →", f"works:page:{page.page + 1}", 1),)
+        return buttons + navigation + (back,)
 
     def _open_work(
         self, event: MaxIncomingEvent, dialog: MaxDialog, item_id: str
     ) -> None:
         # Compatibility for old item-id buttons; never resurrect older versions.
         with self.database.read() as connection:
-            row = next((r for r in visible_results(connection,dialog.user_id)
+            row = next((r for r in visible_results(connection,dialog.user_id,all_results=self._versioned_works(connection))
                         if r['gallery_item_id']==item_id),None)
         if row is None:
             self._show_works(event,dialog)
@@ -3387,7 +3416,7 @@ class MaxApplication:
         if not dialog.user_id:
             raise InvalidInputError("Gallery owner is missing")
         with self.database.read() as connection:
-            row = next((r for r in visible_results(connection,dialog.user_id)
+            row = next((r for r in visible_results(connection,dialog.user_id,all_results=self._versioned_works(connection))
                         if r['id']==version_id),None)
         if row is None:
             self._show_works(event,dialog)

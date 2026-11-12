@@ -45,3 +45,13 @@ Do not invent these values. Label every update as measured, derived or estimated
 
 Update this document only after a new measured audit or an explicit pricing model
 change. Historical calculations are preserved in `docs/archive/`.
+
+## Prepared RU backup budget (not current spend)
+
+The [RU migration model](RU_MIGRATION.md#cost-at-observed-archive-size) separates
+measured backup/SQLite size from future usage. Four daily plus two weekly points,
+one daily independent restore and 15-minute SQLite checkpoints project about
+647 ₽/month for metered RU S3 at the 12 November sizing baseline, versus 250 ₽
+for the flat-rate S3 option only if its documented/verified compatibility gates
+pass. Neither figure is an invoice. No storage savings for the 14/60 proposal
+are recognized until eligible new cohorts age and actual bytes are measured.

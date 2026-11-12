@@ -43,9 +43,9 @@ class WorkGallery:
         self.database = database
         self.cache_dir = cache_dir / "max-contact-sheets"
 
-    def works(self, user_id: str, page: int) -> GalleryPage:
+    def works(self, user_id: str, page: int, *, all_results: bool = False) -> GalleryPage:
         with self.database.read() as connection:
-            rows = visible_results(connection, user_id)
+            rows = visible_results(connection, user_id, all_results=all_results)
         entries = tuple(
             GalleryThumbnail(
                 row["id"],
@@ -60,7 +60,13 @@ class WorkGallery:
         )
         self._record_skipped("works", len(rows) - len(entries))
         total = len(entries)
-        return GalleryPage(entries, 1, 1, total)
+        if not all_results:
+            return GalleryPage(entries, 1, 1, total)
+        page_size = 3
+        pages = max(1, math.ceil(total / page_size))
+        selected = min(max(page, 1), pages)
+        offset = (selected - 1) * page_size
+        return GalleryPage(entries[offset:offset + page_size], selected, pages, total)
 
     def versions(self, user_id: str, item_id: str, page: int) -> GalleryPage:
         with self.database.read() as connection:

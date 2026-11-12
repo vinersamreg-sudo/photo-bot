@@ -10,8 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app import gallery_retention_terms
 from app.config import Settings
-from app.database import Database
+from app.database import Database, ReadOnlyDatabase
 from app.gallery import GalleryService
 from app.storage import PrivateStorage
 from app.openai_client import create_openai_client
@@ -127,7 +128,11 @@ def _write_report(settings: Settings, report: dict[str, Any]) -> None:
 
 
 def run_maintenance(settings: Settings, *, execute: bool) -> dict[str, Any]:
-    if settings.result_retention_enabled:
+    versioned = bool(settings.result_retention_policy_effective_at)
+    if not versioned and settings.database_path.is_file():
+        with ReadOnlyDatabase(settings.database_path).read() as c:
+            versioned = c.execute("SELECT 1 FROM sqlite_master WHERE name='gallery_retention_terms'").fetchone() is not None and gallery_retention_terms.applies(c, settings, datetime.now(timezone.utc))
+    if settings.result_retention_enabled or versioned:
         # The existing independent timer is reused; no second publisher/runtime.
         # Do not run the legacy whole-item rmtree path alongside result retention.
         from app.result_retention import ResultRetention

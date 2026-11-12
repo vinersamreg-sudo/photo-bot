@@ -2,7 +2,7 @@ name: Ravuna site CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/ravuna-ru-migration]
   push:
     branches: [main]
 

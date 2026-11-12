@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import httpx
 
+from app import gallery_retention_terms
 from app.config import Settings
 from app.commerce import (
     CommerceService,
@@ -742,7 +743,7 @@ class PaymentService:
                 version = connection.execute(
                     """SELECT v.id,v.attempt_id,v.unlock_status,v.original_path,
                               v.gallery_item_id,a.user_id,a.status AS attempt_status,
-                              i.user_id AS item_user_id
+                              i.user_id AS item_user_id,i.deleted
                        FROM gallery_versions v
                        JOIN generation_attempts a ON a.id=v.attempt_id
                        JOIN gallery_items i ON i.id=v.gallery_item_id
@@ -753,6 +754,10 @@ class PaymentService:
                     raise PaymentError("Gallery version was not found")
                 if version["attempt_status"] != "succeeded":
                     raise PaymentError("Only a completed version can start a package purchase")
+                if gallery_retention_terms.applies(connection, self.settings, now):
+                    original = Path(version["original_path"]) if version["original_path"] else None
+                    if version["deleted"] or original is None or original.is_symlink() or not original.is_file():
+                        raise PaymentError("The selected original is unavailable; no order was created")
                 attempt_id = str(version["attempt_id"])
                 item_id = version["gallery_item_id"]
             replay = connection.execute(
@@ -843,6 +848,7 @@ class PaymentService:
                             package.unlock_entitlements, pending_request_id, purpose,
                         ),
                     )
+                    gallery_retention_terms.pin_order(connection, order_id, self.settings, now)
                     receipt_id = uuid4().hex
                     connection.execute(
                         """INSERT INTO payment_receipts(

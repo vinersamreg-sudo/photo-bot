@@ -1,0 +1,11 @@
+[Unit]
+Description=Ravuna RU SQLite checkpoint every 15 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/15:30 Europe/Samara
+AccuracySec=15s
+Persistent=false
+Unit=ravuna-ru-db-recovery.service
+
+[Install]
+WantedBy=timers.target

@@ -2,7 +2,7 @@ name: Ravuna CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/ravuna-ru-migration]
   push:
     branches: [main]
 
@@ -50,6 +50,8 @@ jobs:
         run: |
           systemd-analyze calendar '*-*-* 03:00:00 Europe/Samara'
           systemd-analyze calendar '*-*-* 06:05:00 Europe/Samara'
+          systemd-analyze calendar '*-*-* *:00/15:30 Europe/Samara'
+          systemd-analyze calendar '*-*-* *:07/15:00 Europe/Samara'
           systemd-analyze calendar '*-*-* *:00/5:00'
       - name: Run release-sensitive profiles
         run: |
