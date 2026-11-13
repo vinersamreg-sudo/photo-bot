@@ -295,6 +295,12 @@ class RuRecoveryTests(TestCase):
                     store.ensure_bounded()
 
     def test_scheduler_and_scratch_and_notification_acknowledgement(self):
+        units = Path(__file__).resolve().parents[1] / "ops/ru"
+        daily = (units / "ravuna-ru-recovery.service").read_text(encoding="utf-8")
+        self.assertIn("ProtectSystem=strict",daily)
+        self.assertIn("ReadWritePaths=/opt/photo-bot/data/result-retention.lock",daily)
+        self.assertIn("OnSuccess=ravuna-ru-recovery-ok@%n.service",daily)
+        self.assertIn("OnFailure=ravuna-ru-recovery-fail@%n.service",daily)
         start = datetime(2026,11,11,23,0,10,tzinfo=timezone.utc)
         trigger = int(start.timestamp()-5)*1_000_000
         with patch("app.ru_recovery.subprocess.run",return_value=SimpleNamespace(stdout="t 0")):
@@ -328,6 +334,65 @@ class RuRecoveryTests(TestCase):
         p.setUp()
         (p.base/".deploy-sha").write_text("a"*40,encoding="ascii")
         return p
+
+    def test_recovery_finance_checks_refunds_spend_and_account_mapping(self):
+        from app.commerce import MEDIUM_PACKAGE, SMALL_PACKAGE
+        from app.robokassa import RobokassaRefundResult
+        from app.ru_recovery_consistency import reconcile_provider
+
+        p = self.fixture()
+        start = p.clock() - timedelta(minutes=1)
+        orders = [p.service.create_order(p.user_id,None,"recovery-finance-"+pack.code,
+                  account_purchase=True,product_code=pack.code)
+                  for pack in (SMALL_PACKAGE, MEDIUM_PACKAGE)]
+        for order in orders:
+            fields = p.signed_callback(order)
+            fields["OpKey"] = "synthetic-operation"
+            self.assertTrue(p.service.process_webhook(fields,method="POST",
+                            path="/payments/robokassa/result").accepted)
+        p.clock.advance(minutes=1)
+        p.demo.generate(p.session.session_id,"synthetic correction","recovery-spend",correction=True)
+        self.assertEqual(p.demo.commerce.balance(p.user_id).available,23)
+
+        class RefundProvider:
+            name = "robokassa"
+            merchant_login = "ravuna-test"
+
+            def create_refund(self, request):
+                return RobokassaRefundResult(True,"synthetic-refund",None,200)
+
+            def refund_status(self, request_id):
+                return "finished",200
+
+        p.service.provider = RefundProvider()
+        object.__setattr__(p.settings,"payment_refunds_enabled",True)
+        medium = orders[1]
+        refund = p.service.prepare_refund(medium.id,medium.amount_minor,"customer_request","recovery-refund")
+        p.service.submit_refund(refund.id)
+        for _ in range(2):
+            self.assertEqual(p.service.refresh_refund(refund.id).status.value,"succeeded")
+        end = p.clock() + timedelta(minutes=1)
+        evidence = {"coverage_start":start.isoformat(),"coverage_end":end.isoformat(),
+                    "operations":[{"invoice":order.provider_invoice_id,"amount_minor":order.amount_minor,
+                                   "refunded_minor":order.amount_minor if order==medium else 0,
+                                   "currency":"RUB"} for order in orders]}
+        with TemporaryDirectory() as d:
+            db = Path(d)/"restored.sqlite3"
+            BackupManager(p.settings.database_path,Path(d),14)._sqlite_snapshot(db,standalone=True)
+            def reconcile():
+                return reconcile_provider(db,evidence,from_time=start,through_time=end)
+            self.assertEqual(reconcile()["matched_provider_operations"],2)
+            with closing(sqlite3.connect(db)) as c, c:
+                c.execute("UPDATE user_credit_accounts SET available_generation_credits=2 WHERE user_id=?",
+                          (p.user_id,))
+            with self.assertRaisesRegex(BackupError,"ledger"):
+                reconcile()
+            with closing(sqlite3.connect(db)) as c, c:
+                c.execute("UPDATE user_credit_accounts SET available_generation_credits=1 WHERE user_id=?",
+                          (p.user_id,))
+                c.execute("DELETE FROM payment_receipts WHERE receipt_type='refund'")
+            with self.assertRaisesRegex(BackupError,"refund ledger"):
+                reconcile()
 
     @skipUnless(shutil.which("openssl"),"OpenSSL CLI required")
     def test_two_process_race_every_published_media_and_db_point_restores(self):

@@ -22,6 +22,8 @@ TimeoutStartSec=3h
 UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
+# Shared with the retention writer; provision this single file as photoapp 0600.
+ReadWritePaths=/opt/photo-bot/data/result-retention.lock
 ProtectHome=true
 PrivateTmp=true
 LimitCORE=0

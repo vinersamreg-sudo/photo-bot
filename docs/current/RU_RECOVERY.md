@@ -13,6 +13,9 @@ separate authorization and a synthetic pilot.
   separate full writer, checkpoint writer and independent reader identities.
   Readers must not write, rotate or delete. Store encryption passphrases
   separately from the bucket and rehearse access from a replacement host.
+  Pre-create the shared `data/result-retention.lock` as a regular
+  `photoapp`-owned 0600 file. The full writer sandbox only grants write access
+  to that file and its own scratch, not the live database or media directory.
 - Full snapshot: 03:00 Samara, 23:00 UTC on the previous day. At 06:05 Samara an
   independent runner downloads the scheduled ciphertext and restores every file,
   checks SHA256, media links, FK and commerce. A manual seed cannot satisfy the
