@@ -1,0 +1,26 @@
+[Unit]
+Description=Ravuna RU verified point freshness and readback watchdog
+After=network-online.target
+Wants=network-online.target
+OnFailure=ravuna-ru-recovery-fail@%n.service
+
+[Service]
+Type=oneshot
+User=photoapp
+Group=photoapp
+WorkingDirectory=/opt/photo-bot
+EnvironmentFile=/etc/ravuna/ru-recovery.env
+Environment=AWS_CONFIG_FILE=/etc/ravuna/ru-s3-cli.conf
+Environment=AWS_PAGER= AWS_EC2_METADATA_DISABLED=true AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+LoadCredential=s3.credentials:/etc/ravuna/credentials/s3-reader.credentials
+LoadCredential=recovery.pass:/etc/ravuna/credentials/recovery.pass
+StateDirectory=ravuna-ru-recovery
+StateDirectoryMode=0700
+ExecStart=/usr/bin/env AWS_SHARED_CREDENTIALS_FILE=${CREDENTIALS_DIRECTORY}/s3.credentials /opt/photo-bot/venv/bin/python -m app.ru_recovery watchdog --root /opt/photo-bot --scratch /var/lib/ravuna-ru-recovery --passphrase-file ${CREDENTIALS_DIRECTORY}/recovery.pass --endpoint ${RU_S3_ENDPOINT} --bucket ${RU_S3_BUCKET} --region ${RU_S3_REGION}
+TimeoutStartSec=3h
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+LimitCORE=0

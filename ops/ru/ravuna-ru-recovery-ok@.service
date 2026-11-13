@@ -1,0 +1,24 @@
+[Unit]
+Description=Ravuna recovery ok delivery for %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+User=photoapp
+Group=photoapp
+WorkingDirectory=/opt/photo-bot
+LoadCredential=notify.url:/etc/ravuna/credentials/recovery-notify.url
+LoadCredential=notify.token:/etc/ravuna/credentials/recovery-notify.token
+ExecStart=/opt/photo-bot/venv/bin/python -m app.ru_recovery_notify ok %i ${CREDENTIALS_DIRECTORY}
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=15s
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+LimitCORE=0

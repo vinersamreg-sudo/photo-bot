@@ -305,6 +305,7 @@ class BackupManager:
         """Check retained originals/previews without selecting customer text."""
         counts = {"originals": 0, "previews": 0}
         connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        rows = None
         try:
             connection.execute("PRAGMA query_only=ON")
             tables = {row[0] for row in connection.execute(
@@ -337,13 +338,19 @@ class BackupManager:
                     counts[key] += 1
             return counts
         finally:
+            # An early validation error leaves a live cursor in its traceback.
+            # Finalize it before cleaning the decrypted scratch DB on Windows.
+            if rows is not None:
+                rows.close()
             connection.close()
 
-    def _sqlite_snapshot(self, destination: Path) -> dict[str, Any]:
+    def _sqlite_snapshot(self, destination: Path, *, standalone: bool = False) -> dict[str, Any]:
         source = sqlite3.connect(self.database_path.resolve().as_uri() + "?mode=ro", uri=True)
         target = sqlite3.connect(destination)
         try:
             source.backup(target)
+            if standalone and target.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
+                raise BackupError("SQLite recovery snapshot must not require WAL sidecars")
         finally:
             target.close()
             source.close()
@@ -393,7 +400,7 @@ class BackupManager:
             raise BackupError("Recovery manifest components are invalid")
         return value
 
-    def create(self, passphrase: str) -> dict[str, Any]:
+    def create(self, passphrase: str, *, _standalone_sqlite: bool = False) -> dict[str, Any]:
         self._require_passphrase(passphrase)
         if not self.database_path.is_file():
             raise BackupError("SQLite database does not exist")
@@ -402,7 +409,7 @@ class BackupManager:
         encrypted = self.backup_dir / name
         with tempfile.TemporaryDirectory(dir=self.backup_dir) as temporary_dir:
             plain = Path(temporary_dir) / "snapshot.sqlite3"
-            self._sqlite_snapshot(plain)
+            self._sqlite_snapshot(plain, standalone=_standalone_sqlite)
             self._openssl("-salt", "-in", str(plain), "-out", str(encrypted), passphrase=passphrase)
         digest = self._sha256(encrypted)
         try:
@@ -450,6 +457,8 @@ class BackupManager:
 
     def create_recovery_bundle(
         self, passphrase: str, *, daily_ciphertext_limit: int | None = None,
+        _expanded_byte_cap: int | None = None,
+        _standalone_sqlite: bool = False,
     ) -> dict[str, Any]:
         """Create an encrypted DB + private-storage bundle without secrets."""
 
@@ -469,6 +478,8 @@ class BackupManager:
                 if stat.S_ISLNK(entry.st_mode):
                     raise BackupError("Private storage contains an unsupported symlink")
                 logical_bytes += 4096 + (entry.st_size if stat.S_ISREG(entry.st_mode) else 0)
+            if _expanded_byte_cap is not None and logical_bytes + 64 * 1024**2 > _expanded_byte_cap:
+                raise BackupError("Recovery input exceeds its expanded byte cap")
             required = (2 * (logical_bytes + logical_bytes // 100) + RESTORE_FREE_SPACE_MARGIN
                         if daily_ciphertext_limit is None else
                         daily_ciphertext_limit + DAILY_FREE_SPACE_MARGIN)
@@ -483,7 +494,7 @@ class BackupManager:
             with tempfile.TemporaryDirectory(dir=self.backup_dir) as temporary_dir:
                 temporary = Path(temporary_dir)
                 snapshot = temporary / "snapshot.sqlite3"
-                sqlite_status = self._sqlite_snapshot(snapshot)
+                sqlite_status = self._sqlite_snapshot(snapshot, standalone=_standalone_sqlite)
                 snapshot.chmod(0o600)
                 partial = temporary / "bundle.enc"
                 # Mode is private before the first encrypted byte is written.
@@ -493,6 +504,7 @@ class BackupManager:
                 with self._openssl_stream(partial, passphrase=passphrase) as stream:
                     self._write_recovery_archive(
                         stream, snapshot, sqlite_status, created_at, source_revision,
+                        byte_cap=_expanded_byte_cap,
                     )
                 if daily_ciphertext_limit is not None and partial.stat().st_size > daily_ciphertext_limit:
                     raise BackupError("Daily recovery ciphertext exceeded its budget")
@@ -525,10 +537,11 @@ class BackupManager:
 
     def _write_recovery_archive(
         self, stream: BinaryIO, snapshot: Path, sqlite_status: dict[str, Any],
-        created_at: datetime, source_revision: str,
+        created_at: datetime, source_revision: str, *, byte_cap: int | None = None,
     ) -> None:
         file_hashes = {"database/photo_bot.sqlite3": self._sha256(snapshot)}
         storage_bytes = storage_files = 0
+        logical = snapshot.stat().st_size + 64 * 1024**2
         if self.users_dir.is_symlink():
             raise BackupError("Private storage contains an unsupported symlink")
         users_root = self.users_dir.resolve()
@@ -540,6 +553,9 @@ class BackupManager:
                 archive.addfile(member)
             for candidate in sorted(self.users_dir.rglob("*")):
                 before = candidate.lstat()
+                logical += 4096 + (before.st_size if stat.S_ISREG(before.st_mode) else 0)
+                if byte_cap is not None and logical > byte_cap:
+                    raise BackupError("Recovery input grew beyond its expanded byte cap")
                 if stat.S_ISLNK(before.st_mode):
                     raise BackupError("Private storage contains an unsupported symlink")
                 if not candidate.resolve().is_relative_to(users_root):
@@ -604,10 +620,11 @@ class BackupManager:
         return candidate
 
     @staticmethod
-    def _extract_recovery_stream(stream: BinaryIO, destination: Path) -> None:
+    def _extract_recovery_stream(stream: BinaryIO, destination: Path, *, byte_cap: int | None = None) -> None:
         try:
             # tarfile's r|gz decompressor does not validate gzip CRC/trailer.
             # Keep the original archive-integrity guarantee while streaming.
+            total = 0
             with gzip.GzipFile(fileobj=stream, mode="rb") as expanded:
                 with tarfile.open(fileobj=expanded, mode="r|") as archive:
                     for member in archive:
@@ -618,6 +635,9 @@ class BackupManager:
                             or not (member.isfile() or member.isdir())
                         ):
                             raise BackupError("Recovery archive contains an unsafe member")
+                        total += max(4096, member.size + 4096)
+                        if byte_cap is not None and total > byte_cap:
+                            raise BackupError("Recovery expansion exceeds scratch budget")
                         if member.isfile() and shutil.disk_usage(destination).free < (
                             member.size + RESTORE_FREE_SPACE_MARGIN
                         ):
@@ -716,6 +736,7 @@ class BackupManager:
         restore_root: Path | None = None,
         _bounded_member_limit: int | None = None,
         _scratch_parent: Path | None = None,
+        _expanded_byte_cap: int | None = None,
     ) -> dict[str, Any]:
         """Restore and validate a recovery bundle outside the application root."""
 
@@ -747,7 +768,7 @@ class BackupManager:
                 restored_hashes = None
                 with self._openssl_stream(candidate, passphrase=passphrase, decrypt=True) as stream:
                     if _bounded_member_limit is None:
-                        self._extract_recovery_stream(stream, destination)
+                        self._extract_recovery_stream(stream, destination, byte_cap=_expanded_byte_cap)
                     else:
                         restored_hashes = self._restore_one_at_a_time(
                             stream, destination, _bounded_member_limit,

@@ -41,6 +41,11 @@ def _open_regular(path):
 def artifact(path):
     if not NAME.fullmatch(path.name):
         raise RetentionError("Recovery artifact name is invalid")
+    return regular_file_identity(path)
+
+
+def regular_file_identity(path):
+    """Hash a regular private scratch file without following or racing links."""
     descriptor, before = _open_regular(path)
     digest = hashlib.sha256()
     with os.fdopen(descriptor, "rb") as stream:
