@@ -768,7 +768,10 @@ class BackupManager:
                 restored_hashes = None
                 with self._openssl_stream(candidate, passphrase=passphrase, decrypt=True) as stream:
                     if _bounded_member_limit is None:
-                        self._extract_recovery_stream(stream, destination, byte_cap=_expanded_byte_cap)
+                        if _expanded_byte_cap is None:
+                            self._extract_recovery_stream(stream, destination)
+                        else:
+                            self._extract_recovery_stream(stream, destination, byte_cap=_expanded_byte_cap)
                     else:
                         restored_hashes = self._restore_one_at_a_time(
                             stream, destination, _bounded_member_limit,
