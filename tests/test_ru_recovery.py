@@ -345,11 +345,15 @@ class RuRecoveryTests(TestCase):
         orders = [p.service.create_order(p.user_id,None,"recovery-finance-"+pack.code,
                   account_purchase=True,product_code=pack.code)
                   for pack in (SMALL_PACKAGE, MEDIUM_PACKAGE)]
-        for order in orders:
+        for i, order in enumerate(orders):
             fields = p.signed_callback(order)
             fields["OpKey"] = "synthetic-operation"
             self.assertTrue(p.service.process_webhook(fields,method="POST",
                             path="/payments/robokassa/result").accepted)
+            if i == 0:
+                # Lot priority has a deterministic purchase time, not a
+                # random UUID tiebreaker when fixtures share one timestamp.
+                p.clock.advance(seconds=1)
         p.clock.advance(minutes=1)
         p.demo.generate(p.session.session_id,"synthetic correction","recovery-spend",correction=True)
         self.assertEqual(p.demo.commerce.balance(p.user_id).available,23)
