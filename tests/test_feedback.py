@@ -240,6 +240,9 @@ class FeedbackTests(TestCase):
                    ) VALUES(?,'owner','negative','synthetic-reason',?,?)""", (version_id, now, now),
             )
             connection.execute("DROP TABLE service_feedback")
+            connection.execute("DROP TABLE gallery_retention_terms")
+            connection.execute("DROP TABLE payment_retention_terms")
+            connection.execute("DROP TABLE retention_holds")
             connection.execute("DELETE FROM schema_migrations WHERE version>=15")
         tables = ("users", "gallery_items", "gallery_versions", "user_feedback", "version_feedback")
         with self.database.read() as connection:
