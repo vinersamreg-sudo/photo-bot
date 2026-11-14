@@ -1,0 +1,10 @@
+[Unit]
+Description=Independent freshness/readback check after scheduled RU recovery
+
+[Timer]
+OnCalendar=*-*-* 06:05:00 Europe/Samara
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

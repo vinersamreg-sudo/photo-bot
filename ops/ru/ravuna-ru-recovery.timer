@@ -1,0 +1,11 @@
+[Unit]
+Description=Ravuna daily backup at 03:00 Europe/Samara
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Europe/Samara
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=true
+
+[Install]
+WantedBy=timers.target

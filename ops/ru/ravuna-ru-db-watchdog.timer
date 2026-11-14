@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Ravuna SQLite checkpoint freshness from an independent RU runner
+
+[Timer]
+OnCalendar=*-*-* *:07/15:00 Europe/Samara
+AccuracySec=15s
+Persistent=false
+Unit=ravuna-ru-db-watchdog.service
+
+[Install]
+WantedBy=timers.target
