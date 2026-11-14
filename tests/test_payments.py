@@ -572,16 +572,19 @@ class PaymentTests(TestCase):
             self.user_id, None, "late-result-refresh", account_purchase=True
         )
         self.clock.advance(minutes=31)
-        fresh = self.service.refresh_order_for_platform_user(
+        activated = replace(self.settings, result_retention_policy_effective_at=self.clock().isoformat())
+        service = build_payment_service(activated, self.database, clock=self.clock)
+        self.addCleanup(service.provider.close)
+        fresh = service.refresh_order_for_platform_user(
             old.public_token, "owner"
         )
 
-        first = self.service.process_webhook(
+        first = service.process_webhook(
             self.signed_callback(old),
             method="POST",
             path="/payments/robokassa/result",
         )
-        duplicate = self.service.process_webhook(
+        duplicate = service.process_webhook(
             self.signed_callback(old),
             method="POST",
             path="/payments/robokassa/result",
@@ -592,6 +595,8 @@ class PaymentTests(TestCase):
         self.assertTrue(duplicate.accepted)
         self.assertTrue(duplicate.duplicate)
         with self.database.read() as connection:
+            terms = connection.execute("SELECT payment_order_id,policy_version FROM payment_retention_terms").fetchall()
+            self.assertEqual([tuple(row) for row in terms], [(fresh.id, 2)])
             self.assertEqual(
                 connection.execute(
                     "SELECT status FROM payment_orders WHERE id=?", (fresh.id,)
@@ -604,6 +609,25 @@ class PaymentTests(TestCase):
                 ).fetchone()[0],
                 1,
             )
+
+    def test_versioned_missing_original_does_not_create_checkout(self) -> None:
+        activated = replace(self.settings, result_retention_policy_effective_at=self.clock().isoformat())
+        service = build_payment_service(activated, self.database, clock=self.clock)
+        self.addCleanup(service.provider.close)
+        version = self.versions[0]["id"]
+        with self.database.transaction() as connection:
+            connection.execute("UPDATE gallery_versions SET original_path=NULL WHERE id=?", (version,))
+        with self.assertRaises(PaymentError):
+            service.create_order(self.user_id, version, "missing-media-order")
+        with self.database.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0], 0)
+
+    def test_inactive_retention_keeps_existing_checkout_contract(self) -> None:
+        version = self.versions[0]["id"]
+        with self.database.transaction() as connection:
+            connection.execute("UPDATE gallery_versions SET original_path=NULL WHERE id=?", (version,))
+        order = self.service.create_order(self.user_id, version, "legacy-checkout-before-policy")
+        self.assertEqual(order.version_id, version)
 
     def test_aggregate_reconciliation_detects_mismatch_without_mutation(self) -> None:
         order = self.service.create_order(

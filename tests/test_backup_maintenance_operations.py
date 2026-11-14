@@ -204,10 +204,10 @@ class BackupMaintenanceOperationsTests(TestCase):
             self.assertTrue(orphan.exists())
             self.assertTrue(temporary.exists())
 
-            executed = run_maintenance(settings, execute=True)
-            self.assertEqual(executed["removed_file_count"], 2)
-            self.assertFalse(orphan.exists())
-            self.assertFalse(temporary.exists())
+            with self.assertRaisesRegex(RuntimeError, "not enabled"):
+                run_maintenance(settings, execute=True)
+            self.assertTrue(orphan.exists())
+            self.assertTrue(temporary.exists())
             self.assertTrue(session.source_path.exists())
             self.assertTrue(metadata.exists())
 
@@ -292,13 +292,13 @@ class BackupMaintenanceOperationsTests(TestCase):
             self.assertTrue(nested.exists())
             self.assertTrue(fresh.exists())
 
-            executed = run_maintenance(settings, execute=True)
-            self.assertEqual(executed["removed_temp_entry_count"], 2)
-            self.assertFalse(stale.exists())
-            self.assertFalse(stale_dir.exists())
+            with self.assertRaisesRegex(RuntimeError, "not enabled"):
+                run_maintenance(settings, execute=True)
+            self.assertTrue(stale.exists())
+            self.assertTrue(stale_dir.exists())
             self.assertTrue(fresh.exists())
 
-    def test_expired_gallery_cleanup_is_complete_and_idempotent(self) -> None:
+    def test_legacy_inventory_cannot_delete_an_expired_gallery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = self.base(directory)
             settings = Settings(
@@ -348,17 +348,15 @@ class BackupMaintenanceOperationsTests(TestCase):
             self.assertGreater(dry["gallery_candidate_bytes"], 0)
             self.assertEqual(dry["orphan_candidate_count"], 0)
 
-            executed = run_maintenance(settings, execute=True)
-            self.assertEqual(executed["removed_gallery_count"], 1)
-            self.assertEqual(executed["remaining_gallery_count"], 0)
-            self.assertFalse(expired_gallery_root.exists())
-            self.assertFalse(expired_session_root.exists())
+            self.assertTrue(dry["legacy_inventory_only"])
+            with self.assertRaisesRegex(RuntimeError, "not enabled"):
+                run_maintenance(settings, execute=True)
+            self.assertTrue(expired_gallery_root.exists())
+            self.assertTrue(expired_session_root.exists())
             self.assertTrue(retained_gallery_root.exists())
             self.assertTrue(retained_session_root.exists())
-            repeated = run_maintenance(settings, execute=True)
-            self.assertEqual(repeated["removed_gallery_count"], 0)
-            self.assertEqual(repeated["removed_file_count"], 0)
-            self.assertEqual(repeated["removed_bytes"], 0)
+            with self.assertRaisesRegex(RuntimeError, "not enabled"):
+                run_maintenance(settings, execute=True)
 
     def test_cleanup_refuses_gallery_path_outside_private_storage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -389,7 +387,7 @@ class BackupMaintenanceOperationsTests(TestCase):
             dry = run_maintenance(settings, execute=False)
             self.assertEqual(dry["path_anomaly_count"], 1)
             self.assertNotIn(str(outside), json.dumps(dry))
-            with self.assertRaisesRegex(RuntimeError, "path anomaly"):
+            with self.assertRaisesRegex(RuntimeError, "not enabled"):
                 run_maintenance(settings, execute=True)
             self.assertTrue(sentinel.exists())
             with service.database.read() as connection:

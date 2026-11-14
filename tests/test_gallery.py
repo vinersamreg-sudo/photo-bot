@@ -153,7 +153,7 @@ class GalleryTests(TestCase):
         self.assertTrue(service.gallery.search(session.user_id, favorite=True))
         self.assertFalse(hasattr(first_result, "original_path"))
 
-    def test_soft_delete_then_cleanup_removes_files_and_history(self) -> None:
+    def test_soft_delete_then_legacy_cleanup_keeps_files_and_history(self) -> None:
         service = DemoService(
             self.settings, self.database, self.storage,
             WatermarkService("ОБРАЗЕЦ", 1024, "JPEG", 82),
@@ -177,15 +177,17 @@ class GalleryTests(TestCase):
         service.gallery.soft_delete(session.user_id, item_id)
         self.clock.advance(86401)
         self.assertEqual(service.gallery.purge_due(execute=False), [item_id])
-        self.assertEqual(service.gallery.purge_due(execute=True), [item_id])
-        self.assertFalse(root.exists())
+        from app.domain import InvalidInputError
+        with self.assertRaises(InvalidInputError):
+            service.gallery.purge_due(execute=True)
+        self.assertTrue(root.exists())
         with self.database.read() as connection:
-            self.assertIsNone(connection.execute(
+            self.assertIsNotNone(connection.execute(
                 "SELECT 1 FROM gallery_items WHERE id=?", (item_id,)
             ).fetchone())
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM gallery_versions WHERE gallery_item_id=?", (item_id,)
-            ).fetchone()[0], 0)
+            ).fetchone()[0], 1)
 
     def test_expired_item_in_trash_waits_for_full_trash_retention(self) -> None:
         item = self.gallery.create_item(

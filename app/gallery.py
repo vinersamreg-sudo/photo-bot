@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 from uuid import uuid4
 
+from app import gallery_retention_terms
 from app.config import Settings
 from app.database import Database
 from app.domain import InvalidInputError
@@ -166,6 +167,7 @@ class GalleryService:
                 ),
             )
             row = connection.execute("SELECT * FROM gallery_items WHERE id=?", (item_id,)).fetchone()
+            gallery_retention_terms.pin(connection, item_id, self.settings, now)
         return self._item(row)
 
     def create_linked_demo_item(
@@ -196,6 +198,7 @@ class GalleryService:
         connection.execute(
             "UPDATE demo_sessions SET gallery_item_id=? WHERE id=?", (item_id, session_id)
         )
+        gallery_retention_terms.pin(connection, item_id, self.settings, now)
         return item_id
 
     def compose_prompt(
@@ -670,62 +673,12 @@ class GalleryService:
         return [row["id"] for row in rows]
 
     def purge_item(self, item_id: str) -> None:
-        if self.settings.result_retention_enabled:
-            raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
-        if (
-            self.provider_context_service is not None
-            and self.settings.openai_context_delete_on_gallery_delete
-        ):
-            # Remote cleanup is best-effort and leaves a retryable tombstone.
-            # User data purge must never be blocked by a provider outage.
-            self.provider_context_service.delete_for_gallery(item_id)
-        with self.database.transaction() as connection:
-            item = connection.execute("SELECT * FROM gallery_items WHERE id=?", (item_id,)).fetchone()
-            if not item:
-                return
-            attempts = connection.execute(
-                "SELECT attempt_id FROM gallery_versions WHERE gallery_item_id=? AND attempt_id IS NOT NULL",
-                (item_id,),
-            ).fetchall()
-            sessions = connection.execute(
-                "SELECT source_file_path FROM demo_sessions WHERE gallery_item_id=?",
-                (item_id,),
-            ).fetchall()
-            self.storage.delete_private_tree(Path(item["storage_root_path"]))
-            for session in sessions:
-                if session["source_file_path"]:
-                    self.storage.delete_private_tree(
-                        Path(session["source_file_path"]).parent.parent
-                    )
-            for attempt in attempts:
-                connection.execute(
-                    """UPDATE generation_attempts SET source_path='',secondary_source_path=NULL,
-                       original_result_path=NULL,
-                       demo_result_path=NULL WHERE id=?""",
-                    (attempt["attempt_id"],),
-                )
-            connection.execute(
-                """UPDATE demo_sessions SET source_file_path='',secondary_source_file_path=NULL,
-                   status='deleted'
-                   WHERE gallery_item_id=?""",
-                (item_id,),
-            )
-            connection.execute("DELETE FROM gallery_items WHERE id=?", (item_id,))
-            connection.execute(
-                """DELETE FROM tags WHERE user_id=? AND NOT EXISTS(
-                       SELECT 1 FROM gallery_item_tags git WHERE git.tag_id=tags.id
-                   )""",
-                (item["user_id"],),
-            )
+        raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
 
     def purge_due(self, execute: bool = False) -> list[str]:
-        if self.settings.result_retention_enabled:
-            raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
-        due = self.due_for_cleanup()
         if execute:
-            for item_id in due:
-                self.purge_item(item_id)
-        return due
+            raise InvalidInputError('Whole-work purge is disabled; use results-cleanup')
+        return self.due_for_cleanup()
 
     @staticmethod
     def _require_user(connection: sqlite3.Connection, user_id: str) -> sqlite3.Row:

@@ -23,7 +23,7 @@ from app.commerce import (
 )
 from app.database import Database
 from app.media_guard import media_operation
-from app.result_retention import ResultRetention, visible_results
+from app.result_retention import visible_results
 from app.demo_service import DemoService
 from app.direct_prompt import build_direct_edit_plan
 from app.domain import (
@@ -259,7 +259,6 @@ class MaxApplication:
             clock=getattr(demo_service, "clock", lambda: datetime.now(timezone.utc)))
         self._checkout_lock = threading.RLock()
         self._gallery_navigation_lock = threading.RLock()
-        self._result_retention_request = threading.local()
 
     def _track(self, event_type: str, **values: object) -> None:
         try:
@@ -322,19 +321,7 @@ class MaxApplication:
         return len(rows)
 
     def handle(self, event: MaxIncomingEvent) -> bool:
-        try:
-            return self._handle_media_event(event)
-        finally:
-            self._cleanup_delivered_results()
-
-    def _cleanup_delivered_results(self) -> None:
-        user_id = getattr(self._result_retention_request, 'user_id', None)
-        self._result_retention_request.user_id = None
-        if user_id and self.settings.result_retention_enabled:
-            try:
-                ResultRetention(self.settings,self.database,clock=self.demo.clock).run(execute=True,user_id=user_id)
-            except Exception as error:
-                LOGGER.error('Result cleanup deferred (error_type=%s)',type(error).__name__)
+        return self._handle_media_event(event)
 
     @media_operation
     def _handle_media_event(self, event: MaxIncomingEvent) -> bool:
@@ -2485,8 +2472,6 @@ class MaxApplication:
             duration_ms=attempt["duration_ms"] if attempt else None,
             estimated_cost=attempt["estimated_cost"] if attempt else None,
         )
-        if preview_delivered:
-            self._result_retention_request.user_id = dialog.user_id
         try:
             self.referrals.observe_free_edit_cost(event.user_id)
         except Exception as error:
@@ -3058,10 +3043,7 @@ class MaxApplication:
             LOGGER.info("MAX payment keyboard could not be deactivated")
 
     def notify_continuation_pack_paid(self, order_id: str) -> bool:
-        try:
-            return self._notify_continuation_pack_paid(order_id)
-        finally:
-            self._cleanup_delivered_results()
+        return self._notify_continuation_pack_paid(order_id)
 
     @media_operation
     def _notify_continuation_pack_paid(self, order_id: str) -> bool:

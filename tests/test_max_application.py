@@ -1153,11 +1153,11 @@ class MaxApplicationTests(TestCase):
         self.assertEqual(len(self.transport.images), count + 1)
         self.assertEqual(self.visible_ui_message_ids(), {self.app.ui.current("u1").message_id})
 
-    def test_three_result_cleanup_runs_only_after_real_preview_delivery(self) -> None:
-        from tests.test_result_retention import fixture_unlink
+    def test_preview_delivery_never_runs_cleanup_even_with_flags_enabled(self) -> None:
         self.enable_single_screen()
-        self.app.settings=replace(self.app.settings,result_retention_enabled=True)
-        with patch('app.result_retention._unlink',side_effect=fixture_unlink):
+        self.app.settings=replace(self.app.settings,result_retention_enabled=True,
+                                  result_retention_policy_effective_at=self.demo.clock().isoformat())
+        with patch('app.result_retention.ResultRetention.run',side_effect=AssertionError('cleanup during delivery')) as cleanup:
             self.generate_first()
             first=self.store.get('u1').current_version_id
             user=self.store.get('u1').user_id
@@ -1169,12 +1169,13 @@ class MaxApplicationTests(TestCase):
                 self.callback('result:correct');self.clock.advance(2)
                 self.app.handle(self.event('message_created',text='Синтетическое исправление'))
             with self.database.read() as c:
-                self.assertEqual(c.execute('SELECT COUNT(*) FROM gallery_versions').fetchone()[0],3)
-                self.assertIsNone(c.execute('SELECT 1 FROM gallery_versions WHERE id=?',(first,)).fetchone())
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM gallery_versions').fetchone()[0],4)
+                self.assertIsNotNone(c.execute('SELECT 1 FROM gallery_versions WHERE id=?',(first,)).fetchone())
                 self.assertEqual(c.execute("SELECT COUNT(*) FROM generation_attempts WHERE status='succeeded'").fetchone()[0],4)
                 self.assertEqual(c.execute("SELECT COUNT(*) FROM generation_credit_reservations WHERE status='consumed'").fetchone()[0],4)
             self.assertEqual(self.demo.commerce.balance(user).available,balance-3)
             self.assertEqual(self.demo.commerce.balance(user).reserved,0)
+            cleanup.assert_not_called()
         self.callback('studio:works')
         self.assertEqual(len([b for b in self.transport.images[-1][3] if b.text.startswith('Открыть ')]),3)
         self.assertNotIn('Версия',self.transport.images[-1][2])

@@ -203,7 +203,9 @@ class FeedbackTests(TestCase):
     def test_fresh_schema_contains_only_minimal_feedback_fields_and_foreign_keys(self) -> None:
         with self.database.read() as connection:
             self.assertEqual(schema_version(connection), CURRENT_SCHEMA_VERSION)
-            self.assertEqual(CURRENT_SCHEMA_VERSION, 16)
+            self.assertIsNotNone(connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=15 AND name='universal_service_feedback'"
+            ).fetchone())
             fields = {row[1] for row in connection.execute("PRAGMA table_info(service_feedback)")}
             foreign_keys = {
                 row[3]: (row[2], row[4], row[6])
@@ -238,6 +240,9 @@ class FeedbackTests(TestCase):
                    ) VALUES(?,'owner','negative','synthetic-reason',?,?)""", (version_id, now, now),
             )
             connection.execute("DROP TABLE service_feedback")
+            connection.execute("DROP TABLE gallery_retention_terms")
+            connection.execute("DROP TABLE payment_retention_terms")
+            connection.execute("DROP TABLE retention_holds")
             connection.execute("DELETE FROM schema_migrations WHERE version>=15")
         tables = ("users", "gallery_items", "gallery_versions", "user_feedback", "version_feedback")
         with self.database.read() as connection:

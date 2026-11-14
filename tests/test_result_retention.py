@@ -89,6 +89,13 @@ class ResultRetentionTests(TestCase):
         with patch('app.result_retention._unlink',side_effect=fixture_unlink):
             return self.retention.run(execute=True)
 
+    def seed_expiring(self, n, *, same_item=False):
+        self.start_versioned()
+        rows = self.seed(n, same_item=same_item)
+        self.consume_fixture(*(v for v, _i, _p in rows))
+        self.retention.clock = lambda: NOW + timedelta(days=14, seconds=n - 4)
+        return rows
+
     def financial(self):
         with self.db.read() as c:
             return {t:[tuple(r) for r in c.execute('SELECT * FROM '+t+' ORDER BY 1')]
@@ -96,12 +103,12 @@ class ResultRetentionTests(TestCase):
                               'unlock_entitlements','payment_orders','continuation_pack_grants','referral_bonus_grants','bonus_credit_transactions')}
 
     def test_zero_one_two_three_four_hundred_and_real_deletion(self):
-        for n in (0,1,2,3,4,100):
+        for n in (0,1,2,3,4,12):
             with self.subTest(n=n):
                 with self.db.transaction() as c:
                     c.execute('DELETE FROM gallery_versions');c.execute('DELETE FROM gallery_items')
                     c.execute('DELETE FROM generation_attempts')
-                seeded=self.seed(n);before=self.financial()
+                seeded=self.seed_expiring(n);before=self.financial()
                 report=self.retention.run()
                 self.assertEqual(report['candidate_results'],max(0,n-3))
                 self.assertEqual(len(WorkGallery(self.db,self.settings.temp_dir).works('u',99).entries),min(3,n))
@@ -111,8 +118,205 @@ class ResultRetentionTests(TestCase):
                 self.assertEqual(before,self.financial())
                 self.assertEqual(self.apply()['removed_files'],0)
 
+    def start_versioned(self):
+        self.settings = replace(
+            self.settings, result_retention_enabled=True,
+            result_retention_policy_effective_at=(NOW - timedelta(days=1)).isoformat(),
+        )
+        self.gallery = GalleryService(self.db, self.storage, self.settings, lambda: NOW)
+        self.retention = ResultRetention(self.settings, self.db, lambda: NOW)
+
+    def consume_fixture(self, *versions, source=None):
+        with self.db.transaction() as c:
+            lot = c.execute("SELECT id FROM generation_credit_lots WHERE user_id='u' AND source_type='initial_free'").fetchone()[0]
+            if source:
+                c.execute("""INSERT INTO generation_credit_lots(id,user_id,source_type,source_payment_order_id,
+                    granted_credits,available_credits,consumed_credits,created_at,updated_at)
+                    VALUES('paid-lot','u','continuation_pack',?,1,0,1,?,?)""", (source, NOW.isoformat(), NOW.isoformat()))
+                lot = 'paid-lot'
+            for version in versions:
+                c.execute("""INSERT INTO generation_credit_reservations(
+                    id,user_id,lot_id,attempt_id,idempotency_key,status,reserved_at,updated_at,consumed_at)
+                    VALUES(?,'u',?,?,?,'consumed',?,?,?)""",
+                    (version, lot, 'a-' + version, 'consume-' + version, *(NOW.isoformat(),) * 3))
+
+    def payment_fixture(self, order, *, when=NOW, status='paid', version='', stamp=True):
+        from app.gallery_retention_terms import pin_order
+        with self.db.transaction() as c:
+            c.execute("""INSERT INTO payment_orders(id,public_token,attempt_id,version_id,user_id,
+                provider,merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
+                created_at,updated_at,expires_at,paid_at,payment_purpose)
+                VALUES(?,?,'',?,'u','synthetic','digest',?,4900,'RUB',?,'test',?,?,?,?,'continuation_pack')""",
+                (order, order, version, len(order), status, when.isoformat(), when.isoformat(),
+                 (when + timedelta(hours=1)).isoformat(), when.isoformat() if status == 'paid' else None))
+            if stamp:
+                pin_order(c, order, self.settings, when)
+
+    def test_versioned_fourth_result_paginates_and_free_expires_without_touching_legacy(self):
+        legacy = self.seed(1)[0]
+        self.start_versioned()
+        work = self.seed(4, start=1)
+        self.consume_fixture(*(v for v, _i, _p in work))
+        self.retention.clock = lambda: NOW + timedelta(days=14, seconds=3)
+        self.assertEqual(self.retention.run()['candidate_results'], 3)
+        gallery = WorkGallery(self.db, self.settings.temp_dir)
+        with self.db.read() as c:
+            self.assertEqual(len(visible_results(c, 'u', all_results=True)), 5)
+        self.assertEqual(len(gallery.works('u', 1).entries), 3)
+        self.retention.clock = lambda: NOW + timedelta(days=14, seconds=4)
+        self.assertEqual(self.retention.run()['candidate_results'], 4)
+        # Already-missing media must not make cleanup affect another work.
+        work[0][2][0].unlink()
+        self.assertGreater(self.retention.run()['already_missing_files'], 0)
+        before = self.financial()
+        self.apply()
+        self.assertTrue(all(p.exists() for p in legacy[2]))
+        self.assertTrue(all(not p.exists() for _, _, paths in work for p in paths))
+        self.assertEqual(self.financial(), before)
+        with self.assertRaises(InvalidInputError):
+            self.gallery.purge_due(execute=True)
+
+    def test_paid_sixty_days_and_future_purchase_does_not_extend_another_work(self):
+        self.start_versioned()
+        paid, free, pending = self.seed(3)
+        self.payment_fixture("paid-order")
+        self.payment_fixture("unrelated-future-order", when=NOW + timedelta(days=50))
+        self.payment_fixture("pending-order", status="pending", version=pending[0])
+        self.consume_fixture(paid[0], source="paid-order")
+        # Use the initial-free lot for these explicit fixtures.
+        self.consume_fixture(free[0], pending[0])
+        self.retention.clock = lambda: NOW + timedelta(days=60) - timedelta(seconds=1)
+        self.assertEqual(self.retention.run()['candidate_results'], 1)
+        self.retention.clock = lambda: NOW + timedelta(days=60)
+        self.assertEqual(self.retention.run()['candidate_results'], 2)
+        before = self.financial()
+        self.apply()
+        self.assertTrue(all(p.exists() for p in pending[2]))
+        self.assertEqual(self.financial(), before)
+
+    def test_legacy_order_replayed_after_cutoff_is_not_assigned_shorter_terms(self):
+        self.start_versioned()
+        work = self.seed(1)[0]
+        self.payment_fixture("legacy-order", when=NOW - timedelta(days=5), stamp=False)
+        self.consume_fixture(work[0], source="legacy-order")
+        with self.db.transaction() as c:
+            c.execute("UPDATE payment_orders SET paid_at=? WHERE id='legacy-order'", (NOW.isoformat(),))
+        self.retention.clock = lambda: NOW + timedelta(days=500)
+        self.assertEqual(self.retention.run()['protection_reasons'], {'retention_terms_unverified': 1})
+        self.assertEqual(self.apply()['removed_files'], 0)
+
+    def test_first_original_delivery_extends_to_paid_term_but_redownload_does_not(self):
+        self.start_versioned()
+        work = self.seed(1)[0]
+        self.consume_fixture(work[0])
+        self.payment_fixture("original-pack")
+        with self.db.transaction() as c:
+            self.commerce.grant_continuation_pack(c, user_id='u', payment_order_id='original-pack',
+                                                 payment_intent_id=None)
+        first = NOW + timedelta(days=5)
+        self.commerce.clock = lambda: first
+        reservation = self.commerce.reserve_unlock_delivery('u', work[0])
+        self.commerce.commit_unlock_delivery('u', work[0], reservation.entitlement_id)
+        with self.db.transaction() as c:
+            c.execute("UPDATE gallery_versions SET delivery_count=2,last_delivered_at=? WHERE id=?",
+                      ((first + timedelta(days=20)).isoformat(), work[0]))
+        self.retention.clock = lambda: first + timedelta(days=60) - timedelta(seconds=1)
+        self.assertEqual(self.retention.run()['candidate_results'], 0)
+        self.retention.clock = lambda: first + timedelta(days=60)
+        self.assertEqual(self.retention.run()['candidate_results'], 1)
+
+    def test_trash_and_inflight_protection_stay_in_force_after_new_deadline(self):
+        self.start_versioned()
+        first, second = self.seed(2)
+        self.consume_fixture(first[0], second[0])
+        with self.db.transaction() as c:
+            c.execute("UPDATE gallery_items SET deleted=1,purge_after=? WHERE id=?",
+                      ((NOW + timedelta(days=30)).isoformat(), first[1]))
+            c.execute("UPDATE generation_attempts SET status='processing' WHERE id=?", ('a-' + second[0],))
+        self.retention.clock = lambda: NOW + timedelta(days=20)
+        self.assertEqual(self.retention.run()['candidate_results'], 0)
+        with self.db.transaction() as c:
+            c.execute("UPDATE generation_attempts SET status='succeeded' WHERE id=?", ('a-' + second[0],))
+        self.assertEqual(self.retention.run()['protection_reasons'], {'trash_retention': 1})
+
+    def test_fk_anomaly_blocks_before_unlink(self):
+        self.start_versioned()
+        work, untouched = self.seed(2)
+        self.consume_fixture(work[0])
+        self.retention.clock = lambda: NOW + timedelta(days=15)
+        with sqlite3.connect(self.settings.database_path) as raw:
+            raw.execute("PRAGMA foreign_keys=OFF")
+            raw.execute("UPDATE gallery_versions SET parent_version_id='missing' WHERE id=?", (untouched[0],))
+        raw.close()
+        with patch('app.result_retention._unlink') as unlink, self.assertRaises(RuntimeError):
+            self.retention.run(execute=True)
+        unlink.assert_not_called()
+        self.assertTrue(all(path.exists() for path in work[2]))
+
+    def test_schema17_and_disabled_flags_refuse_all_destructive_entries(self):
+        from app.main import run_gallery_cleanup, run_maintenance_command
+        from app.maintenance import run_maintenance
+        legacy = self.seed(4)
+        with self.db.transaction() as c:
+            c.execute("UPDATE gallery_items SET retention_until=?", ((NOW-timedelta(days=1)).isoformat(),))
+        for settings in (self.settings, replace(self.settings, result_retention_enabled=True),
+                         replace(self.settings, result_retention_policy_effective_at=NOW.isoformat())):
+            retention = ResultRetention(settings, self.db, lambda: NOW)
+            self.assertEqual(retention.run()['candidate_results'],0)
+            with patch('app.result_retention._unlink') as unlink:
+                for invoke in (lambda: retention.run(execute=True),
+                               lambda: retention.run(execute=True,user_id='u'),
+                               lambda: run_maintenance(settings,execute=True)):
+                    with self.assertRaisesRegex(RuntimeError,'not enabled'):
+                        invoke()
+                with self.db.transaction() as c:
+                    with self.assertRaisesRegex(RuntimeError,'not enabled'):
+                        retention._apply(c,None)
+                with self.assertRaises(InvalidInputError):
+                    self.gallery.purge_item(legacy[0][1])
+                with self.assertRaises(InvalidInputError):
+                    self.gallery.purge_due(execute=True)
+                with patch('builtins.print'):
+                    self.assertEqual(run_gallery_cleanup(settings, True),2)
+                    self.assertNotEqual(run_maintenance_command(settings,True),0)
+                unlink.assert_not_called()
+        self.assertTrue(all(path.exists() for work in legacy for path in work[2]))
+
+    def test_stamped_work_and_order_durations_survive_configuration_and_constant_change(self):
+        from app.gallery_retention_terms import deadline
+        from app.result_retention import successful_results
+        self.start_versioned()
+        free, paid = self.seed(2)
+        self.payment_fixture('pinned-paid-order')
+        self.consume_fixture(free[0])
+        self.consume_fixture(paid[0], source='pinned-paid-order')
+        with self.db.read() as c:
+            results = {r['id']: r for r in successful_results(c)}
+            before = [deadline(c,results[r[0]]) for r in (free,paid)]
+            with patch.multiple('app.gallery_retention_terms', FREE_DAYS=2, PAID_DAYS=3, POLICY_VERSION=99):
+                self.assertEqual([deadline(c,results[r[0]]) for r in (free,paid)],before)
+        self.assertEqual(before, [NOW+timedelta(days=14),NOW+timedelta(days=60,seconds=1)])
+        with self.assertRaisesRegex(sqlite3.IntegrityError,'immutable'), self.db.transaction() as c:
+            c.execute("UPDATE gallery_retention_terms SET free_days=2")
+        with self.assertRaisesRegex(sqlite3.IntegrityError,'immutable'), self.db.transaction() as c:
+            c.execute("UPDATE payment_retention_terms SET paid_days=3")
+
+    def test_open_dispute_protects_expired_work_and_other_entrypoints(self):
+        first,*_ = self.seed_expiring(5)
+        with self.db.transaction() as c:
+            c.execute("INSERT INTO retention_holds VALUES('u',?)",(NOW.isoformat(),))
+        with patch('app.result_retention._unlink') as unlink:
+            self.assertEqual(self.retention.run(execute=True,user_id='u')['mode'],'operator_only')
+            self.assertEqual(self.apply()['protection_reasons']['open_dispute'],5)
+            with self.assertRaises(InvalidInputError):
+                self.gallery.purge_item(first[1])
+            with self.assertRaises(InvalidInputError):
+                self.gallery.purge_due(execute=True)
+            unlink.assert_not_called()
+        self.assertTrue(all(p.exists() for p in first[2]))
+
     def test_corrections_each_occupy_one_slot_and_order_uses_completion(self):
-        seeded=self.seed(8,same_item=True)
+        seeded=self.seed_expiring(8,same_item=True)
         with self.db.read() as c:self.assertEqual([r['id'] for r in visible_results(c,'u')],[r[0] for r in reversed(seeded[-3:])])
         done=self.apply();self.assertEqual(done['removed_versions'],5)
         with self.db.read() as c:
@@ -121,20 +325,21 @@ class ResultRetentionTests(TestCase):
         self.assertTrue(self.gallery.list_versions('u',seeded[-1][1])[-1].source_path.exists())
 
     def test_bounded_batches_converge_and_do_not_revisit_retired_stubs(self):
-        seeded=self.seed(104)
+        seeded=self.seed_expiring(14)
         self.gallery.record_rating('u',seeded[0][0],2)
-        self.assertEqual(self.retention.run()['candidate_results'],101)
-        first=self.apply();self.assertEqual(first['candidate_results'],100)
+        self.assertEqual(self.retention.run()['candidate_results'],11)
+        first=self.apply();self.assertEqual(first['candidate_results'],10)
         self.assertEqual(first['metadata_stubs_preserved'],1)
         second=self.apply();self.assertEqual(second['candidate_results'],1)
         self.assertEqual(self.apply()['candidate_results'],0)
         with self.db.read() as c:self.assertEqual(len(visible_results(c,'u')),3)
 
     def test_deleting_newer_expired_rows_does_not_resurface_old_paid_history(self):
-        seeded=self.seed(5)
+        seeded=self.seed_expiring(5)
         with self.db.transaction() as c:
             c.execute("UPDATE gallery_versions SET unlock_status='unlocked',delivery_count=1,unlocked_at=? WHERE id=?",(NOW.isoformat(),seeded[0][0]))
             c.execute('UPDATE gallery_items SET retention_until=?',((NOW-timedelta(days=1)).isoformat(),))
+        self.retention.clock=lambda:NOW+timedelta(days=15)
         self.apply()
         self.assertTrue(seeded[0][2][1].exists())
         with self.db.read() as c:
@@ -156,7 +361,7 @@ class ResultRetentionTests(TestCase):
         before=self.settings.database_path.read_bytes()
         with patch('app.result_retention.Database',side_effect=AssertionError('write constructor')):
             report=self.retention.run()
-        self.assertEqual(report['candidate_results'],2)
+        self.assertEqual(report['candidate_results'],0)
         self.assertEqual(before,self.settings.database_path.read_bytes())
         self.assertFalse((self.settings.data_dir/'result_retention_last.json').exists())
         self.assertFalse((self.settings.data_dir/'result-retention.lock').exists())
@@ -174,18 +379,19 @@ class ResultRetentionTests(TestCase):
         reservation=self.commerce.reserve_unlock_delivery('u',v)
         self.commerce.commit_unlock_delivery('u',v,reservation.entitlement_id)
         with self.db.transaction() as c:c.execute('UPDATE gallery_versions SET delivery_count=1,last_delivered_at=? WHERE id=?',(NOW.isoformat(),v))
-        before=self.financial();report=self.apply()
-        self.assertEqual(report['protection_reasons'].get('paid_retention'),1)
+        before=self.financial()
+        with self.assertRaises(RuntimeError):self.apply()
         self.assertTrue(reservation.original_path.exists())
         again=self.commerce.reserve_unlock_delivery('u',v);self.assertTrue(again.already_unlocked)
         self.assertEqual(before,self.financial())
         self.retention.clock=lambda:NOW+timedelta(days=181)
-        # No second grant is revoked when media availability finally expires.
-        self.apply();self.assertFalse(reservation.original_path.exists())
+        # No historical terms are invented even when a nominal 180 days pass.
+        with self.assertRaises(RuntimeError):self.apply()
+        self.assertTrue(reservation.original_path.exists())
         self.assertEqual(before,self.financial())
 
     def test_feedback_survives_as_metadata_stub(self):
-        seeded=self.seed(5);v=seeded[0][0]
+        seeded=self.seed_expiring(5);v=seeded[0][0]
         self.gallery.record_rating('u',v,2);self.gallery.record_feedback_message('u',v,'synthetic feedback')
         report=self.apply();self.assertEqual(report['metadata_stubs_preserved'],1)
         with self.db.read() as c:
@@ -193,14 +399,14 @@ class ResultRetentionTests(TestCase):
             self.assertIsNone(c.execute('SELECT original_path FROM gallery_versions WHERE id=?',(v,)).fetchone()[0])
 
     def test_shared_source_and_other_users_files_never_deleted(self):
-        seeded=self.seed(5);foreign=self.seed(1,user='other')[0]
+        seeded=self.seed_expiring(5);foreign=self.seed(1,user='other')[0]
         with self.db.transaction() as c:c.execute('UPDATE gallery_versions SET source_path=? WHERE id=?',(str(seeded[0][2][0]),seeded[-1][0]))
         report=self.apply();self.assertGreater(report['shared_files_preserved'],0)
         self.assertTrue(seeded[0][2][0].exists())
         self.assertTrue(all(p.exists() for p in foreign[2]))
 
     def test_foreign_and_outside_paths_fail_closed(self):
-        seeded=self.seed(5);foreign=self.seed(1,user='other')[0]
+        seeded=self.seed_expiring(5);foreign=self.seed(1,user='other')[0]
         # A reference to a foreign existing file is preserved as shared; an
         # unreferenced foreign file is not allowed to be deleted either.
         foreign_file=foreign[2][0].parent/'unreferenced.png';foreign_file.write_bytes(b'foreign')
@@ -210,7 +416,7 @@ class ResultRetentionTests(TestCase):
         self.assertTrue(foreign_file.exists());self.assertTrue(seeded[0][2][1].exists())
 
     def test_reader_guard_defers_writer_without_blocking_other_readers(self):
-        self.seed(5)
+        self.seed_expiring(5)
         with media_guard(self.settings.data_dir):
             with ThreadPoolExecutor(1) as pool:
                 report=pool.submit(self.retention.run,execute=True).result(timeout=5)
@@ -222,23 +428,23 @@ class ResultRetentionTests(TestCase):
         self.assertEqual(self.apply()['removed_versions'],2)
 
     def test_pending_and_late_payment_targets_are_never_deleted(self):
-        seeded=self.seed(5);v,item,paths=seeded[0]
+        seeded=self.seed_expiring(5);v,item,paths=seeded[0]
         with self.db.transaction() as c:
             c.execute("""INSERT INTO payment_orders(id,public_token,attempt_id,version_id,user_id,
                 provider,merchant_hash,provider_invoice_id,amount_minor,currency,status,description,
                 created_at,updated_at,expires_at) VALUES('order','opaque','legacy',?,'u','robokassa',
                 'synthetic',1,4900,'RUB','expired','synthetic',?,?,?)""",(v,NOW.isoformat(),NOW.isoformat(),NOW.isoformat()))
         before=self.financial();report=self.apply()
-        self.assertEqual(report['protection_reasons']['payment_or_delivery_obligation'],1)
+        self.assertEqual(report['protection_reasons']['retention_terms_unverified'],1)
         self.assertEqual(before,self.financial());self.assertTrue(all(p.exists() for p in paths))
 
     def test_trash_waits_the_promised_period(self):
-        seeded=self.seed(5);self.gallery.soft_delete('u',seeded[0][1])
+        seeded=self.seed_expiring(5);self.gallery.soft_delete('u',seeded[0][1])
         report=self.apply();self.assertEqual(report['protection_reasons']['trash_retention'],1)
         self.assertTrue(seeded[0][2][1].exists())
 
     def test_pending_instruction_without_version_preserves_its_sources(self):
-        seeded=self.seed(5);store=MaxConversationStore(self.db,lambda:NOW)
+        seeded=self.seed_expiring(5);store=MaxConversationStore(self.db,lambda:NOW)
         store.get_or_create('u','chat')
         store.transition('u','waiting_for_prompt',force=True,user_id='u',current_gallery_item_id=seeded[0][1],current_version_id=None)
         self.assertEqual(self.apply()['protection_reasons']['editing_dialog'],1)
@@ -247,7 +453,7 @@ class ResultRetentionTests(TestCase):
         self.apply();self.assertFalse(seeded[0][2][1].exists())
 
     def test_symlink_parent_is_refused(self):
-        seeded=self.seed(5);directory=seeded[0][2][0].parent
+        seeded=self.seed_expiring(5);directory=seeded[0][2][0].parent
         outside=self.base/'outside';outside.mkdir()
         link=directory/'link'
         try:link.symlink_to(outside,target_is_directory=True)
@@ -291,12 +497,14 @@ class ResultRetentionTests(TestCase):
             result=service.generate(session.session_id,'synthetic edit',f'event-{n}',correction=n>0,parent_version_id=parent)
             results.append(result)
             with self.db.read() as c:parent=c.execute('SELECT id FROM gallery_versions WHERE attempt_id=?',(result.attempt_id,)).fetchone()[0]
-        before=self.financial();self.apply();self.assertEqual(before,self.financial())
+        before=self.financial()
+        with self.assertRaises(RuntimeError):self.apply()
+        self.assertEqual(before,self.financial())
         with self.db.read() as c:
             self.assertEqual(c.execute("SELECT COUNT(*) FROM generation_attempts WHERE status='succeeded'").fetchone()[0],4)
             self.assertEqual(c.execute("SELECT COUNT(*) FROM generation_credit_reservations WHERE status='consumed'").fetchone()[0],4)
         calls=provider.calls
-        with self.assertRaises(InvalidInputError):service.generate(session.session_id,'synthetic edit','event-0')
+        service.generate(session.session_id,'synthetic edit','event-0')
         self.assertEqual(provider.calls,calls);self.assertEqual(before,self.financial())
         self.tick+=timedelta(seconds=3)
         with self.assertRaises(DeliveryError):service.generate(session.session_id,'synthetic edit','failed-delivery',delivery_override=lambda *_:False)
@@ -317,7 +525,9 @@ class ResultRetentionTests(TestCase):
             r=service.generate(session.session_id,'synthetic edit',f'friend-event-{n}')
             first=first or r.attempt_id
             if n==0:self.assertIsNotNone(referrals.reward_first_success(session.user_id))
-        before=self.financial();self.apply();self.assertEqual(before,self.financial())
+        before=self.financial()
+        with self.assertRaises(RuntimeError):self.apply()
+        self.assertEqual(before,self.financial())
         self.assertIsNone(referrals.reward_first_success(session.user_id))
         self.assertEqual(self.commerce.balance('u').available,6)
         self.assertEqual(self.commerce.entitlement_balance('u').available,2)
@@ -327,7 +537,7 @@ class ResultRetentionTests(TestCase):
             self.assertEqual(c.execute('SELECT first_success_attempt_id FROM referral_relationships WHERE id=?',(relationship,)).fetchone()[0],first)
 
     def test_interrupted_unlink_rolls_back_metadata_and_retry_finishes(self):
-        seeded=self.seed(5);before=self.financial();count=0
+        seeded=self.seed_expiring(5);before=self.financial();count=0
         def fail_after_one(*args):
             nonlocal count
             fixture_unlink(*args);count+=1
@@ -341,7 +551,7 @@ class ResultRetentionTests(TestCase):
 
     @skipUnless(os.name=='posix','real fd-relative deletion/crash is verified on Linux CI')
     def test_process_crash_and_restart(self):
-        seeded=self.seed(5);before=self.financial()
+        seeded=self.seed_expiring(5);before=self.financial()
         result=subprocess.run([sys.executable,'-m','tests.test_result_retention','--crash',str(self.base)],capture_output=True)
         self.assertEqual(result.returncode,73,result.stderr.decode(errors='replace'))
         self.assertGreater(self.apply()['already_missing_files'],0)
@@ -350,8 +560,9 @@ class ResultRetentionTests(TestCase):
 
 
 if __name__=='__main__' and len(sys.argv)>1 and sys.argv[1]=='--crash':
-    settings=Settings('','fake','test',Path(sys.argv[2]))
+    settings=Settings('','fake','test',Path(sys.argv[2]),result_retention_enabled=True,
+                      result_retention_policy_effective_at=(NOW-timedelta(days=1)).isoformat())
     def crash(path,root,identity):
         _unlink(path,root,identity);os._exit(73)
     with patch('app.result_retention._unlink',side_effect=crash):
-        ResultRetention(settings,clock=lambda:NOW).run(execute=True)
+        ResultRetention(settings,clock=lambda:NOW+timedelta(days=14,seconds=1)).run(execute=True)
