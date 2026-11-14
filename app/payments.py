@@ -754,7 +754,10 @@ class PaymentService:
                     raise PaymentError("Gallery version was not found")
                 if version["attempt_status"] != "succeeded":
                     raise PaymentError("Only a completed version can start a package purchase")
-                if gallery_retention_terms.applies(connection, self.settings, now):
+                if gallery_retention_terms.active(self.settings, now) or connection.execute(
+                    "SELECT 1 FROM gallery_retention_terms WHERE gallery_item_id=?",
+                    (version["gallery_item_id"],),
+                ).fetchone():
                     original = Path(version["original_path"]) if version["original_path"] else None
                     if version["deleted"] or original is None or original.is_symlink() or not original.is_file():
                         raise PaymentError("The selected original is unavailable; no order was created")

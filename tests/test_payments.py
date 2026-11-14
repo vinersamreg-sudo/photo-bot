@@ -622,6 +622,13 @@ class PaymentTests(TestCase):
         with self.database.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM payment_orders").fetchone()[0], 0)
 
+    def test_inactive_retention_keeps_existing_checkout_contract(self) -> None:
+        version = self.versions[0]["id"]
+        with self.database.transaction() as connection:
+            connection.execute("UPDATE gallery_versions SET original_path=NULL WHERE id=?", (version,))
+        order = self.service.create_order(self.user_id, version, "legacy-checkout-before-policy")
+        self.assertEqual(order.version_id, version)
+
     def test_aggregate_reconciliation_detects_mismatch_without_mutation(self) -> None:
         order = self.service.create_order(
             self.user_id, self.versions[0]["id"], "reconciliation"

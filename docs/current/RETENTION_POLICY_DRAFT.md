@@ -81,6 +81,14 @@ are not changed by the planner.
 
 ## Release gates
 
+Use `scripts/rehearse_retention_migration.py --help` on an isolated verified
+schema-16 restore, with separate private scratch. It compares existing tables,
+financial records and linked media checksums, verifies repeated initialization,
+simulates process termination immediately before and after commit and asserts
+that disabled cleanup cannot modify the copy. Run it locally only. Restore into
+a separate directory or volume; never substitute an older backup over the
+working database to undo a migration after new payments or uploads.
+
 1. Separate GO: confirm legal wording, notice/acceptance requirements, exact
    effective instant, evidence of the currently published pages and deployment
    of matching MAX copy. Do not publish this draft or activate retention from CI.

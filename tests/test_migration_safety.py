@@ -132,6 +132,9 @@ class MigrationSafetyTests(TestCase):
             database = Database(source)
             self._seed_paid_small_package(database)
             with database.transaction() as connection:
+                # Historic production schema 16 predates this fresh-install
+                # column. The rehearsal must cover that shape too.
+                connection.execute("ALTER TABLE users DROP COLUMN context_version")
                 connection.execute("DROP TABLE gallery_retention_terms")
                 connection.execute("DROP TABLE payment_retention_terms")
                 connection.execute("DROP TABLE retention_holds")
@@ -158,6 +161,27 @@ class MigrationSafetyTests(TestCase):
                     ).fetchone()[0],
                     1,
                 )
+
+    def test_rehearsal_proves_restart_and_hard_crash_boundaries(self) -> None:
+        from scripts.rehearse_retention_migration import rehearse
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root/"restored16.sqlite3"
+            db = Database(source)
+            self._seed_paid_small_package(db)
+            with db.transaction() as c:
+                c.execute("ALTER TABLE users DROP COLUMN context_version")
+                for name in ("gallery_retention_terms","payment_retention_terms","retention_holds"):
+                    c.execute("DROP TABLE "+name)
+                c.execute("DELETE FROM schema_migrations WHERE version=17")
+            media=root/"private-media"
+            media.mkdir()
+            scratch=root/"private-scratch"
+            scratch.mkdir()
+            report=rehearse(source,scratch,media,media)
+            self.assertEqual(report["interrupt_before_and_after_commit"],"PASS")
+            self.assertEqual(report["disabled_cleanup"],"REFUSED")
+            self.assertEqual(list(scratch.iterdir()),[])
 
     def test_legacy_v13_initialization_preserves_paid_small_package(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
