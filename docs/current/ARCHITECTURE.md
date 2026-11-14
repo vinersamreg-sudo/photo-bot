@@ -140,3 +140,12 @@ and are never resent blindly.
 
 See [UX](UX.md), [Payments](PAYMENTS.md), [Production](PRODUCTION.md) and
 [Security](SECURITY.md).
+
+## Prepared RU migration (not deployed)
+
+The target is an independent Russian Ravuna core (MAX, SQLite, private media,
+gallery and Robokassa), an independent RU recovery store, and an isolated
+Hetzner AI worker. See [the migration runbook](RU_MIGRATION.md). The new
+webhook shares the polling instance lock and application. The opt-in mTLS
+provider boundary ships only with a mock upstream. Neither changes the deployed
+polling configuration or activates a foreign photo route.

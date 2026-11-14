@@ -1,0 +1,27 @@
+[Unit]
+Description=Ravuna isolated mTLS synthetic AI adapter (no OpenAI network calls)
+After=network-online.target
+
+[Service]
+User=ravuna-ai
+Group=ravuna-ai
+WorkingDirectory=/opt/ravuna-ai
+EnvironmentFile=/etc/ravuna/ai-mock.env
+LoadCredential=ca.pem:/etc/ravuna/ai/ca.pem
+LoadCredential=server.pem:/etc/ravuna/ai/server.pem
+LoadCredential=server.key:/etc/ravuna/ai/server.key
+StateDirectory=ravuna-ai
+StateDirectoryMode=0700
+ExecStart=/opt/ravuna-ai/venv/bin/python -m app.ai_gateway --mock --bind ${AI_PRIVATE_BIND} --state /var/lib/ravuna-ai/attempts.sqlite --ca ${CREDENTIALS_DIRECTORY}/ca.pem --cert ${CREDENTIALS_DIRECTORY}/server.pem --key ${CREDENTIALS_DIRECTORY}/server.key --model ${AI_MODEL}
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+LimitCORE=0
+MemoryMax=512M
+MemorySwapMax=0
+IPAddressDeny=any
+IPAddressAllow=localhost
+# Add only the exact peer tunnel IP in an approved STAGING drop-in.

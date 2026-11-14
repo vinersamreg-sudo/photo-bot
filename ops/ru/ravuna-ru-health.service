@@ -1,0 +1,17 @@
+[Unit]
+Description=Ravuna RU webhook subscription, queue and disk check
+OnFailure=ravuna-ru-alert@%n.service
+
+[Service]
+Type=oneshot
+User=photoapp
+Group=photoapp
+WorkingDirectory=/opt/photo-bot
+EnvironmentFile=/opt/photo-bot/.env
+ExecStart=/opt/photo-bot/venv/bin/python -m app.ru_monitor health --expected-url https://max-webhook.ravuna.ru/webhooks/max
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/photo-bot/data /opt/photo-bot/logs /opt/photo-bot/temp
+PrivateTmp=true

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Optional
@@ -111,6 +111,12 @@ class Settings:
     max_api_base_url: str = "https://platform-api2.max.ru"
     max_ca_bundle: str = "ops/certs/russian_trusted_root_ca_pem.crt"
     max_transport_mode: str = "disabled"
+    max_webhook_secret: str = field(default="", repr=False)
+    max_webhook_port: int = 8092
+    ai_gateway_url: str = ""
+    ai_gateway_ca: str = ""
+    ai_gateway_cert: str = ""
+    ai_gateway_key: str = field(default="", repr=False)
     max_poll_timeout_seconds: int = 20
     max_poll_retry_seconds: int = 5
     max_poll_idle_seconds: int = 1
@@ -640,6 +646,12 @@ def load_settings(
             "MAX_CA_BUNDLE", "ops/certs/russian_trusted_root_ca_pem.crt"
         ).strip(),
         max_transport_mode=max_transport_mode,
+        max_webhook_secret=values.get("MAX_WEBHOOK_SECRET", ""),
+        max_webhook_port=_positive_int(values, "MAX_WEBHOOK_PORT", 8092),
+        ai_gateway_url=values.get("AI_GATEWAY_URL", "").strip(),
+        ai_gateway_ca=values.get("AI_GATEWAY_CA", "").strip(),
+        ai_gateway_cert=values.get("AI_GATEWAY_CERT", "").strip(),
+        ai_gateway_key=values.get("AI_GATEWAY_KEY", "").strip(),
         max_poll_timeout_seconds=_positive_int(values, "MAX_POLL_TIMEOUT_SECONDS", 20),
         max_poll_retry_seconds=_positive_int(values, "MAX_POLL_RETRY_SECONDS", 5),
         max_poll_idle_seconds=_positive_int(values, "MAX_POLL_IDLE_SECONDS", 1),
