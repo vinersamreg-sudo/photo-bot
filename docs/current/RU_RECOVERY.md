@@ -72,6 +72,45 @@ Then verify a separately credentialed runner can fully restore each of the
 two protected points. Official API documentation and local contract tests are
 not proof of this account, policy, route or actual alert delivery.
 
+### Executable Yandex pilot
+
+Run `python -B scripts/yandex_recovery_pilot.py plan` now; it makes no network
+requests. After cloud GO, use an existing workstation, AWS CLI v2 with
+conditional PUT and CompleteMultipartUpload support, OpenSSL and this checkout.
+Prepare a **separate** Yandex folder, a temporary bootstrap profile scoped to
+that folder (`storage.admin` for bucket creation, tagging, policy and teardown),
+and three distinct service-account profiles/IDs: full writer, DB writer and
+reader. Give these three no inherited storage roles; the bucket policy is
+their sole grant. Revoke the short-lived profiles/keys after the test; the
+script neither creates paid infrastructure nor edits IAM at folder level.
+
+```text
+python -B scripts/yandex_recovery_pilot.py apply --authorize-synthetic-cloud-actions --run-id <32-random-lowercase-hex> --bucket ravuna-pilot-<same-id> --admin-profile <bootstrap> --writer-profile <full> --writer-id <full-account-id> --db-writer-profile <checkpoint> --db-writer-id <checkpoint-account-id> --reader-profile <reader> --reader-id <reader-account-id>
+```
+
+The script generates its only input, creates a private ownership-tagged
+bucket, installs bounded lifecycle and prefix IAM, races two writers per
+namespace, verifies conditional writes and denied privileges, reads back
+and decrypts full media/SQLite, recovers an interrupted multipart reservation
+and verifies HTTPS acknowledgement of success and failure on a local receiver.
+It stops its workers, withdraws the bucket policy, aborts pending uploads, and
+deletes only allowlisted owned objects and the now-empty bucket. On process
+interruption rerun with `cleanup`, the same run ID/bucket/bootstrap profile
+and explicit authorization. An untagged bucket or unknown keys stops cleanup
+for operator review. Save only the aggregate test output; never save secrets
+or payloads in Git or public CI.
+
+One run uses one full synthetic ciphertext of approximately 65–75 MiB, one
+small SQLite checkpoint, one short multipart overwrite probe and operation
+counts far below Standard allowances. Minimum incremental cost **0 ₽** with
+unused monthly 1 GB Standard storage, 10,000 writes/list operations, 100,000
+reads and 100 GB public egress on the billing account; no KMS, VM or logging
+service purchased for this minimum. This is not a guarantee for a billing
+account whose free allowances are already consumed. Run the loopback alert
+test locally; separately prove real delivery/systemd and independent
+unavailable-host detection before production. The one-day abort lifecycle
+is configured and read back, not verified by waiting 24 hours in this pilot.
+
 Budget using the observed 3.62 GiB ciphertext proxy and 44.57 MiB SQLite:
 21.70 GiB for six full points, 25.32 GiB including candidate, ~326 GiB/month
 for three full reads/day and ~125 GiB/month for 96 checkpoint readbacks/day.
