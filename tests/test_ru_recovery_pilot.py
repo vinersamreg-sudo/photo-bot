@@ -49,9 +49,11 @@ class RuPilotTests(TestCase):
         from contextlib import contextmanager
         with TemporaryDirectory() as path:
             work=Path(path)
-            with contextmanager(fixture)(work) as (source, full, db, keyfile):
+            with contextmanager(fixture)(work) as (source, full, db, keyfile, next_full, next_db):
                 self.assertGreater(full.stat().st_size,64*1024**2)
                 self.assertTrue(db.is_file())
+                self.assertTrue(next_full.is_file())
+                self.assertTrue(next_db.is_file())
                 manager=BackupManager(source,work,14)
                 shutil.copyfile(full,work/READBACK)
                 result=_restore(manager,READBACK,keyfile.read_text(),work/"restored",

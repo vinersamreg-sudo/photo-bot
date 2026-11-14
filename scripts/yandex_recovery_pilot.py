@@ -168,9 +168,18 @@ def fixture(work):
         archive = BackupManager(f.settings.database_path,work/"archives",14)
         meta = archive.create_recovery_bundle(phrase,_standalone_sqlite=True)
         checkpoint = archive.create(phrase,_standalone_sqlite=True)
+        # An independently restorable second state, not duplicate ciphertext
+        # for the same manifest. Change only synthetic data.
+        f.clock.advance(seconds=2)
+        f.service.create_order(f.user_id,None,"pilot-second-state",account_purchase=True)
+        second_meta = archive.create_recovery_bundle(phrase,_standalone_sqlite=True)
+        second_db = archive.create(phrase,_standalone_sqlite=True)
         source = f.settings.database_path
         # Retain the path metadata for verification, but no active service or DB.
-        yield source, archive.backup_dir/meta["recovery_bundle_name"], archive.backup_dir/checkpoint["backup_name"], keyfile
+        yield (source, archive.backup_dir/meta["recovery_bundle_name"],
+               archive.backup_dir/checkpoint["backup_name"], keyfile,
+               archive.backup_dir/second_meta["recovery_bundle_name"],
+               archive.backup_dir/second_db["backup_name"])
     finally:
         f.doCleanups()
 
@@ -268,9 +277,22 @@ def exercise(args, work):
     for store in (reader, db_reader, PilotStore(args.bucket,args.db_writer_profile,checkpoints=True)):
         store.ensure_bounded()
     from contextlib import contextmanager
-    with contextmanager(fixture)(work) as (source, full, db, keyfile):
+    with contextmanager(fixture)(work) as (source, full, db, keyfile, next_full, next_db):
         race(args.bucket,args.writer_profile,source,full,keyfile,work)
         race(args.bucket,args.db_writer_profile,source,db,keyfile,work,db=True)
+        phrase=keyfile.read_text(encoding="ascii")
+        seed=work/"second-point"
+        seed.mkdir()
+        next_archive=seed/READBACK
+        shutil.copyfile(next_full,next_archive)
+        manager=BackupManager(source,seed,14)
+        next_stamp=STAMP + timedelta(days=1)
+        promote(writer_store,seed,next_archive,
+                lambda digest:_restore(manager,READBACK,phrase,seed/"restored",digest),
+                scheduled=next_stamp.date().isoformat(),now=lambda:next_stamp)
+        db_writer=PilotStore(args.bucket,args.db_writer_profile,checkpoints=True)
+        publish_db(db_writer,seed,next_db,STAMP+timedelta(minutes=15),
+                   lambda p:_prove(p,seed/"decoded.sqlite3",phrase))
         phase=work/"reader"
         phase.mkdir()
         index,etag=reader.get_catalog(phase)
@@ -283,6 +305,7 @@ def exercise(args, work):
         expect_denied(lambda:writer_store._api("put-object",*params,"--if-none-match","*"),
                       "PreconditionFailed","412")
         expect_denied(lambda:reader._api("delete-object",*common,"--key",key),"AccessDenied","403")
+        expect_denied(lambda:db_writer._api("head-object",*common,"--key",key),"AccessDenied","403")
         expect_denied(lambda:writer_store._api("delete-bucket-policy",*common),"AccessDenied","403")
         expect_denied(lambda:writer_store.put_catalog(index,'"00000000000000000000000000000000"',phase),
                       "PreconditionFailed","412")
@@ -297,12 +320,23 @@ def exercise(args, work):
                           "PreconditionFailed","412")
         finally:
             writer_store._api("abort-multipart-upload",*margs,"--upload-id",upload)
-        _read_point(reader,point,phase/READBACK)
-        phrase=keyfile.read_text(encoding="ascii")
-        manager=BackupManager(source,phase,14)
-        report=_restore(manager,READBACK,phrase,phase/"restore",point["sha256"])
-        if not report["distinct_media"]:
-            raise BackupError("Synthetic media coverage missing")
+        if len(index["points"]) != 2:
+            raise BackupError("Two distinct full points are required")
+        from app.recovery_retention import regular_file_identity
+        db_index,_=db_reader.get_catalog(phase)
+        if len(db_index["points"]) != 2:
+            raise BackupError("Two checkpoints are required")
+        for i,full_point in enumerate(index["points"]):
+            item=phase/f"full-{i}"
+            item.mkdir()
+            _read_point(reader,full_point,item/READBACK)
+            report=_restore(BackupManager(source,item,14),READBACK,phrase,item/"restore",full_point["sha256"])
+            if not report["distinct_media"]:
+                raise BackupError("Synthetic media coverage missing")
+        for i,db_point in enumerate(db_index["points"]):
+            ciphertext=phase/f"db-{i}.enc"
+            _read_point(db_reader,db_point,ciphertext,regular_file_identity)
+            _prove(ciphertext,phase/f"db-{i}.sqlite3",phrase)
         result=restore_latest(db_reader,phase,phase/"db-only.sqlite3",phrase)
         if result["sqlite_only"]!="PASS":
             raise BackupError("Checkpoint did not restore")
@@ -321,7 +355,8 @@ def exercise(args, work):
             raise BackupError("Interrupted operation changed the published point")
         alert_roundtrip(phase)
         print(json.dumps({"publication":"PASS","concurrent_full_and_db":"PASS","live_readback":"PASS",
-                          "conditional_and_iam":"PASS","full_media_references":report["media_references"],
+                          "conditional_and_iam":"PASS","full_points_restored":2,"checkpoints_restored":2,
+                          "full_media_references":report["media_references"],
                           "interrupted_upload_cleanup":"PASS","local_https_alert_delivery":"PASS"}),flush=True)
 
 
@@ -365,6 +400,8 @@ def main():
                          {"Rules":[{"ID":"abort-synthetic","Status":"Enabled","Filter":{"Prefix":"ravuna/"},
                                     "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]},work)
                 put_json(admin,"put-bucket-policy","--policy",bucket_policy(args.bucket,*ids),work)
+                # A distinct reader will test that inherited roles do
+                # not grant wider destructive actions than the bucket policy.
                 exercise(args,work)
             finally:
                 cleanup(admin,args.run_id)

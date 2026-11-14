@@ -91,7 +91,7 @@ python -B scripts/yandex_recovery_pilot.py apply --authorize-synthetic-cloud-act
 The script generates its only input, creates a private ownership-tagged
 bucket, installs bounded lifecycle and prefix IAM, races two writers per
 namespace, verifies conditional writes and denied privileges, reads back
-and decrypts full media/SQLite, recovers an interrupted multipart reservation
+and decrypts two distinct full points and two checkpoints, recovers an interrupted multipart reservation
 and verifies HTTPS acknowledgement of success and failure on a local receiver.
 It stops its workers, withdraws the bucket policy, aborts pending uploads, and
 deletes only allowlisted owned objects and the now-empty bucket. On process
@@ -100,8 +100,8 @@ and explicit authorization. An untagged bucket or unknown keys stops cleanup
 for operator review. Save only the aggregate test output; never save secrets
 or payloads in Git or public CI.
 
-One run uses one full synthetic ciphertext of approximately 65–75 MiB, one
-small SQLite checkpoint, one short multipart overwrite probe and operation
+One run uses two full synthetic ciphertexts of approximately 65–75 MiB each,
+two small SQLite checkpoints, one short multipart overwrite probe and operation
 counts far below Standard allowances. Minimum incremental cost **0 ₽** with
 unused monthly 1 GB Standard storage, 10,000 writes/list operations, 100,000
 reads and 100 GB public egress on the billing account; no KMS, VM or logging
