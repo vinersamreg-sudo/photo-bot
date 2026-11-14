@@ -27,6 +27,25 @@ NGINX_RAVUNA_CONFIG = ROOT / "site" / "nginx" / "ravuna.ru.conf"
 
 
 class DeployPolicyTests(TestCase):
+    def test_payment_gate_preserves_only_preexisting_delivery_warnings(self):
+        from tempfile import TemporaryDirectory
+        from scripts.deploy_payment_gate import check
+
+        report = {"status": "WARNING", "failed_original_delivery": 2,
+                  "rejected_callbacks_recent": 0}
+        with TemporaryDirectory() as directory:
+            snapshot = Path(directory) / "payment-before.json"
+            check("capture", snapshot, report, ["a", "b"], [])
+            check("verify", snapshot, report, ["a", "b"], [])
+            check("verify", snapshot, {**report, "failed_original_delivery": 1}, ["b"], [])
+            for bad_report, pending, rejected in [
+                (report, ["a", "c"], []),
+                ({**report, "status": "CRITICAL"}, ["a", "b"], []),
+                ({**report, "rejected_callbacks_recent": 1}, ["a", "b"], ["c"]),
+            ]:
+                with self.assertRaises(ValueError):
+                    check("verify", snapshot, bad_report, pending, rejected)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -263,7 +282,7 @@ class DeployPolicyTests(TestCase):
         self.assertIn("gemini_api_key_configured", self.workflow)
 
     def test_schema_and_commerce_gates_remain_enforced(self) -> None:
-        for contract in ("CURRENT_SCHEMA_VERSION", "assert current_schema == CURRENT_SCHEMA_VERSION", "source.backup(backup)", "sqlite_backup=created", "assert credit_accounts == users", "assert negative_credit_accounts == 0", "assert stale_processing_orphans == 0", "_assert_commerce_invariants(after)", "_commerce_snapshot(after) == commerce", "payment-reconciliation"):
+        for contract in ("CURRENT_SCHEMA_VERSION", "assert current_schema == CURRENT_SCHEMA_VERSION", "source.backup(backup)", "sqlite_backup=created", "assert credit_accounts == users", "assert negative_credit_accounts == 0", "assert stale_processing_orphans == 0", "_assert_commerce_invariants(after)", "_commerce_snapshot(after) == commerce", 'deploy_payment_gate.py" capture', 'deploy_payment_gate.py" verify'):
             self.assertIn(contract, self.workflow)
         for version in range(6, 13):
             self.assertIn(f"assert migration_v{version}", self.workflow)

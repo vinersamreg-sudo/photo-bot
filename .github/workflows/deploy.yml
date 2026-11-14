@@ -143,7 +143,7 @@ jobs:
             systemctl show photo-bot.service -p MainPID --value > "$STAGE_ROOT/old-pid"
             venv/bin/python -m app.main health
             venv/bin/python -m app.main max-check
-            venv/bin/python -m app.main payment-reconciliation
+            PYTHONPATH=/opt/photo-bot venv/bin/python "$STAGE_ROOT/source/scripts/deploy_payment_gate.py" capture "$STAGE_ROOT/payment-before.json"
             venv/bin/python scripts/production_status.py --root /opt/photo-bot
             venv/bin/python - <<'PY'
           from pathlib import Path
@@ -633,7 +633,7 @@ jobs:
               ),
           }, sort_keys=True))
           PY
-            "$ROOT"/venv/bin/python -m app.main payment-reconciliation
+            PYTHONPATH="$ROOT" "$ROOT"/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_payment_gate.py" verify "$STAGE_ROOT/payment-before.json"
             "$ROOT"/venv/bin/python -m app.main payment-status --format json
             "$ROOT"/venv/bin/python -m app.main launch-status
             "$ROOT"/venv/bin/python "$STAGE_ROOT/source/scripts/deploy_env_guard.py" verify \
