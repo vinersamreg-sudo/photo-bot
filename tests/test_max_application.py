@@ -2482,6 +2482,7 @@ class MaxApplicationTests(TestCase):
                 connection.execute("SELECT COUNT(*) FROM payment_intents").fetchone()[0],
                 2,
             )
+
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM generation_attempts").fetchone()[0],
                 attempts_before,
@@ -2569,6 +2570,58 @@ class MaxApplicationTests(TestCase):
                 ).fetchone()[0],
                 dialog.current_gallery_item_id,
             )
+
+    def test_historical_pending_edit_does_not_block_new_photo_at_zero_balance(self):
+        self.enable_single_screen()
+        self.generate_first()
+        old = self.store.get("u1")
+        balance = self.demo.commerce.balance(old.user_id).available
+        with self.database.transaction() as connection:
+            self.demo.commerce.adjust_generation_credits(
+                connection, user_id=old.user_id,
+                delta=-balance,
+                reason="test_exhaustion", idempotency_key="historical-pending-exhaust",
+            )
+            now = self.clock().isoformat()
+            connection.execute(
+                """INSERT INTO pending_edit_requests(id,platform_user_id,user_id,
+                   session_id,gallery_item_id,prompt,status,created_at,updated_at)
+                   VALUES('old-pending','u1',?,?,?,'old prompt','completed',?,?)""",
+                (old.user_id, old.session_id, old.current_gallery_item_id, now, now),
+            )
+            connection.execute(
+                "UPDATE gallery_items SET original_source_path=? WHERE id=?",
+                (str(self.base / "expired-source.png"), old.current_gallery_item_id),
+            )
+        self.app, _payments = self.paid_application()
+        self.clock.advance(2)
+        source = self.base / "another-photo.png"
+        Image.new("RGB", (320, 240), "#0a7510").save(source)
+        self.transport.source = source
+        calls = self.provider.calls
+        self.app.handle(self.event("message_created", text="Улучшить фон",
+                                   image_url="https://iu.oneme.ru/another"))
+        text = self.transport.messages[-1][1]
+        self.assertIn("Фото сохранено", text)
+        self.assertTrue(all(price in text for price in ("49 ₽", "490 ₽", "1990 ₽")))
+        self.assertIsNone(self.store.get("u1").pending_request_id)
+        self.assertEqual(self.provider.calls, calls)
+        self.callback("package:buy:medium")
+        with self.database.read() as connection:
+            pending = connection.execute("SELECT * FROM pending_edit_requests").fetchone()
+            order = connection.execute("SELECT * FROM payment_orders").fetchone()
+            current = connection.execute(
+                "SELECT gallery_item_id,source_file_path FROM demo_sessions WHERE id=?",
+                (old.session_id,),
+            ).fetchone()
+        self.assertEqual((pending["id"], pending["status"], pending["prompt"]),
+                         ("old-pending", "completed", "old prompt"))
+        self.assertEqual(order["payment_purpose"], "account_topup")
+        self.assertIsNone(order["pending_request_id"])
+        self.assertNotEqual(current["gallery_item_id"], old.current_gallery_item_id)
+        with Image.open(current["source_file_path"]) as image:
+            self.assertEqual(image.convert("RGB").getpixel((0, 0)), (10, 117, 16))
+        self.assertEqual(self.demo.commerce.balance(old.user_id).available, 0)
 
     def test_gallery_with_zero_edits_does_not_offer_correction_or_repeat(self) -> None:
         self.generate_first()

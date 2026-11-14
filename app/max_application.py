@@ -2660,19 +2660,34 @@ class MaxApplication:
         ):
             raise InvalidInputError("A complete pending edit request is required")
         now = self.demo.clock().isoformat()
+        # A demo session is reused for later photos, but schema 16 permits only
+        # one pending edit per session. Never retarget a historical invoice.
         with self.database.transaction() as connection:
             existing = connection.execute(
-                "SELECT id,status FROM pending_edit_requests WHERE session_id=?",
+                """SELECT id,status,user_id,platform_user_id,gallery_item_id
+                   FROM pending_edit_requests WHERE session_id=?""",
                 (dialog.session_id,),
             ).fetchone()
-            request_id = existing["id"] if existing else uuid4().hex
             item = connection.execute(
-                """SELECT original_source_path,secondary_source_path
-                   FROM gallery_items WHERE id=? AND user_id=?""",
-                (dialog.current_gallery_item_id, dialog.user_id),
+                """SELECT i.original_source_path,i.secondary_source_path
+                   FROM demo_sessions s JOIN gallery_items i ON i.id=s.gallery_item_id
+                   WHERE s.id=? AND s.user_id=? AND i.id=?
+                     AND i.user_id=s.user_id AND i.deleted=0""",
+                (dialog.session_id, dialog.user_id, dialog.current_gallery_item_id),
             ).fetchone()
-            if item is None:
+            source_path = (
+                Path(item["original_source_path"])
+                if item and item["original_source_path"] else None
+            )
+            if source_path is None or not source_path.is_file():
                 raise AssetUnavailableError("Pending edit source is unavailable")
+            use_topup = existing is not None and (
+                existing["status"] != "awaiting_payment"
+                or existing["user_id"] != dialog.user_id
+                or existing["platform_user_id"] != event.user_id
+                or existing["gallery_item_id"] != dialog.current_gallery_item_id
+            )
+            request_id = existing["id"] if existing else uuid4().hex
             if existing is None:
                 connection.execute(
                     """INSERT INTO pending_edit_requests(
@@ -2687,7 +2702,7 @@ class MaxApplication:
                         item["secondary_source_path"], now, now,
                     ),
                 )
-            elif existing["status"] not in {"paid", "processing", "completed"}:
+            elif not use_topup:
                 connection.execute(
                     """UPDATE pending_edit_requests
                        SET prompt=?,primary_source_path=?,secondary_source_path=?,
@@ -2697,16 +2712,17 @@ class MaxApplication:
                         item["secondary_source_path"], now, request_id,
                     ),
                 )
-            source = connection.execute(
-                """SELECT i.original_source_path
-                   FROM pending_edit_requests r
-                   JOIN gallery_items i ON i.id=r.gallery_item_id
-                   WHERE r.id=? AND i.user_id=r.user_id""",
-                (request_id,),
-            ).fetchone()
-        source_path = Path(source["original_source_path"]) if source else None
-        if source_path is None or not source_path.is_file():
-            raise AssetUnavailableError("Pending edit source is unavailable")
+        if use_topup:
+            self._reset_dialog_to_main(event.user_id, event.event_key)
+            self._send_message(
+                event.user_id,
+                "Фото сохранено. Обработки закончились. Выберите пакет, "
+                "затем откройте «Обработать фото» и снова введите описание.\n\n"
+                + PURCHASE_OPTIONS_TEXT,
+                (*purchase_buttons("buy"), Button("← Назад", "nav:back:main")),
+                screen="payment_offer",
+            )
+            return
         updated = self.store.transition(
             event.user_id,
             "result_ready",
